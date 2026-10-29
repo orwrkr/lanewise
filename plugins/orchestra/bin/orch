@@ -1,0 +1,3232 @@
+#!/usr/bin/env python3
+"""orch — helper CLI for the Orchestra plugin (Claude Code multi-model orchestrator).
+
+Subcommands
+  status                     availability + open handoffs (used by SessionStart hook)
+  quota set|clear|show|check provider/model availability (subscription limits, operator away)
+  run PROVIDER ...           run an automated executor through adapters/<provider> (codex, deepseek, claude, …)
+  launch PROVIDER ...        start Claude Code with another model as the lead (deepseek), optionally without Claude
+  budget [show|set|clear]    Claude subscription budget: surplus (prefer Claude to API-billed executors) / tight
+  statusline [--then CMD]    Claude Code statusLine command: records the subscription usage for `budget`
+  profile show|list|use|set|rm
+                             executor profiles (API key / account, models, rules): default and per project
+  handoff offer|take|new|list|check|wait|show|done|cancel|reclaim|close
+                             manual lane (Antigravity & co): task pool, task packets, completion detection
+  usage [--session|--list]   per session: which model did what and how many tokens
+  guide [topic]              reference parts of the orchestrate skill
+  footprint                  what Orchestra created outside Claude Code (cleanup list)
+  worktree add NAME          isolated git worktree for a write task
+  registry path|show|init    model registry (providers.yaml)
+  doctor                     environment check
+
+Runs in WSL/Linux/macOS and natively on Windows (shell adapters via Git Bash).
+Stdlib only, Python 3.8+.
+"""
+import argparse
+import datetime as dt
+import json
+import os
+import platform
+import random
+import re
+import shutil
+import signal
+import string
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+ORCH_HOME = Path(os.environ.get("ORCH_HOME", str(Path.home() / ".orchestra")))
+IS_WINDOWS = os.name == "nt"
+EXIT_QUOTA = 75
+EXIT_TIMEOUT = 124
+TERMINAL = ("DONE", "BLOCKED", "FAILED", "CANCELLED", "REASSIGNED")
+STATUS_RE = re.compile(r"^\s*STATUS:\s*([A-Z_]+)", re.M)
+SCAN_SKIP = {".git", ".orchestra", "node_modules", ".venv", "venv", "__pycache__", "bin", "obj",
+             "dist", "build", ".idea", ".vs", "target"}
+
+
+# ───────────────────────── helpers ─────────────────────────
+
+def now():
+    return dt.datetime.now().astimezone()
+
+
+def iso(t):
+    return t.isoformat(timespec="seconds") if t else None
+
+
+def parse_iso(s):
+    if not s:
+        return None
+    try:
+        t = dt.datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.astimezone()
+    return t
+
+
+def human_delta(t):
+    """'in 2h 10m' / '5m ago'."""
+    secs = int((t - now()).total_seconds())
+    if abs(secs) < 60:
+        return "just now"
+    future = secs >= 0
+    secs = abs(secs)
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    parts = []
+    if d:
+        parts.append("%dd" % d)
+    if h:
+        parts.append("%dh" % h)
+    if m or not parts:
+        parts.append("%dm" % m)
+    s = " ".join(parts[:2])
+    return ("in " + s) if future else (s + " ago")
+
+
+def parse_until(text):
+    """Accepts: +90m +3h +2d +1w | HH:MM | YYYY-MM-DD | YYYY-MM-DD HH:MM | tomorrow HH:MM | none."""
+    if text is None:
+        return None
+    s = text.strip().lower()
+    if s in ("", "none", "never", "-", "manual"):
+        return None
+    base = now().replace(second=0, microsecond=0)
+    m = re.fullmatch(r"\+?(\d+)\s*(m|min|h|d|w)", s)
+    if m:
+        n, u = int(m.group(1)), m.group(2)
+        mult = {"m": 60, "min": 60, "h": 3600, "d": 86400, "w": 604800}[u]
+        return base + dt.timedelta(seconds=n * mult)
+    m = re.fullmatch(r"(tomorrow)\s+(\d{1,2}):(\d{2})", s)
+    if m:
+        t = (base + dt.timedelta(days=1)).replace(hour=int(m.group(2)), minute=int(m.group(3)))
+        return t
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", s)
+    if m:
+        t = base.replace(hour=int(m.group(1)), minute=int(m.group(2)))
+        if t <= now():
+            t += dt.timedelta(days=1)
+        return t
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return dt.datetime.strptime(text.strip(), fmt).astimezone()
+        except ValueError:
+            pass
+    t = parse_iso(text.strip())
+    if t:
+        return t
+    raise SystemExit("orch: cannot parse time %r (use +3h, 18:00, 2026-10-26 09:00, tomorrow 09:00)" % text)
+
+
+def parse_duration(text, default_unit="m"):
+    s = str(text).strip().lower()
+    m = re.fullmatch(r"(\d+)\s*(s|m|h|d)?", s)
+    if not m:
+        raise SystemExit("orch: bad duration %r" % text)
+    n, u = int(m.group(1)), m.group(2) or default_unit
+    return n * {"s": 1, "m": 60, "h": 3600, "d": 86400}[u]
+
+
+def read_json(path, default):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return default
+
+
+def write_json(path, data):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(str(tmp), str(path))
+
+
+def git(args, cwd, check=False):
+    try:
+        r = subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, text=True)
+    except FileNotFoundError:
+        if check:
+            raise SystemExit("orch: git not found")
+        return None
+    if check and r.returncode != 0:
+        raise SystemExit("orch: git %s failed: %s" % (" ".join(args), r.stderr.strip()))
+    return r
+
+
+def project_dir():
+    for var in ("ORCH_PROJECT_DIR", "CLAUDE_PROJECT_DIR"):
+        v = os.environ.get(var)
+        if v:
+            return Path(v).resolve()
+    r = git(["rev-parse", "--show-toplevel"], Path.cwd())
+    if r is not None and r.returncode == 0 and r.stdout.strip():
+        return Path(r.stdout.strip()).resolve()
+    return Path.cwd().resolve()
+
+
+def state_dir(create=True):
+    p = project_dir() / ".orchestra"
+    if create and not p.exists():
+        p.mkdir(parents=True)
+        ensure_git_exclude(project_dir())
+    return p
+
+
+def ensure_git_exclude(proj, patterns=(".orchestra/",)):
+    """Keep orchestra files out of git status without touching .gitignore (shared by all worktrees)."""
+    r = git(["rev-parse", "--git-common-dir"], proj)
+    if r is None or r.returncode != 0:
+        return
+    common = Path(r.stdout.strip())
+    if not common.is_absolute():
+        common = (proj / common).resolve()
+    excl = common / "info" / "exclude"
+    excl.parent.mkdir(parents=True, exist_ok=True)
+    text = excl.read_text(encoding="utf-8") if excl.exists() else ""
+    missing = [p for p in patterns if p not in text.split()]
+    if missing:
+        with excl.open("a", encoding="utf-8") as f:
+            if text and not text.endswith("\n"):
+                f.write("\n")
+            f.write("# orchestra plugin state\n" + "".join(p + "\n" for p in missing))
+
+
+def rand_suffix(n=4):
+    return "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(n))
+
+
+def win_path(p):
+    if shutil.which("wslpath"):
+        r = subprocess.run(["wslpath", "-w", str(p)], capture_output=True, text=True)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    return None
+
+
+def copy_to_clipboard(text):
+    candidates = [
+        (["clip.exe"], text.encode("utf-16le")),
+        (["wl-copy"], text.encode()),
+        (["xclip", "-selection", "clipboard"], text.encode()),
+        (["pbcopy"], text.encode()),
+    ]
+    for cmd, data in candidates:
+        if shutil.which(cmd[0]):
+            try:
+                subprocess.run(cmd, input=data, check=True, timeout=10)
+                return cmd[0]
+            except Exception:
+                continue
+    return None
+
+
+def platform_name():
+    if IS_WINDOWS:
+        return "Windows (native)"
+    if os.environ.get("WSL_DISTRO_NAME") or "microsoft" in platform.release().lower():
+        return "WSL (Linux)"
+    return "macOS" if sys.platform == "darwin" else "Linux"
+
+
+def find_bash():
+    """bash for shell adapters. On Windows only Git Bash: System32\\bash.exe is WSL and would run the adapter in Linux."""
+    if not IS_WINDOWS:
+        return shutil.which("bash")
+    cands = [os.environ.get("CLAUDE_CODE_GIT_BASH_PATH")]
+    w = shutil.which("bash")
+    if w and "system32" not in w.lower() and "windowsapps" not in w.lower():
+        cands.append(w)
+    g = shutil.which("git")
+    if g:
+        root = Path(g).resolve().parent.parent      # <Git>\cmd\git.exe or <Git>\mingw64\bin\git.exe
+        cands += [str(root / "bin" / "bash.exe"), str(root.parent / "bin" / "bash.exe")]
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
+        if base:
+            cands += [os.path.join(base, "Git", "bin", "bash.exe"), os.path.join(base, "Programs", "Git", "bin", "bash.exe")]
+    return next((c for c in cands if c and os.path.isfile(c)), None)
+
+
+def exe_command(path):
+    """A .py stand-in (tests, wrappers) runs with this interpreter."""
+    return [sys.executable, path] if str(path).endswith(".py") else [path]
+
+
+def find_codex():
+    """codex binary the way adapters/codex resolves it: ORCH_CODEX_BIN → PATH → (Windows) CLI of the Codex app."""
+    c = os.environ.get("ORCH_CODEX_BIN") or shutil.which("codex")
+    if c:
+        return c, ""
+    if IS_WINDOWS and os.environ.get("LOCALAPPDATA"):
+        found = sorted(Path(os.environ["LOCALAPPDATA"], "OpenAI", "Codex", "bin").glob("*/codex.exe"),
+                       key=lambda p: p.stat().st_mtime)
+        if found:
+            return str(found[-1]), " (from the Codex app; more stable: npm i -g @openai/codex)"
+    return None, ""
+
+
+# ───────────────────────── availability (quota) ─────────────────────────
+
+AVAIL_FILE = ORCH_HOME / "availability.json"
+STATUSES = ("ok", "low", "exhausted", "disabled", "away")
+
+
+def load_avail(prune=True):
+    data = read_json(AVAIL_FILE, {"entries": {}})
+    entries = data.setdefault("entries", {})
+    if prune:
+        changed = False
+        for k in list(entries):
+            until = parse_iso(entries[k].get("until"))
+            if until and until <= now():
+                del entries[k]
+                changed = True
+        if changed:
+            write_json(AVAIL_FILE, data)
+    return data
+
+
+def norm_key(key):
+    return key.strip().lower().replace(":", "/")
+
+
+def key_chain(key):
+    """codex/gpt-5.6-sol -> [codex/gpt-5.6-sol, codex];
+    deepseek@work/deepseek-flash -> [deepseek@work/deepseek-flash, deepseek/deepseek-flash, deepseek@work, deepseek]"""
+    parts = norm_key(key).split("/")
+    head, _, prof = parts[0].partition("@")
+    out = []
+    for i in range(len(parts) - 1, -1, -1):
+        tail = "".join("/" + x for x in parts[1:i + 1])
+        if prof:
+            out.append(head + "@" + prof + tail)
+        out.append(head + tail)
+    return out
+
+
+def availability(key):
+    """Return (available: bool, entry or None, matched_key)."""
+    entries = load_avail()["entries"]
+    for k in key_chain(key):
+        e = entries.get(k)
+        if e:
+            return (e.get("status") == "low", e, k)
+    return (True, None, None)
+
+
+def set_avail(key, status, until=None, note=None, source="manual"):
+    key = norm_key(key)
+    data = load_avail()
+    if status == "ok":
+        data["entries"].pop(key, None)
+    else:
+        data["entries"][key] = {
+            "status": status, "until": iso(until), "note": note,
+            "set_at": iso(now()), "source": source,
+        }
+    write_json(AVAIL_FILE, data)
+
+
+def describe_entry(k, e):
+    until = parse_iso(e.get("until"))
+    when = ("until %s (%s)" % (until.strftime("%d.%m %H:%M"), human_delta(until))) if until else \
+        "until cleared manually"
+    note = (" — " + e["note"]) if e.get("note") else ""
+    return "%-28s %-9s %s%s" % (k, e.get("status"), when, note)
+
+
+def cmd_quota(a):
+    if a.action == "show":
+        data = load_avail()
+        if a.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return 0
+        if not data["entries"]:
+            print("All executors available (no restrictions).")
+        for k, e in sorted(data["entries"].items()):
+            print(describe_entry(k, e))
+        return 0
+    if a.action == "set":
+        if a.status not in STATUSES:
+            raise SystemExit("orch: status must be one of %s" % ", ".join(STATUSES))
+        until = parse_until(a.until) if a.until else None
+        set_avail(a.key, a.status, until, a.note)
+        if a.status == "ok":
+            print("%s: restriction cleared" % norm_key(a.key))
+        else:
+            print(describe_entry(norm_key(a.key), load_avail()["entries"][norm_key(a.key)]))
+        return 0
+    if a.action == "clear":
+        key = norm_key(a.key)
+        data = load_avail()
+        # a bare provider also clears its profile entries (deepseek → deepseek@work), not its model entries
+        gone = [k for k in data["entries"] if k == key or ("/" not in key and "@" not in key and "/" not in k
+                                                             and k.startswith(key + "@"))]
+        for k in gone:
+            del data["entries"][k]
+        write_json(AVAIL_FILE, data)
+        print("\n".join("%s: restriction cleared" % k for k in gone) or "%s: was not restricted" % key)
+        return 0
+    if a.action == "check":
+        ok, e, k = availability(a.key)
+        if e is None:
+            print("%s: available" % norm_key(a.key))
+            return 0
+        print(("%s: available (LOW) — " if ok else "%s: UNAVAILABLE — ") % norm_key(a.key) + describe_entry(k, e))
+        return 0 if ok else EXIT_QUOTA
+    return 1
+
+
+# ───────────────────────── Claude subscription budget (use it or lose it) ─────────────────────────
+#
+# Claude Code hands the statusLine command `rate_limits` (5-hour and 7-day windows: % used, reset time). `orch
+# statusline` keeps a snapshot of it; the operator can report the same numbers in words (`orch budget set`). From the
+# pace so far orch projects the 5-hour window to its reset: a large projected leftover is a SURPLUS (it would expire
+# unused — give subtasks to Claude rather than to API-billed executors), running out before the reset is TIGHT.
+
+USAGE_SNAPSHOT = ORCH_HOME / "claude_usage.json"
+SURPLUS_MIN = 30           # projected unused % of the 5-hour window that makes a surplus (profile claude: surplus=N|off)
+PACE_MIN_ELAPSED = 30      # minutes into a window before its pace is trusted
+WEEKLY_HEADROOM = 90       # no surplus while the weekly limit is (projected) at or above this %
+
+
+def epoch_iso(v):
+    try:
+        return iso(dt.datetime.fromtimestamp(float(v)).astimezone())
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def save_usage(windows, source):
+    """{"five_hour": {"used": %, "resets_at": iso}, "seven_day": {…}} → the snapshot shared by all sessions."""
+    snap = read_json(USAGE_SNAPSHOT, {})
+    stale = (now() - (parse_iso(snap.get("updated") or "") or now() - dt.timedelta(days=1))).total_seconds() > 60
+    if all(snap.get(k) == v for k, v in windows.items()) and snap.get("source") == source and not stale:
+        return                     # the status line refreshes often: write only on a change (or once a minute)
+    snap.update(windows, updated=iso(now()), source=source)
+    write_json(USAGE_SNAPSHOT, snap)
+
+
+def usage_window(snap, name):
+    """(used %, reset time or None) while the window is current; None once it has reset (stale numbers)."""
+    w = snap.get(name) if isinstance(snap.get(name), dict) else {}
+    if w.get("used") is None:
+        return None
+    reset = parse_iso(w.get("resets_at") or "")
+    if reset and reset <= now():
+        return None
+    return float(w["used"]), reset
+
+
+def pace(used, reset, hours):
+    """(projected % at reset, minutes until 100 % at this pace) — (None, None) while too early to tell."""
+    if reset is None:
+        return None, None
+    t = now()
+    elapsed = (t - (reset - dt.timedelta(hours=hours))).total_seconds() / 60
+    if elapsed < PACE_MIN_ELAPSED:
+        return None, None
+    rate = used / elapsed
+    return used + rate * (reset - t).total_seconds() / 60, ((100 - used) / rate if rate > 0 else None)
+
+
+def surplus_threshold(where=None):
+    """The claude profile's `surplus` field: off → 0, N → N % (default SURPLUS_MIN); Claude off → 0."""
+    try:
+        prof = resolve_profile("claude", where or project_dir())
+    except ProfileError:
+        return SURPLUS_MIN
+    if prof.name == "off":
+        return 0
+    v = str(prof.data.get("surplus", SURPLUS_MIN)).lower()
+    return 0 if v in ("off", "0", "no", "false") else int(v) if v.isdigit() else SURPLUS_MIN
+
+
+def claude_budget(where=None):
+    """(mode, line): surplus | tight | normal, or ("unknown", None) without current numbers."""
+    snap = read_json(USAGE_SNAPSHOT, {})
+    five = usage_window(snap, "five_hour")
+    if not five or five[1] is None:
+        return "unknown", None
+    used, reset = five
+    week = usage_window(snap, "seven_day")
+    at = reset.astimezone().strftime("%H:%M")
+    line = "Claude subscription: 5-hour window %d%% used, resets %s (%s)%s%s" % (
+        used, at, human_delta(reset), ", week %d%%" % week[0] if week else "",
+        " — reported by the operator" if snap.get("source") == "operator" else "")
+    projected, to_full = pace(used, reset, 5)
+    if projected is not None and projected >= 100 and to_full is not None:
+        out_at = (now() + dt.timedelta(minutes=to_full)).astimezone().strftime("%H:%M")
+        return "tight", (line + ". TIGHT: at this pace it runs out ≈%s, before the reset — treat Claude as low "
+                                "(conserve it; offload to Codex / DeepSeek)." % out_at)
+    threshold = surplus_threshold(where)
+    if projected is None or threshold <= 0 or 100 - projected < threshold:
+        return "normal", line + "."
+    weekly = week[0] if week else None
+    if week:
+        wproj, _ = pace(week[0], week[1], 24 * 7)
+        weekly = max(week[0], wproj or 0)
+    if weekly is not None and weekly >= WEEKLY_HEADROOM:
+        return "normal", line + (". About %d%% of the window would expire unused, but the weekly limit is tight "
+                                 "(%d%% projected): no surplus mode." % (100 - projected, weekly))
+    return "surplus", line + (". SURPLUS: about %d%% of the window would expire unused — until %s give subtasks to "
+                              "Claude subagents rather than to API-billed executors (DeepSeek, API-key profiles); "
+                              "orch guide budget." % (100 - projected, at))
+
+
+def budget_event(session, announce=True):
+    """A hook event when this session's budget mode changes (surplus / tight / normal), once per change.
+    announce=False only records the mode (SessionStart already prints it in the status)."""
+    mode, line = claude_budget()
+    if mode == "unknown":
+        return None
+    snap = read_json(USAGE_SNAPSHOT, {})
+    seen = snap.get("announced") if isinstance(snap.get("announced"), dict) else {}
+    key = session or "-"
+    if seen.get(key) == mode:
+        return None
+    seen.pop(key, None)
+    seen[key] = mode
+    snap["announced"] = dict(list(seen.items())[-30:])
+    write_json(USAGE_SNAPSHOT, snap)
+    return ("💡 " + line) if announce else None
+
+
+def cmd_budget(a):
+    """orch budget [show|set|clear]: the Claude subscription budget used for routing (surplus / tight)."""
+    if a.action == "set":
+        if a.used is None or not a.resets:
+            raise SystemExit("orch: orch budget set --used PERCENT --resets TIME [--week PERCENT [--week-resets TIME]]")
+        windows = {"five_hour": {"used": float(a.used), "resets_at": iso(parse_until(a.resets))}}
+        if a.week is not None:
+            windows["seven_day"] = {"used": float(a.week),
+                                    "resets_at": iso(parse_until(a.week_resets)) if a.week_resets else None}
+        save_usage(windows, "operator")
+    elif a.action == "clear":
+        if USAGE_SNAPSHOT.exists():
+            USAGE_SNAPSHOT.unlink()
+        print("Claude budget snapshot cleared.")
+        return 0
+    mode, line = claude_budget()
+    if mode == "unknown":
+        print("No current Claude subscription numbers. Add `orch statusline` as the Claude Code status line "
+              "(orch guide budget), or report them: orch budget set --used 40 --resets 18:00")
+        return 0
+    print(line)
+    return 0
+
+
+def cmd_statusline(a):
+    """Claude Code statusLine command: keep the subscription usage for routing; print a short status line.
+    Never fails (a broken status line would be visible on every screen)."""
+    try:
+        raw = sys.stdin.read()
+    except Exception:
+        raw = ""
+    parts = []
+    try:
+        data = json.loads(raw or "{}")
+        rl = data.get("rate_limits") if isinstance(data.get("rate_limits"), dict) else {}
+        windows = {}
+        for name in ("five_hour", "seven_day"):
+            w = rl.get(name)
+            if isinstance(w, dict) and w.get("used_percentage") is not None and epoch_iso(w.get("resets_at")):
+                windows[name] = {"used": round(float(w["used_percentage"]), 1), "resets_at": epoch_iso(w["resets_at"])}
+        if windows:
+            save_usage(windows, "statusline")
+        model = (data.get("model") or {}).get("display_name") if isinstance(data.get("model"), dict) else None
+        if model:
+            parts.append(model)
+        cwd = (data.get("workspace") or {}).get("current_dir") if isinstance(data.get("workspace"), dict) else None
+        snap = read_json(USAGE_SNAPSHOT, {})
+        five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
+        if five and five[1]:
+            parts.append("5h %d%% → %s" % (five[0], five[1].astimezone().strftime("%H:%M")))
+        if week:
+            parts.append("week %d%%" % week[0])
+        mode, _ = claude_budget(Path(cwd) if cwd else None)
+        if mode in ("surplus", "tight"):
+            parts.append({"surplus": "surplus: Claude first", "tight": "tight: conserve Claude"}[mode])
+    except Exception:
+        pass
+    line = " · ".join(parts) or "Orchestra"
+    if a.then:
+        try:
+            r = subprocess.run(a.then, shell=True, input=raw.encode("utf-8"), stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, timeout=5)
+            theirs = r.stdout.decode("utf-8", "replace").replace("\r\n", "\n").rstrip("\n")   # cmd.exe: CRLF
+            line = (theirs + "  " + line) if theirs and "\n" not in theirs else (theirs + "\n" + line if theirs else line)
+        except Exception:
+            pass
+    print(line)
+    return 0
+
+
+# ───────────────────────── profiles (keys/accounts, models, rules; default and per project) ─────────────────────────
+#
+# ~/.orchestra/profiles.json:
+#   {"providers": {"deepseek": {"default": "personal",
+#                               "profiles": {"personal": {"key": "DEEPSEEK_API_KEY"},
+#                                            "work": {"key": "DEEPSEEK_API_KEY_WORK", "models": ["deepseek-flash"]}}}},
+#    "projects": {"c:/users/me/work": {"deepseek": "work", "antigravity": "off"}}}
+# A provider without profiles has the built-in profile "default" (no limits). "off" disables the provider.
+# A directory binding covers its subdirectories; the longest matching directory wins, per provider.
+
+PROFILES_FILE = ORCH_HOME / "profiles.json"
+EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+LIST_FIELDS = ("models", "use_for", "prefer_for")
+RULE_FIELDS = ("models", "max_effort", "write", "use_for", "prefer_for", "rules")
+MANUAL_PROVIDERS = ("antigravity",)
+PROFILE_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,39}")
+VAR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+class ProfileError(Exception):
+    pass
+
+
+class Profile(object):
+    def __init__(self, provider, name, data, source, explicit):
+        self.provider, self.name, self.data, self.source, self.explicit = provider, name, data, source, explicit
+
+    @property
+    def label(self):
+        """quota/availability key: deepseek@work, or just the provider for the built-in profile."""
+        return self.provider + ("@" + self.name if self.explicit and self.name != "off" else "")
+
+
+def load_profiles():
+    """(data, error). A broken file is an error, never "no profiles": an "off" must not silently turn into "on"."""
+    empty = {"providers": {}, "projects": {}}
+    try:
+        data = json.loads(PROFILES_FILE.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return empty, None
+    except (OSError, ValueError) as ex:
+        return empty, "%s is unreadable: %s" % (PROFILES_FILE, ex)
+    if not isinstance(data, dict) or not isinstance(data.get("providers", {}), dict) \
+            or not isinstance(data.get("projects", {}), dict):
+        return empty, "%s: expected an object with providers and projects fields" % PROFILES_FILE
+    data.setdefault("providers", {})
+    data.setdefault("projects", {})
+    return data, None
+
+
+def save_profiles(data):
+    data["_readme"] = ("Orchestra executor profiles: orch profile list|show|use|set|rm. "
+                       "API keys live only in secrets.env; this file holds variable names.")
+    data.setdefault("version", 1)
+    write_json(PROFILES_FILE, data)
+
+
+def canon_path(p):
+    """Directory key in profiles.json, identical in Windows and WSL: C:\\Users\\Me\\x and /mnt/c/Users/Me/x → c:/users/me/x."""
+    s = str(p).replace("\\", "/")
+    m = re.match(r"/mnt/([A-Za-z])(?=/|$)", s)
+    if m:
+        s = m.group(1) + ":" + (s[m.end():] or "/")
+    if re.match(r"[A-Za-z]:", s):
+        s = s.lower()
+    if len(s) > 1 and not re.fullmatch(r"[a-z]:/", s):
+        s = s.rstrip("/")
+    return s
+
+
+_ROOTS = {}
+
+
+def project_root(path):
+    """Main working tree of the repository that contains path (a worktree maps to its project), else path itself."""
+    path = Path(path).resolve()
+    if path not in _ROOTS:
+        _ROOTS[path] = _project_root(path)
+    return _ROOTS[path]
+
+
+def _project_root(path):
+    if path.is_dir():
+        r = git(["rev-parse", "--git-common-dir"], path)
+        if r is not None and r.returncode == 0 and r.stdout.strip():
+            common = Path(r.stdout.strip())
+            if not common.is_absolute():
+                common = (path / common).resolve()
+            if common.name == ".git":
+                return common.parent
+        r = git(["rev-parse", "--show-toplevel"], path)
+        if r is not None and r.returncode == 0 and r.stdout.strip():
+            return Path(r.stdout.strip()).resolve()
+    return path
+
+
+def local_path(v):
+    """~ → home; C:\\… → /mnt/c/… under WSL (a shared ORCH_HOME may hold Windows paths)."""
+    if v.startswith("~"):
+        return str(Path(os.path.expanduser(v)))
+    m = re.match(r"([A-Za-z]):[\\/]", v)
+    if m and not IS_WINDOWS and Path("/mnt", m.group(1).lower()).is_dir():
+        return "/mnt/%s/%s" % (m.group(1).lower(), v[3:].replace("\\", "/"))
+    return v
+
+
+def provider_section(data, provider):
+    sec = data["providers"].get(provider)
+    sec = sec if isinstance(sec, dict) else {}
+    profs = sec.get("profiles")
+    return sec, (profs if isinstance(profs, dict) else {})
+
+
+def ensure_section(data, provider):
+    sec = data["providers"].get(provider)
+    if not isinstance(sec, dict):
+        sec = data["providers"][provider] = {}
+    if not isinstance(sec.get("profiles"), dict):
+        sec["profiles"] = {}
+    return sec
+
+
+def binding_for(data, provider, where):
+    """(profile name, source) from the longest bound directory containing `where`, or (None, None)."""
+    root = canon_path(where)
+    best, found = -1, (None, None)
+    for k, binding in data["projects"].items():
+        ck = canon_path(k)
+        inside = root == ck or root.startswith(ck if ck.endswith("/") else ck + "/")
+        if inside and isinstance(binding, dict) and binding.get(provider) and len(ck) > best:
+            best = len(ck)
+            found = (str(binding[provider]).lower(), "project" if root == ck else "directory " + ck)
+    return found
+
+
+def session_profiles(text=None):
+    """ORCH_PROFILES="claude=off,codex=alt" → {provider: profile}: session-wide choices (orch launch --no-claude,
+    --use); a later entry wins."""
+    out = {}
+    for pair in (os.environ.get("ORCH_PROFILES", "") if text is None else text).split(","):
+        provider, _, name = pair.strip().partition("=")
+        if provider.strip() and name.strip():
+            out[provider.strip().lower()] = name.strip().lower()
+    return out
+
+
+def resolve_profile(provider, where, override=None, data=None):
+    """Active profile of a provider for a directory: --profile → session choice (ORCH_PROFILES) → directory binding →
+    provider default → built-in."""
+    provider = provider.lower()
+    if data is None:
+        data, err = load_profiles()
+        if err:
+            raise ProfileError(err)
+    sec, profs = provider_section(data, provider)
+    session = session_profiles()
+    if override:
+        name, source = override.lower(), "--profile flag"
+    elif provider in session:
+        name, source = session[provider], "session"
+    else:
+        name, source = binding_for(data, provider, project_root(where))
+        if name is None:
+            name, source = (str(sec["default"]).lower(), "default") if sec.get("default") else ("default", "built-in")
+    if name == "off":
+        return Profile(provider, "off", {}, source, True)
+    if name in profs:
+        d = profs[name]
+        return Profile(provider, name, d if isinstance(d, dict) else {}, source, True)
+    if name == "default":      # built-in: the usual environment (~/.codex, DEEPSEEK_API_KEY), no limits
+        return Profile(provider, "default", {}, source, False)
+    raise ProfileError("profile %s@%s not found (%s); available: %s" % (provider, name, source,
+                                                                          ", ".join(profile_names(profs))))
+
+
+def profile_names(profs):
+    return list(profs) + ([] if "default" in profs else ["default"])
+
+
+def model_allowed(model, models):
+    allowed = [str(m).lower() for m in models]
+    return model.lower() in allowed or re.sub(r"\[[^\]]*\]$", "", model).lower() in allowed   # deepseek-flash[1m]
+
+
+def profile_limits(prof, model, effort, mode):
+    """Hard limits of a profile for `orch run` → (model, effort, notes, denial or None)."""
+    d, notes = prof.data, []
+    models = d.get("models") or []
+    if models:
+        if not model:
+            model = str(models[0])
+            notes.append("model from the profile: %s" % model)
+        elif not model_allowed(model, models):
+            return model, effort, notes, "model %s not allowed (allowed: %s)" % (model, ", ".join(map(str, models)))
+    if mode == "write" and d.get("write") is False:
+        return model, effort, notes, "write mode denied — analysis only"
+    cap = str(d.get("max_effort") or "").lower()
+    if cap and effort:
+        e = effort.lower()
+        if e not in EFFORT_ORDER or cap not in EFFORT_ORDER:
+            return model, effort, notes, "effort %s is off the scale %s; the profile caps it at %s" % (
+                effort, "|".join(EFFORT_ORDER), cap)
+        if EFFORT_ORDER.index(e) > EFFORT_ORDER.index(cap):
+            notes.append("effort %s → %s" % (effort, cap))
+            effort = cap
+    return model, effort, notes, None
+
+
+def secret_source(var):
+    if os.environ.get(var):
+        return "environment"
+    return str(SECRETS_FILE) if load_secrets().get(var) else None
+
+
+def profile_secret(prof, names):
+    """Profile field `key` names the variable (environment or secrets.env) whose value the adapter receives
+    as its first declared secret → (env, secrets still to load the usual way)."""
+    var = prof.data.get("key") if prof.explicit else None
+    if not var or not names:
+        return {}, names
+    val = os.environ.get(var) or load_secrets().get(var)
+    if not val:
+        raise ProfileError("profile %s: key %s is neither in the environment nor in %s (line %s=…)" % (
+            prof.label, var, SECRETS_FILE, var))
+    return {names[0]: val}, names[1:]
+
+
+def profile_env_map(directives):
+    """'# orch-profile-env: home=CODEX_HOME codex_profile=ORCH_CODEX_PROFILE' → {field: VAR}."""
+    out = {}
+    for pair in directives.get("profile-env", "").split():
+        field, _, var = pair.partition("=")
+        if field and VAR_RE.fullmatch(var):
+            out[field] = var
+    return out
+
+
+def profile_env(prof, directives):
+    return {var: local_path(str(prof.data[f])) for f, var in profile_env_map(directives).items()
+            if prof.data.get(f) not in (None, "")}
+
+
+def managed_providers(data):
+    names = []
+    for b in (ORCH_HOME / "adapters", PLUGIN_ROOT / "adapters"):
+        if b.is_dir():
+            names += sorted(p.name for p in b.iterdir() if p.is_file() and not p.name.startswith(("_", ".")))
+    names += list(MANUAL_PROVIDERS) + list(data["providers"])
+    return list(dict.fromkeys(n.lower() for n in names))
+
+
+def profile_fields(provider):
+    """Fields a profile of this provider may have: rules for the orchestrator + what its adapter takes."""
+    adapter = find_adapter(provider)
+    if adapter is None:                      # manual lane: models = model keys (gemini-4-argon, …)
+        return ["models", "use_for", "prefer_for", "rules", "max_open"]
+    directives = adapter_directives(adapter_head(adapter))
+    extra = ["surplus"] if provider.lower() == "claude" else []      # budget mode: surplus=N (% leftover) | off
+    return (["key"] if directives.get("secrets") else []) + list(RULE_FIELDS) + list(profile_env_map(directives)) + extra
+
+
+def describe_profile(prof):
+    if prof.name == "off":
+        return "OFF (%s) — %s" % (prof.source, "do not create manual tasks" if find_adapter(prof.provider) is None
+                                  else "do not use")
+    d = prof.data
+    parts = ["%s (%s)" % (prof.name, prof.source)]
+    if d.get("key"):
+        parts.append("key %s %s" % (d["key"], "✔" if secret_source(d["key"]) else "✘ not in secrets.env"))
+    for f in sorted(set(d) - set(RULE_FIELDS) - {"key", "max_open"}):
+        parts.append("%s %s" % (f, d[f]))
+    if d.get("models"):
+        parts.append("models: " + ", ".join(map(str, d["models"])))
+    if d.get("max_effort"):
+        parts.append("effort ≤ " + str(d["max_effort"]))
+    if d.get("write") is False:
+        parts.append("analysis only")
+    if d.get("use_for"):
+        parts.append("only for: " + ", ".join(map(str, d["use_for"])))
+    if d.get("prefer_for"):
+        parts.append("prefer for: " + ", ".join(map(str, d["prefer_for"])))
+    if d.get("max_open") not in (None, ""):
+        parts.append("manual tasks ≤ %s" % d["max_open"])
+    if len(parts) == 1:
+        parts.append("no limits")
+    return " · ".join(parts)
+
+
+def profile_lines(where, data=None):
+    """Effective profile of every provider for a directory (orch status, profile show)."""
+    if data is None:
+        data, err = load_profiles()
+        if err:
+            return ["⚠ " + err + " — CLI executors and manual tasks will not start until the file is fixed"]
+    lines = []
+    for provider in managed_providers(data):
+        try:
+            prof = resolve_profile(provider, where, data=data)
+        except ProfileError as ex:
+            lines.append("  %-12s ⚠ %s" % (provider, ex))
+            continue
+        lines.append("  %-12s %s" % (provider, describe_profile(prof)))
+        if prof.data.get("rules"):
+            lines.append("  %-12s rules: %s" % ("", prof.data["rules"]))
+    return lines
+
+
+def parse_profile_value(field, raw):
+    """CLI text → stored value; '' removes the field."""
+    raw = raw.strip()
+    if raw == "":
+        return None
+    if field in LIST_FIELDS:
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    if field == "write":
+        v = raw.lower()
+        if v not in ("yes", "no", "true", "false", "1", "0"):
+            raise SystemExit("orch: --write yes|no")
+        return v in ("yes", "true", "1")
+    if field == "max_effort":
+        if raw.lower() not in EFFORT_ORDER:
+            raise SystemExit("orch: --max-effort must be one of %s" % "|".join(EFFORT_ORDER))
+        return raw.lower()
+    if field == "max_open":
+        if not raw.isdigit():
+            raise SystemExit("orch: --max-open must be an integer ≥ 0")
+        return int(raw)
+    if field == "surplus":
+        if raw.lower() == "off":
+            return "off"
+        if not raw.isdigit() or not 1 <= int(raw) <= 100:
+            raise SystemExit("orch: surplus=N (projected unused percent of the 5-hour window, 1–100) or surplus=off")
+        return int(raw)
+    if field == "key" and not VAR_RE.fullmatch(raw):
+        raise SystemExit("orch: --key takes a variable name (e.g. DEEPSEEK_API_KEY_WORK), not the key itself: "
+                         "put the key as a NAME=sk-… line in %s" % SECRETS_FILE)
+    return raw
+
+
+def login_hint(home):
+    hint = "CODEX_HOME='%s' codex login" % home
+    if IS_WINDOWS:
+        hint += "   (PowerShell: $env:CODEX_HOME='%s'; codex login)" % home
+    return hint
+
+
+def cmd_profile(a):
+    data, err = load_profiles()
+    if err and a.action != "show":
+        raise SystemExit("orch: " + err)
+    if a.action in ("show", "list") and getattr(a, "json", False):
+        if err:
+            print(json.dumps({"error": err}, ensure_ascii=False))
+            return 1
+        if a.action == "list":
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return 0
+        where = Path(a.path).resolve() if a.path else project_dir()
+        out = {}
+        for provider in managed_providers(data):
+            try:
+                p = resolve_profile(provider, where, data=data)
+                out[provider] = {"profile": p.name, "source": p.source, "label": p.label, "settings": p.data}
+            except ProfileError as ex:
+                out[provider] = {"error": str(ex)}
+        print(json.dumps({"project": canon_path(project_root(where)), "providers": out}, ensure_ascii=False, indent=2))
+        return 0
+    if a.action == "show":
+        where = Path(a.path).resolve() if a.path else project_dir()
+        print("Executor profiles for %s:" % canon_path(project_root(where)))
+        print("\n".join(profile_lines(where, None if err else data)))
+        print("File: %s%s · switch: orch profile use <provider> <profile|off|inherit> [--default]"
+              % (PROFILES_FILE, "" if PROFILES_FILE.exists() else " (not created yet)"))
+        return 0
+    if a.action == "list":
+        for provider in managed_providers(data):
+            if a.provider and provider != a.provider.lower():
+                continue
+            sec, profs = provider_section(data, provider)
+            default = sec.get("default") or "default"
+            print("%s (default: %s)" % (provider, default))
+            for name in profile_names(profs):
+                d = profs.get(name)
+                print("  %s" % describe_profile(Profile(
+                    provider, name, d if isinstance(d, dict) else {},
+                    ("default" if name == default else "profile") if name in profs else
+                    "built-in%s" % (", default" if name == default else ""), name in profs)))
+            for k, binding in sorted(data["projects"].items()):
+                if isinstance(binding, dict) and binding.get(provider):
+                    print("  ↳ %s → %s" % (k, binding[provider]))
+        return 0
+
+    provider = a.provider.lower()
+    if provider not in managed_providers(data):
+        raise SystemExit("orch: unknown provider %r (available: %s)" % (provider, ", ".join(managed_providers(data))))
+    sec, profs = provider_section(data, provider)
+    name = a.name.lower()
+
+    if a.action == "use":
+        if name not in ("off", "inherit") and name not in profile_names(profs):
+            raise SystemExit("orch: no profile %s@%s (available: %s). Create it: orch profile set %s %s …" % (
+                provider, name, ", ".join(profile_names(profs)), provider, name))
+        if a.default:
+            sec = ensure_section(data, provider)
+            if name == "inherit":
+                sec.pop("default", None)
+            else:
+                sec["default"] = name
+            scope = "as the default"
+        else:
+            where = Path(a.path).resolve() if a.path else project_root(project_dir())
+            k = canon_path(where)
+            binding = data["projects"].setdefault(k, {})
+            if name == "inherit":
+                binding.pop(provider, None)
+                if not binding:
+                    del data["projects"][k]
+            else:
+                binding[provider] = name
+            scope = "for %s" % k
+        save_profiles(data)
+        print("%s: %s %s" % (provider, "inherits the setting" if name == "inherit" else name, scope))
+        print("\n".join(profile_lines(project_dir(), data)))
+        return 0
+
+    if a.action == "set":
+        if name in ("off", "inherit") or not PROFILE_NAME_RE.fullmatch(name):
+            raise SystemExit("orch: a profile name is Latin letters/digits/._- (neither off nor inherit)")
+        allowed = profile_fields(provider)
+        given = {f: v for f, v in (("key", a.key), ("models", a.models), ("max_effort", a.max_effort),
+                                   ("write", a.write), ("use_for", a.use_for), ("prefer_for", a.prefer_for),
+                                   ("rules", a.rules), ("max_open", a.max_open), ("home", a.home),
+                                   ("codex_profile", a.codex_profile), ("fast_model", a.fast_model),
+                                   ("base_url", a.base_url)) if v is not None}
+        for opt in a.opt or []:
+            f, sep, v = opt.partition("=")
+            if not sep:
+                raise SystemExit("orch: --opt FIELD=VALUE")
+            given[f.strip()] = v
+        bad = [f for f in given if f not in allowed]
+        if bad:
+            raise SystemExit("orch: %s profiles have no field %s (available: %s)" % (provider, ", ".join(bad),
+                                                                                    ", ".join(allowed)))
+        sec = ensure_section(data, provider)
+        prof = sec["profiles"].setdefault(name, {})
+        if not isinstance(prof, dict):
+            prof = sec["profiles"][name] = {}
+        for f, raw in given.items():
+            v = parse_profile_value(f, raw)
+            if v is None:
+                prof.pop(f, None)
+            else:
+                prof[f] = v
+        if a.default:
+            sec["default"] = name
+        save_profiles(data)
+        p = Profile(provider, name, prof, "default" if sec.get("default") == name else "profile", True)
+        print("saved %s: %s" % (p.label, describe_profile(p)))
+        if prof.get("key") and not secret_source(prof["key"]):
+            print("no key yet: add a line %s=sk-… to %s (not to the repository, not to the chat)"
+                  % (prof["key"], SECRETS_FILE))
+        if prof.get("home"):
+            home = Path(local_path(str(prof["home"])))
+            home.mkdir(parents=True, exist_ok=True)
+            if provider == "codex" and not (home / "auth.json").exists():
+                print("log in to this profile's account: %s" % login_hint(home))
+            if provider == "claude" and not (home / ".credentials.json").exists():
+                print("log in to this profile's account once: CLAUDE_CONFIG_DIR='%s' claude   (then /login)%s" % (
+                    home, "   (PowerShell: $env:CLAUDE_CONFIG_DIR='%s'; claude)" % home if IS_WINDOWS else ""))
+        return 0
+
+    if a.action == "rm":
+        if name not in profs:
+            raise SystemExit("orch: no profile %s@%s" % (provider, name))
+        users = [k for k, b in data["projects"].items() if isinstance(b, dict) and b.get(provider) == name]
+        if (users or sec.get("default") == name) and not a.force:
+            raise SystemExit("orch: %s@%s is in use (%s) — switch those or add --force (the bindings are dropped)" % (
+                provider, name, ", ".join((["default"] if sec.get("default") == name else []) + users)))
+        del profs[name]
+        if sec.get("default") == name:
+            sec.pop("default")
+        for k in users:
+            data["projects"][k].pop(provider, None)
+            if not data["projects"][k]:
+                del data["projects"][k]
+        save_profiles(data)
+        print("removed %s@%s" % (provider, name))
+        return 0
+    return 1
+
+
+# ───────────────────────── project instructions for workers ─────────────────────────
+#
+# Claude Code reads CLAUDE.md (with @imports), Codex and Antigravity read AGENTS.md, and a DeepSeek worker
+# (--setting-sources user) reads nothing. orch hands each adapter the files its agent does not read itself
+# ('# orch-context-native: AGENTS.md'), so the same project rules reach every executor exactly once.
+
+INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", ".claude/CLAUDE.md")
+IMPORT_RE = re.compile(r"^@(\S+)\s*$", re.M)
+CONTEXT_LIMIT = 40000
+
+
+def instruction_files(cwd):
+    """Existing instruction files for a working directory: repository top level first, then cwd."""
+    cwd = Path(cwd).resolve()
+    dirs = [cwd]
+    r = git(["rev-parse", "--show-toplevel"], cwd) if cwd.is_dir() else None
+    if r is not None and r.returncode == 0 and r.stdout.strip():
+        top = Path(r.stdout.strip()).resolve()
+        if top != cwd:
+            dirs.insert(0, top)
+    return [(d, name) for d in dirs for name in INSTRUCTION_FILES if (d / name).is_file()]
+
+
+def expand_imports(path, native, seen, depth=0):
+    """Text of an instruction file with whole-line @imports inlined (files the agent reads itself are skipped)."""
+    seen.add(path.resolve())
+    text = path.read_text(encoding="utf-8", errors="replace")
+
+    def inline(m):
+        target = (path.parent / os.path.expanduser(m.group(1))).resolve()
+        if target.name in native or target in seen or depth >= 3 or not target.is_file():
+            return "" if target.name in native or target in seen else m.group(0)
+        return expand_imports(target, native, seen, depth + 1)
+    return IMPORT_RE.sub(inline, text)
+
+
+def build_context(cwd, native, out):
+    """Write the project instructions an agent does not load natively to `out`; None if there are none."""
+    parts, seen = [], set()
+    for d, name in instruction_files(cwd):
+        p = (d / name).resolve()
+        if name in native or p in seen:
+            continue
+        text = expand_imports(p, native, seen).strip()
+        if text:
+            if len(text) > CONTEXT_LIMIT:
+                text = text[:CONTEXT_LIMIT] + "\n…[truncated]"
+            parts.append("# Project instructions (%s)\n\n%s" % (name, text))
+    if not parts:
+        return None
+    out.write_text("\n\n---\n\n".join(parts) + "\n", encoding="utf-8")
+    return out
+
+
+# ───────────────────────── usage ledger ─────────────────────────
+#
+# ~/.orchestra/usage.jsonl, one record per line: kind run (CLI executor: model, task, tokens from the adapter's
+# usage.json), handoff (manual task: agent, model, minutes) and session (Claude Code main thread + subagents,
+# snapshot at SessionEnd so the numbers outlive transcript cleanup). `orch usage` joins them per session.
+
+USAGE_FILE = ORCH_HOME / "usage.jsonl"
+
+
+def session_id():
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("ORCH_SESSION_ID") or None
+
+
+def ledger_append(rec):
+    if os.environ.get("ORCH_USAGE_LOG", "1") == "0":
+        return
+    try:
+        USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with USAGE_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(dict(rec, ts=iso(now())), ensure_ascii=False) + "\n")
+    except OSError:
+        pass                     # the ledger is a convenience: never fail a run because of it
+
+
+def ledger_read():
+    out = []
+    try:
+        with USAGE_FILE.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    out.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def task_title(prompt, explicit=None):
+    if explicit:
+        return explicit.strip()[:80]
+    for line in prompt.splitlines():
+        line = line.strip().lstrip("#").strip()
+        if line:
+            return line[:80] + ("…" if len(line) > 80 else "")
+    return ""
+
+
+def read_usage(run_dir):
+    """Adapter's usage.json → {input_tokens (uncached), cached_input_tokens, output_tokens, model?} or None."""
+    u = read_json(run_dir / "usage.json", None)
+    if not isinstance(u, dict):
+        return None
+    clean = {k: int(u[k]) for k in ("input_tokens", "cached_input_tokens", "output_tokens")
+             if isinstance(u.get(k), (int, float))}
+    if u.get("model"):
+        clean["model"] = str(u["model"])
+    if isinstance(u.get("models"), dict):
+        clean["models"] = u["models"]
+    return clean or None
+
+
+# ───────────────────────── run (automated adapters) ─────────────────────────
+
+LIMIT_PATTERNS = [
+    r"usage limit", r"rate[ _-]?limit", r"\b429\b", r"too many requests", r"quota",
+    r"limit (?:has been )?(?:reached|exceeded)", r"exceeded your", r"out of credits",
+]
+UNTIL_IN = re.compile(r"(?:try again|retry|resets?|available again)\s+in\s+(?:about\s+)?(\d+)\s*(second|sec|minute|min|hour|hr|day|h|m|d)s?", re.I)
+UNTIL_AT = re.compile(r"(?:try again|retry|resets?|available again)\s+(?:at|after)\s+(\d{1,2}):(\d{2})\s*(am|pm)?", re.I)
+
+
+def detect_limit(text):
+    low = text.lower()
+    if not any(re.search(p, low) for p in LIMIT_PATTERNS):
+        return (False, None)
+    m = UNTIL_IN.search(text)
+    if m:
+        n, u = int(m.group(1)), m.group(2).lower()
+        secs = n * (60 if u.startswith("m") else 3600 if u.startswith("h") else 86400 if u.startswith("d") else 1)
+        return (True, now() + dt.timedelta(seconds=secs))
+    m = UNTIL_AT.search(text)
+    if m:
+        h, mi, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").lower()
+        if ap == "pm" and h < 12:
+            h += 12
+        if ap == "am" and h == 12:
+            h = 0
+        t = now().replace(hour=h, minute=mi, second=0, microsecond=0)
+        if t <= now():
+            t += dt.timedelta(days=1)
+        return (True, t)
+    return (True, None)
+
+
+def find_adapter(provider):
+    for base in (ORCH_HOME / "adapters", PLUGIN_ROOT / "adapters"):
+        p = base / provider
+        if p.exists():
+            return p
+    return None
+
+
+def adapter_head(adapter, lines=40):
+    try:
+        with open(str(adapter), encoding="utf-8", errors="replace") as f:
+            return "".join(f.readline() for _ in range(lines))
+    except OSError:
+        return ""
+
+
+def adapter_directives(head):
+    """'# orch-secrets: A B' / '# orch-limit-detect: exit-code' comments in an adapter's header."""
+    return {m.group(1): m.group(2).strip() for m in re.finditer(r"^#\s*orch-([a-z-]+):\s*(.+)$", head, re.M)}
+
+
+def adapter_command(adapter, head):
+    """Python adapters → this interpreter; shell adapters → bash (Git Bash on Windows)."""
+    if adapter.suffix == ".py" or (head.startswith("#!") and "python" in head.splitlines()[0]):
+        return [sys.executable, str(adapter)]
+    if not IS_WINDOWS and os.access(str(adapter), os.X_OK):
+        return [str(adapter)]
+    bash = find_bash()
+    if not bash:
+        raise SystemExit("orch: bash not found for adapter %s (Windows needs Git for Windows; the path can be set "
+                         "in CLAUDE_CODE_GIT_BASH_PATH)" % adapter)
+    return [bash, str(adapter)]
+
+
+SECRETS_FILE = ORCH_HOME / "secrets.env"
+
+
+def load_secrets():
+    """KEY=value lines of ~/.orchestra/secrets.env (API keys for adapters; never stored in a repository)."""
+    try:
+        text = SECRETS_FILE.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].strip()
+        k, sep, v = line.partition("=")
+        k, v = k.strip(), v.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
+            continue
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]
+        out[k] = v
+    return out
+
+
+# Variables of the orchestrating Claude Code session (messaging socket and token, session id, effort, …) must not
+# reach a worker: a nested `claude` would attach to our session, and for any other CLI they are just leaked secrets.
+KEEP_CLAUDE_VARS = ("CLAUDE_CODE_GIT_BASH_PATH", "CLAUDE_CONFIG_DIR")
+
+
+def lead_vars():
+    """Variables a non-Claude lead (orch launch) set for its own session: endpoint, token, models."""
+    return {v for v in os.environ.get("ORCH_LEAD_ENV", "").split(",") if v}
+
+
+def worker_env(extra, secrets=()):
+    lead = lead_vars()          # a DeepSeek lead's endpoint and token are not the worker's business
+    env = {k: v for k, v in os.environ.items() if k not in lead and
+           (k in KEEP_CLAUDE_VARS or not (k == "CLAUDECODE" or k.startswith("CLAUDE_")))}
+    stored = load_secrets() if secrets else {}
+    for name in secrets:          # only the keys the adapter declares (# orch-secrets: …), real environment wins
+        if name in stored and not env.get(name):
+            env[name] = stored[name]
+    env.update(extra)
+    return env
+
+
+WORKER_BRIEF = """# Role: Orchestra executor ({provider} · {model} · effort {effort} · mode {mode})
+
+You are an executor in the Orchestra system. Tasks are assigned by the orchestrator — another Claude Code
+instance that talks to the operator. It gives you exactly one subtask. You do not see its conversation,
+and the operator does not talk to you directly: your only reader is the orchestrator, and it checks the
+result itself (diff, tests) before accepting it.
+
+Rules:
+- Do exactly what the task says: do not widen the scope, do not touch files beyond the ones named.
+- Work only in the working directory: {cwd}
+- {mode_rule}
+- Do not commit, push or switch branches unless the task explicitly requires it.
+- Do not delegate or start other executors (`orch run`, `orch handoff`, other CLI agents): the orchestrator decides.
+- If the task is unclear or contradicts the code, do not guess: STATUS: BLOCKED with questions under "Blockers".
+- If permissions deny an action, you may do the same thing by allowed means (e.g. search with a tool
+  instead of a command), but do not work around the restriction itself. If you need a command (tests, build),
+  name it under "Blockers" and the orchestrator will grant it.
+- Verify the result yourself (build, tests) if the task and your permissions allow it.
+
+Reply to the orchestrator (your last message) — brief, strictly in this form:
+STATUS: DONE | PARTIAL | BLOCKED
+## Done
+## Changed files
+## Verification  (commands and outcome)
+## Blockers / questions
+"""
+MODE_RULES = {
+    "analysis": "analysis mode: read and analyse only — do not change files.",
+    "write": "write mode: you may change files inside the working directory.",
+}
+
+
+def win_job(proc):
+    """Windows: put the (suspended) adapter into a kill-on-close job object, then resume it.
+    Git Bash/MSYS children lose their parent-PID chain, so taskkill /T misses them; a job holds every
+    descendant, and because it is closed when orch exits, workers die with orch even if orch is killed."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Basic(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
+
+    class Extended(ctypes.Structure):
+        _fields_ = [("Basic", Basic), ("Io", ctypes.c_ulonglong * 6), ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    handle = int(proc._handle)          # full-access handle owned by Popen
+    job = None
+    try:
+        job = k32.CreateJobObjectW(None, None)
+        info = Extended()
+        info.Basic.LimitFlags = 0x2000                       # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not (job and k32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info))
+                and k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(handle))):
+            job = None
+    except Exception:
+        job = None
+    finally:
+        ctypes.WinDLL("ntdll").NtResumeProcess(wintypes.HANDLE(handle))   # never leave the adapter suspended
+    return job
+
+
+def kill_tree(proc, job=None):
+    """Stop the adapter and everything it started (codex, claude, test runs): an orphaned agent keeps spending."""
+    try:
+        if IS_WINDOWS:
+            import ctypes
+            if not (job and ctypes.WinDLL("kernel32").TerminateJobObject(ctypes.c_void_p(job), 1)):
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=30)
+        else:
+            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        pass
+    try:
+        proc.kill()
+        proc.wait(timeout=10)
+    except Exception:
+        pass
+
+
+def cmd_run(a):
+    if os.environ.get("ORCH_WORKER"):
+        raise SystemExit("orch: you are an executor (ORCH_WORKER=%s) — nested delegation is not allowed, "
+                         "return your result to the orchestrator" % os.environ["ORCH_WORKER"])
+    provider = a.provider.lower()
+    adapter = find_adapter(provider)
+    if adapter is None:
+        raise SystemExit("orch: no adapter for %r (looked in %s/adapters and %s/adapters)" % (provider, ORCH_HOME, PLUGIN_ROOT))
+    head = adapter_head(adapter)
+    directives = adapter_directives(head)
+    command = adapter_command(adapter, head)
+    cwd = Path(a.cd).resolve() if a.cd else project_dir()
+    # profile of the project the worker works on: off / allowed models, write, effort cap / key or account
+    try:
+        prof = resolve_profile(provider, cwd, a.profile)
+        if prof.name == "off":
+            print("PROFILE_OFF %s — executor disabled by the profile (%s) for %s." % (
+                provider, prof.source, canon_path(project_root(cwd))))
+            print("Assign the task to another provider. To enable: orch profile use %s <profile>." % provider)
+            return EXIT_QUOTA
+        model, effort, notes, denied = profile_limits(prof, a.model, a.effort, a.mode)
+        if denied:
+            print("PROFILE_DENIED %s — %s (%s)." % (prof.label, denied, prof.source))
+            print("Pick a slot the profile allows (orch profile show) or another provider.")
+            return EXIT_QUOTA
+        secret_env, secret_names = profile_secret(prof, directives.get("secrets", "").split())
+    except ProfileError as ex:
+        print("PROFILE_ERROR %s — %s" % (provider, ex))
+        return 1
+    key = prof.label + ("/" + model if model else "")
+    ok, e, k = availability(key)
+    if not ok and not a.force:
+        print("QUOTA_EXHAUSTED %s — %s" % (key, describe_entry(k, e)))
+        print("Pick a fallback from the registry or wait for the reset (orch quota show).")
+        return EXIT_QUOTA
+
+    if a.prompt_file:
+        prompt = Path(a.prompt_file).read_text(encoding="utf-8")
+    elif a.prompt:
+        prompt = " ".join(a.prompt)
+    elif not sys.stdin.isatty():
+        prompt = sys.stdin.read()
+    else:
+        raise SystemExit("orch: no prompt (pass text, --prompt-file or stdin)")
+    if not prompt.strip():
+        raise SystemExit("orch: empty prompt")
+
+    handoff = a.handoff.upper() if a.handoff else None
+    if handoff:
+        load_meta(handoff)                 # a reclaimed pooled task this run executes: must exist
+    run_id = "%s-%s-%s" % (provider[:3], now().strftime("%m%d-%H%M%S"), rand_suffix())
+    run_dir = state_dir() / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+    out_file = run_dir / "output.md"
+    log_file = run_dir / "log.txt"
+    task = task_title(prompt, a.task)
+    meta = {"id": run_id, "provider": provider, "profile": prof.name if prof.explicit else None,
+            "profile_source": prof.source, "model": model, "effort": effort, "mode": a.mode, "task": task,
+            "session": session_id(), "cwd": str(cwd), "started": iso(now()), "adapter": str(adapter),
+            "allow": a.allow or []}
+    write_json(run_dir / "meta.json", meta)
+    role_file = run_dir / "role.md"
+    role_file.write_text(WORKER_BRIEF.format(provider=provider, model=model or "default model",
+                                             effort=effort or "default", mode=a.mode, cwd=cwd,
+                                             mode_rule=MODE_RULES[a.mode]), encoding="utf-8")
+    context = build_context(cwd, directives.get("context-native", "").split(), run_dir / "context.md")
+
+    extra = {"ORCH_MODEL": model or "", "ORCH_EFFORT": effort or "", "ORCH_MODE": a.mode,
+             "ORCH_CWD": str(cwd), "ORCH_PROMPT_FILE": str(run_dir / "prompt.md"),
+             "ORCH_OUTPUT_FILE": str(out_file), "ORCH_RUN_DIR": str(run_dir),
+             "ORCH_ROLE_FILE": str(role_file), "ORCH_CONTEXT_FILE": str(context) if context else "",
+             "ORCH_ALLOW": "\n".join(a.allow or []),
+             "ORCH_HOME": str(ORCH_HOME), "ORCH_WORKER": run_id, "ORCH_PROFILE": prof.name if prof.explicit else ""}
+    extra.update(profile_env(prof, directives))     # profile fields the adapter declares (CODEX_HOME, …)
+    extra.update(secret_env)                         # the profile's key under the adapter's secret name
+    env = worker_env(extra, secrets=secret_names)
+    timeout = parse_duration(a.timeout) if a.timeout else None
+    # own process group (POSIX) / kill-on-close job (Windows, started suspended until it is in the job):
+    # on timeout or stop the whole tree goes, not just the adapter
+    detach = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | 0x4} if IS_WINDOWS   # | CREATE_SUSPENDED
+              else {"start_new_session": True})
+    t0 = time.time()
+    with log_file.open("w", encoding="utf-8") as log:
+        try:
+            proc = subprocess.Popen(command, env=env, cwd=str(cwd), stdout=log, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, **detach)
+        except OSError as ex:
+            raise SystemExit("orch: cannot start adapter %s: %s" % (adapter, ex))
+        job = win_job(proc) if IS_WINDOWS else None
+
+        def stop(signum, frame):
+            kill_tree(proc, job)
+            sys.exit(128 + signum)
+        for name in ("SIGTERM", "SIGHUP"):
+            if hasattr(signal, name):
+                signal.signal(getattr(signal, name), stop)
+        try:
+            rc = proc.wait(timeout=timeout)
+            kill_tree(proc, job)      # reap what the worker left behind (e.g. codex's Windows sandbox helper)
+        except subprocess.TimeoutExpired:
+            kill_tree(proc, job)
+            rc = EXIT_TIMEOUT
+            log.write("\n[orch] killed after timeout %ss\n" % timeout)
+        except KeyboardInterrupt:
+            kill_tree(proc, job)
+            raise
+    elapsed = int(time.time() - t0)
+    log_text = log_file.read_text(encoding="utf-8", errors="replace")
+
+    status = "OK" if rc == 0 else "FAILED"
+    quota_note = ""
+    if rc != 0 and rc != EXIT_TIMEOUT:
+        # adapters that report limits themselves opt out of scanning the log (worker output may mention "quota")
+        scan = directives.get("limit-detect") != "exit-code"
+        hit, until = (True, None) if rc == EXIT_QUOTA else detect_limit(log_text) if scan else (False, None)
+        qfile = run_dir / "quota_until"
+        manual = False
+        if qfile.exists():
+            qtext = qfile.read_text(encoding="utf-8", errors="replace").strip()
+            manual = qtext.lower() in ("manual", "none", "never")
+            try:
+                until = (None if manual else parse_until(qtext)) or until
+            except SystemExit:
+                pass
+        if hit:
+            status = "QUOTA_EXHAUSTED"
+            block = prof.label if a.quota_scope == "provider" else key    # each profile has its own key/account
+            if manual:
+                quota_note = " (no timed reset — after topping up: orch quota clear %s)" % block
+            elif until is None:
+                until = now() + dt.timedelta(minutes=a.quota_backoff)
+                quota_note = " (reset time not recognised — rechecking in %d min)" % a.quota_backoff
+            set_avail(block, "exhausted", until, "auto: limit detected in the output of %s" % run_id, source="auto")
+            rc = EXIT_QUOTA
+    if rc == EXIT_TIMEOUT:
+        status = "TIMEOUT"
+
+    usage = read_usage(run_dir)
+    meta.update({"finished": iso(now()), "elapsed_s": elapsed, "exit": rc, "status": status, "usage": usage})
+    write_json(run_dir / "meta.json", meta)
+    proj = project_root(cwd)
+    ledger_append({"kind": "run", "session": meta["session"], "project": canon_path(proj), "project_path": str(proj),
+                   "id": run_id, "provider": provider, "label": prof.label,
+                   "model": (usage or {}).get("model") or model, "effort": effort, "mode": a.mode, "task": task,
+                   "status": status, "elapsed_s": elapsed, "usage": usage, "handoff": handoff})
+    if handoff and status == "OK":
+        finish_reclaimed(handoff, "DONE", run_id)     # frees the one-at-a-time slot of the pool
+
+    output = out_file.read_text(encoding="utf-8", errors="replace") if out_file.exists() else ""
+    if not output.strip() and rc == 0:
+        output = log_text[-a.max_chars:]
+    shown = model or ("(default: %s)" % usage["model"] if usage and usage.get("model") else "(default)")
+    print("[%s] %s · %s %s effort=%s mode=%s · %ds%s" % (status, run_id, prof.label, shown,
+                                                       effort or "(default)", a.mode, elapsed,
+                                                       " · " + usage_brief(usage) if usage else ""))
+    if prof.explicit:
+        print("profile %s (%s)%s" % (prof.label, prof.source, ("; " + "; ".join(notes)) if notes else ""))
+    if status == "QUOTA_EXHAUSTED":
+        print("Limit exhausted (subscription or balance), recorded in orch quota%s. Reassign the task to a fallback."
+              % quota_note)
+    body = output if output.strip() else log_text
+    if len(body) > a.max_chars:
+        body = body[:a.max_chars] + "\n…[truncated, full text: %s]" % (out_file if output.strip() else log_file)
+    print(body.rstrip())
+    print("\n-- files: %s (output) · %s (log)" % (out_file, log_file))
+    return rc
+
+
+# ───────────────────────── a non-Claude lead (orch launch) ─────────────────────────
+
+SECRET_VAR_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.I)
+
+
+def masked(name, value):
+    return (value[:4] + "…" + value[-2:] if len(value) > 10 else "…") if SECRET_VAR_RE.search(name) else value
+
+
+def lead_line():
+    """'Lead: deepseek@work · deepseek-v4-pro …' for status / SessionStart, or None in a Claude-led session."""
+    lead = os.environ.get("ORCH_LEAD")
+    if not lead:
+        return None
+    try:
+        claude = resolve_profile("claude", project_dir())
+        lane = "off (%s)" % claude.source if claude.name == "off" else "only as an executor: orch run claude"
+    except ProfileError as ex:
+        lane = "unknown (%s)" % ex
+    return ("Lead: %s · %s (orch launch) — you are not Claude; orch-* subagents run on this model too. Claude: %s. "
+            "Read `orch guide lead` before planning." % (lead, os.environ.get("ORCH_LEAD_MODEL") or "?", lane))
+
+
+def cmd_launch(a):
+    """Start an interactive Claude Code session whose every model request goes to another provider (the lead)."""
+    if os.environ.get("ORCH_WORKER"):
+        raise SystemExit("orch: you are an executor (ORCH_WORKER=%s) — an executor does not start lead sessions"
+                         % os.environ["ORCH_WORKER"])
+    if os.environ.get("CLAUDECODE") and not a.dry_run:
+        raise SystemExit("orch: run `orch launch` from a terminal, not inside a Claude Code session")
+    provider = a.provider.lower()
+    adapter = find_adapter(provider)
+    if adapter is None:
+        raise SystemExit("orch: no adapter for %r (looked in %s/adapters and %s/adapters)" % (provider, ORCH_HOME,
+                                                                                            PLUGIN_ROOT))
+    head = adapter_head(adapter)
+    directives = adapter_directives(head)
+    if directives.get("launch") != "env":
+        raise SystemExit("orch: %s cannot lead a session (its adapter declares no `# orch-launch: env`)" % provider)
+    choices = [c.strip().lower() for c in os.environ.get("ORCH_PROFILES", "").split(",") if c.strip()]
+    for spec in a.use or []:
+        if not re.fullmatch(r"[a-z0-9_.-]+=[a-z0-9_.-]+", spec.strip().lower()):
+            raise SystemExit("orch: --use expects PROVIDER=PROFILE (e.g. codex=alt), got %r" % spec)
+        choices.append(spec.strip().lower())
+    if a.no_claude:
+        choices.append("claude=off")
+    cwd = project_dir()
+    try:
+        prof = resolve_profile(provider, cwd, a.profile)
+        if prof.name == "off":
+            raise SystemExit("orch: PROFILE_OFF %s — off for %s (%s); choose one: orch launch %s --profile <name>"
+                             % (provider, canon_path(project_root(cwd)), prof.source, provider))
+        model, _, notes, denied = profile_limits(prof, a.model, None, "write")
+        if denied:
+            raise SystemExit("orch: PROFILE_DENIED %s — %s (%s)" % (prof.label, denied, prof.source))
+        secret_env, secret_names = profile_secret(prof, directives.get("secrets", "").split())
+    except ProfileError as ex:
+        raise SystemExit("orch: PROFILE_ERROR %s — %s" % (provider, ex))
+    key = prof.label + ("/" + model if model else "")
+    ok, e, k = availability(key)
+    if not ok and not a.force:
+        raise SystemExit("orch: QUOTA_EXHAUSTED %s — %s (orch quota show; --force starts anyway)"
+                         % (k, describe_entry(k, e)))
+
+    env = dict(os.environ)                       # the adapter computes the lead's environment from this one
+    stored = load_secrets() if secret_names else {}
+    for name in secret_names:
+        if name in stored and not env.get(name):
+            env[name] = stored[name]
+    env.update(profile_env(prof, directives))
+    env.update(secret_env)
+    env.update({"ORCH_MODEL": model or "", "ORCH_PROFILE": prof.name if prof.explicit else "", "ORCH_HOME": str(ORCH_HOME)})
+    try:
+        r = subprocess.run(adapter_command(adapter, head) + ["--launch-env"], env=env, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        spec = json.loads(r.stdout.decode("utf-8", "replace")) if r.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired) as ex:
+        raise SystemExit("orch: %s --launch-env failed: %s" % (adapter, ex))
+    if not isinstance(spec, dict) or not isinstance(spec.get("set"), dict):
+        print((r.stdout + r.stderr).decode("utf-8", "replace").rstrip())
+        return r.returncode or 1
+
+    unset = set(spec.get("unset") or [])
+    lead = {k: v for k, v in os.environ.items() if k not in unset}
+    lead.update({k: str(v) for k, v in spec["set"].items()})
+    if choices:
+        lead["ORCH_PROFILES"] = ",".join(choices)
+    lead.update({"ORCH_LEAD": prof.label, "ORCH_LEAD_MODEL": str(spec.get("model") or model or ""),
+                 "ORCH_LEAD_ENV": ",".join(sorted(spec["set"]))})
+    claude = os.environ.get("ORCH_CLAUDE_BIN") or shutil.which("claude")
+    if not claude:
+        raise SystemExit("orch: claude CLI not found (or set ORCH_CLAUDE_BIN)")
+    cmd = exe_command(claude) + [str(x) for x in spec.get("args") or []] + list(a.claude_args or [])
+    claude_off = session_profiles(lead.get("ORCH_PROFILES", "")).get("claude") == "off"
+    if not claude_off:
+        try:
+            claude_off = resolve_profile("claude", cwd).name == "off"
+        except ProfileError:
+            pass
+    print("Lead: %s · %s (background calls: %s) — every model request of this session goes to %s"
+          % (prof.label, lead["ORCH_LEAD_MODEL"], spec.get("fast_model") or "?", spec.get("endpoint") or provider))
+    print("Claude: %s" % ("off — no Claude model is used in this session" if claude_off else
+                          "only as an executor (orch run claude, on your Claude login)"))
+    for n in notes:
+        print("profile %s: %s" % (prof.label, n))
+    if unset:
+        print("Dropped for this session: %s" % ", ".join(sorted(unset)))
+    if a.dry_run:
+        print("Command: %s" % " ".join(cmd))
+        for name in sorted(n for n in lead if os.environ.get(n) != lead[n]):
+            print("  %s=%s" % (name, masked(name, lead[name])))
+        return 0
+    sys.stdout.flush()
+    if not IS_WINDOWS:
+        os.execve(cmd[0], cmd, lead)                # the session replaces orch
+    proc = subprocess.Popen(cmd, env=lead)
+    while True:
+        try:
+            return proc.wait()
+        except KeyboardInterrupt:                   # Ctrl+C belongs to Claude Code, not to its launcher
+            continue
+
+
+# ───────────────────────── worktrees ─────────────────────────
+
+def make_worktree(name, base="HEAD", branch=None):
+    proj = project_dir()
+    r = git(["rev-parse", "--is-inside-work-tree"], proj)
+    if r is None or r.returncode != 0:
+        raise SystemExit("orch: %s is not a git repository — worktree unavailable" % proj)
+    wt_root = proj.parent / (proj.name + ".wt")
+    path = wt_root / name
+    branch = branch or ("orch/" + name.lower())
+    if path.exists():
+        return path, branch
+    wt_root.mkdir(parents=True, exist_ok=True)
+    git(["worktree", "add", "-b", branch, str(path), base], proj, check=True)
+    ensure_git_exclude(proj)
+    return path, branch
+
+
+def cmd_worktree(a):
+    path, branch = make_worktree(a.name, a.base, a.branch)
+    print("worktree: %s\nbranch:   %s" % (path, branch))
+    w = win_path(path)
+    if w:
+        print("windows:  %s" % w)
+    return 0
+
+
+# ───────────────────────── handoffs (manual lane) ─────────────────────────
+
+MANUAL_ROLE = """> You are an executor in the Orchestra system. This task comes from the orchestrator — Claude Code,
+> which runs the work together with the operator and checks the result itself (diff, tests) before accepting it.
+> The operator only handed you the task: work autonomously and do not message them about it. Everything you need
+> is in this file and in the project rules.
+"""
+
+PROTOCOL = """
+---
+
+## Execution protocol (follow it strictly)
+
+1. **Right at the start** create the file `{rel}/RESULT.md` with two lines:
+   `STATUS: IN_PROGRESS`
+   `AGENT: <product and model, e.g. Antigravity · Gemini 4 Argon>`
+2. Stay within the scope of this task. In the `.orchestra/` folder touch nothing except `{rel}/RESULT.md`.
+3. Do not start other agents or `orch`: assigning tasks is the orchestrator's job.{worktree_rule}
+4. Check the result against the acceptance criteria (run the listed commands/tests).
+5. {commit_rule}
+6. **When finished**, overwrite `{rel}/RESULT.md`. The first line is exactly one of:
+   `STATUS: DONE` · `STATUS: BLOCKED` · `STATUS: FAILED`
+   The second is the same `AGENT: …` line. Then the sections: `## Summary`, `## Changed files`,
+   `## Verification` (commands and their outcome), `## Open questions`.
+7. Writing RESULT.md with a final status is the completion signal for the orchestrator. Change nothing after that.
+"""
+WORKTREE_RULE = ("\n   This is a separate git worktree: local files (`.env`, `node_modules`, builds) may be missing — "
+                 "install dependencies as the project instructions say; do not copy secrets — if you need one, "
+                 "`STATUS: BLOCKED`.")
+# Antigravity loads .agents/rules/*.md of the workspace (trigger always_on → every turn): the protocol survives
+# long sessions and context compaction. Written only into the task's own worktree, excluded from git.
+AG_RULE_PATH = ".agents/rules/orchestra-task.md"
+AG_RULE = """---
+trigger: always_on
+---
+# Orchestra: task {hid}
+
+This folder is the working tree of Orchestra task {hid} (“{title}”). The task and the protocol are in
+`{rel}/TASK.md`; carry the task out strictly by that protocol.
+- At the start — `{rel}/RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: <product · model>`.
+- At the end — the same file with `STATUS: DONE | BLOCKED | FAILED` and the report sections: without it the
+  orchestrator will not know the task is finished.
+- The project rules ({rules}) are mandatory; scope — this task only; in `.orchestra/` — only your own RESULT.md.
+"""
+AGENT_RE = re.compile(r"^\s*AGENT:\s*(.+?)\s*$", re.M)
+AGENT_NAMES = {"antigravity": "Antigravity", "cursor": "Cursor", "windsurf": "Windsurf", "jules": "Jules",
+               "kiro": "Kiro", "copilot": "GitHub Copilot"}
+OPEN_TAKEN = ("WAITING", "STARTED?", "IN_PROGRESS")
+
+
+def agent_name(provider):
+    return AGENT_NAMES.get((provider or "").lower(), provider or "manual agent")
+
+
+def handoffs_root():
+    return state_dir() / "handoffs"
+
+
+def next_handoff_id(prefix):
+    root = handoffs_root()
+    root.mkdir(parents=True, exist_ok=True)
+    counter = read_json(root / "counter.json", {})
+    n = counter.get(prefix, 0) + 1
+    counter[prefix] = n
+    write_json(root / "counter.json", counter)
+    return "%s-%04d" % (prefix, n)
+
+
+def load_meta(hid):
+    p = handoffs_root() / hid / "meta.json"
+    m = read_json(p, None)
+    if m is None:
+        raise SystemExit("orch: handoff %s not found" % hid)
+    return m
+
+
+def save_meta(m):
+    write_json(handoffs_root() / m["id"] / "meta.json", m)
+    try:
+        write_board()
+    except Exception:
+        pass                         # the board is a view; hooks must never fail because of it
+
+
+def all_metas():
+    root = handoffs_root()
+    if not root.exists():
+        return []
+    out = []
+    for d in sorted(root.iterdir()):
+        m = read_json(d / "meta.json", None) if d.is_dir() else None
+        if m:
+            out.append(m)
+    return out
+
+
+def result_status(m):
+    """Status from RESULT.md (or manual override in meta); OFFERED = in the pool, nobody has taken it yet."""
+    if m.get("manual_status"):
+        return m["manual_status"]
+    if m.get("offered") and not m.get("taken"):
+        return "OFFERED"
+    rp = Path(m["result_path"])
+    if rp.exists():
+        mt = STATUS_RE.search(rp.read_text(encoding="utf-8", errors="replace")[:2000])
+        if mt:
+            st = mt.group(1)
+            return st if st in TERMINAL + ("IN_PROGRESS",) else "IN_PROGRESS"
+        return "IN_PROGRESS"
+    return "WAITING"
+
+
+def agent_reported(m):
+    """'AGENT: Antigravity · Gemini 4 Argon' line the executor wrote into RESULT.md."""
+    rp = Path(m["result_path"]) if m.get("result_path") else None
+    if rp and rp.exists():
+        mt = AGENT_RE.search(rp.read_text(encoding="utf-8", errors="replace")[:2000])
+        if mt and not mt.group(1).startswith("<"):
+            return mt.group(1)[:80]
+    return None
+
+
+def scan_latest_mtime(root, limit=20000):
+    latest, seen = 0.0, 0
+    for dirpath, dirnames, filenames in os.walk(str(root)):
+        dirnames[:] = [d for d in dirnames if d not in SCAN_SKIP]
+        for f in filenames:
+            seen += 1
+            if seen > limit:
+                return latest
+            try:
+                mt = os.path.getmtime(os.path.join(dirpath, f))
+            except OSError:
+                continue
+            if mt > latest:
+                latest = mt
+    return latest
+
+
+def taken_at(m):
+    return parse_iso(m.get("taken") or m["created"])
+
+
+def last_activity(m, limit=20000):
+    """Latest change in the handoff workdir after it was handed out (None if nothing changed)."""
+    if result_status(m) == "OFFERED" or not m.get("workdir"):
+        return None
+    root = Path(m["workdir"])
+    baseline = max(taken_at(m).timestamp(), m.get("activity_baseline") or 0) + 1.0
+    latest = scan_latest_mtime(root, limit)
+    rp = Path(m["result_path"])
+    if rp.exists():
+        latest = max(latest, rp.stat().st_mtime)
+    if latest <= baseline:
+        return None
+    return dt.datetime.fromtimestamp(latest).astimezone()
+
+
+def effective_state(m):
+    st = result_status(m)
+    if st == "WAITING" and last_activity(m):
+        return "STARTED?"   # files changed in workdir but no RESULT.md yet
+    return st
+
+
+def suggestion(m):
+    s = agent_name(m.get("provider"))
+    if m.get("model"):
+        s += " · " + m["model"]
+    if m.get("effort"):
+        s += " · " + m["effort"]
+    return s
+
+
+def operator_card(m):
+    if result_status(m) == "OFFERED":
+        lines = ["┌ %s · %s — in the manual pool" % (m["id"], m["title"]),
+                 "│ Suggested: %s%s" % (suggestion(m), " (own worktree)" if m.get("worktree") else ""),
+                 "│ Take it: say “%s to %s” (or /orchestra:manual take %s) — you then get the folder and paste line."
+                 % (m["id"], agent_name(m.get("provider")), m["id"])]
+        every = read_json(handoffs_root() / ".pool.json", {}).get("check_min") or POOL_CHECK_MIN
+        lines.append("│ No take from the pool for %d min → the orchestrator starts taking tasks back, one at a time while "
+                     "waiting still makes sense%s." % (every, " (this one: %s)" % m["fallback"] if m.get("fallback") else ""))
+        lines.append("└ Not needed: “%s: cancel”" % m["id"])
+        return "\n".join(lines)
+    agent = agent_name(m.get("provider"))
+    lines = ["┌ %s · %s" % (m["id"], m["title"])]
+    lines.append("│ Open in %s: %s" % (agent, m["workdir"]))
+    if m.get("workdir_win"):
+        lines.append("│   (Windows path:      %s)" % m["workdir_win"])
+    if m.get("branch"):
+        lines.append("│ Branch: %s" % m["branch"])
+    model = m.get("model") or "your choice"
+    if m.get("effort"):
+        model += " · thinking/effort: %s" % m["effort"]
+    lines.append("│ Model: %s" % model)
+    lines.append("│ Paste into the %s chat:" % agent)
+    lines.append("│   %s" % m["paste"])
+    lines.append("│ The watcher sees completion via RESULT.md — no need to report back.")
+    if m.get("fallback"):
+        lines.append("│ Fallback: %s if not started within %d min / not done within %d min." % (
+            m["fallback"], m["pickup_min"], m["reassign_min"]))
+    lines.append("└ Postpone/cancel: “AG-…: cancel” or orch handoff cancel %s" % m["id"])
+    return "\n".join(lines)
+
+
+def read_body(a):
+    if a.prompt_file:
+        body = Path(a.prompt_file).read_text(encoding="utf-8")
+    elif not sys.stdin.isatty():
+        body = sys.stdin.read()
+    else:
+        raise SystemExit("orch: task body required (--prompt-file or stdin)")
+    if not body.strip():
+        raise SystemExit("orch: empty task body")
+    return body
+
+
+def taken_count():
+    return sum(1 for m in all_metas() if result_status(m) in OPEN_TAKEN)
+
+
+def manual_gate(provider, model_key, override, max_open, force, check_operator=True):
+    """Profile, operator and quota checks of the manual lane → ((Profile, max_open), None) or (None, exit code)."""
+    try:
+        prof = resolve_profile(provider, project_dir(), override)
+    except ProfileError as ex:
+        print("PROFILE_ERROR %s — %s" % (provider, ex))
+        return None, 1
+    if prof.name == "off":       # the profile is the operator's decision: --force does not override it
+        print("PROFILE_OFF %s — manual tasks disabled by the profile (%s) for this project.\n"
+              "Assign the task to an automated executor. To enable: orch profile use %s <profile>."
+              % (provider, prof.source, provider))
+        return None, EXIT_QUOTA
+    models = prof.data.get("models") or []
+    if models and model_key and not model_allowed(model_key, models):
+        print("PROFILE_DENIED %s — model %s not allowed (allowed: %s; %s)." % (
+            prof.label, model_key, ", ".join(map(str, models)), prof.source))
+        return None, EXIT_QUOTA
+    if isinstance(prof.data.get("max_open"), int):
+        max_open = min(max_open, prof.data["max_open"])
+    ok, e, k = availability("operator")
+    if check_operator and not ok and not force:
+        print("OPERATOR_AWAY — %s\nThe manual lane is closed; assign the task to an automated executor."
+              % describe_entry(k, e))
+        return None, EXIT_QUOTA
+    prov_key = prof.label + ("/" + model_key if model_key else "")
+    ok, e, k = availability(prov_key)
+    if not ok and not force:
+        print("QUOTA_EXHAUSTED %s — %s" % (prov_key, describe_entry(k, e)))
+        return None, EXIT_QUOTA
+    return (prof, max_open), None
+
+
+def limit_reached(max_open, cap, force):
+    n = taken_count()
+    if n >= max_open and not force:
+        print("HANDOFF_LIMIT: %d manual tasks already open (limit %d%s). Wait for one to finish, merge tasks "
+              "into one or assign to an automated executor. (--force to bypass)" % (
+                  n, max_open, ", profile" if max_open < cap else ""))
+        return True
+    return False
+
+
+def create_handoff(a, body, offered):
+    hid = next_handoff_id(a.prefix)
+    (handoffs_root() / hid).mkdir(parents=True, exist_ok=True)
+    (handoffs_root() / hid / "BODY.md").write_text(body, encoding="utf-8")
+    return {
+        "id": hid, "title": a.title, "provider": a.provider.lower(), "profile": None, "model": a.model,
+        "effort": a.effort, "model_key": a.model_key, "created": iso(now()),
+        "offered": iso(now()) if offered else None, "taken": None, "worktree": bool(a.worktree), "base": a.base,
+        "workdir": None, "workdir_win": None, "branch": None, "task_path": None,
+        "result_path": str(handoffs_root() / hid / "RESULT.md"), "paste": None, "fallback": a.fallback,
+        "pickup_min": a.pickup_min, "reassign_min": a.reassign_min,
+        "session": session_id(), "notified": {}, "manual_status": None, "reclaim": None,
+    }
+
+
+def assign_handoff(m, prof):
+    """Hand a task to the agent that takes it: worktree, TASK.md (role, project rules, protocol), paste line."""
+    proj = project_dir()
+    hid = m["id"]
+    branch = None
+    if m.get("worktree"):
+        workdir, branch = make_worktree(hid, m.get("base") or "HEAD", "ag/" + hid.lower())
+    else:
+        workdir = proj
+    rel = ".orchestra/handoffs/%s" % hid
+    task_dir = workdir / rel
+    task_dir.mkdir(parents=True, exist_ok=True)
+    body = (handoffs_root() / hid / "BODY.md").read_text(encoding="utf-8")
+    rules = list(dict.fromkeys(name for _, name in instruction_files(workdir)))
+    commit_rule = ("Commit your changes to the current branch `%s` with the message `%s: <summary>`." % (branch, hid)
+                   if branch else "Do not commit — the orchestrator reviews the changes in the working tree itself.")
+    header = "# %s — %s\n\n%s\n" % (hid, m["title"], MANUAL_ROLE)
+    header += "- Working folder: `%s`\n" % workdir
+    if branch:
+        header += "- Branch: `%s` (a separate git worktree — no conflicts with parallel work)\n" % branch
+    if rules:
+        header += "- Project rules — mandatory, read them before you start: %s\n" % ", ".join("`%s`" % r for r in rules)
+    header += "- Created: %s\n\n" % now().strftime("%Y-%m-%d %H:%M")
+    task_text = header + body.rstrip() + "\n" + PROTOCOL.format(
+        rel=rel, commit_rule=commit_rule, worktree_rule=WORKTREE_RULE if branch else "")
+    (task_dir / "TASK.md").write_text(task_text, encoding="utf-8")
+    if task_dir != handoffs_root() / hid:
+        (handoffs_root() / hid / "TASK.md").write_text(task_text, encoding="utf-8")   # copy next to meta
+    if branch and m["provider"] == "antigravity":
+        rule = workdir / AG_RULE_PATH
+        rule.parent.mkdir(parents=True, exist_ok=True)
+        rule.write_text(AG_RULE.format(hid=hid, title=m["title"], rel=rel,
+                                       rules=", ".join(rules) or "CLAUDE.md / AGENTS.md, if present"), encoding="utf-8")
+        ensure_git_exclude(proj, (".orchestra/", AG_RULE_PATH))
+    m.update({
+        "taken": iso(now()), "profile": prof.name if prof.explicit else None, "workdir": str(workdir),
+        "workdir_win": win_path(workdir), "branch": branch, "task_path": str(task_dir / "TASK.md"),
+        "result_path": str(task_dir / "RESULT.md"),
+        "paste": "Execute the task described in %s/TASK.md. Follow the execution protocol at the end of that "
+                 "file exactly (RESULT.md status markers)." % rel,
+    })
+    m["activity_baseline"] = scan_latest_mtime(workdir)   # checkout/creation is not "operator activity"
+    save_meta(m)
+
+
+def print_card(m, clip):
+    print(operator_card(m))
+    if clip and m.get("paste"):
+        used = copy_to_clipboard(m["paste"])
+        print("(paste line copied to the clipboard via %s)" % used if used else "(clipboard unavailable)")
+
+
+def refuse_in_worker():
+    if os.environ.get("ORCH_WORKER"):
+        raise SystemExit("orch: you are an executor (ORCH_WORKER) — only the orchestrator creates manual tasks")
+
+
+def cmd_handoff_new(a):
+    """Assign right away: the operator gets the card now."""
+    refuse_in_worker()
+    body = read_body(a)
+    gate, rc = manual_gate(a.provider, a.model_key, a.profile, a.max_open, a.force)
+    if rc is not None:
+        return rc
+    prof, max_open = gate
+    if limit_reached(max_open, a.max_open, a.force):
+        return EXIT_QUOTA
+    m = create_handoff(a, body, offered=False)
+    assign_handoff(m, prof)
+    print_card(m, a.clip)
+    return 0
+
+
+def cmd_handoff_offer(a):
+    """Put a task into the pool: the operator picks it (orch handoff take) when convenient, or the orchestrator
+    reclaims it for an automated executor."""
+    refuse_in_worker()
+    body = read_body(a)
+    gate, rc = manual_gate(a.provider, a.model_key, a.profile, 10 ** 6, a.force)
+    if rc is not None:
+        return rc
+    pool = sum(1 for m in all_metas() if result_status(m) == "OFFERED")
+    if pool >= a.max_offers and not a.force:
+        print("OFFER_LIMIT: the pool already holds %d tasks (limit %d) — wait until the operator takes one or you "
+              "reclaim one (orch handoff reclaim), or run it automatically." % (pool, a.max_offers))
+        return EXIT_QUOTA
+    m = create_handoff(a, body, offered=True)
+    save_meta(m)
+    pool_state(sorted(x["id"] for x in all_metas() if not x.get("archived") and result_status(x) == "OFFERED"),
+               check_min=max(a.check_min, 1))
+    print(operator_card(m))
+    return 0
+
+
+def cmd_handoff_reclaim(a):
+    """Take a pooled task back for an automated executor; --next: the one-at-a-time reclaim of a pool check."""
+    refuse_in_worker()
+    m = load_meta(a.id.upper())
+    if result_status(m) != "OFFERED":
+        print("%s is not in the pool (%s) — nothing to reclaim." % (m["id"], effective_state(m)))
+        return 1
+    if a.next:
+        busy = next_running([x for x in all_metas() if not x.get("archived")])
+        if busy:
+            print("NEXT_BUSY: %s “%s”, reclaimed as the next task, is still running — wait for it (a successful "
+                  "orch run … --handoff %s, or orch handoff done %s, marks it finished). Without --next reclaim only a "
+                  "task no longer worth waiting for." % (busy["id"], busy["title"], busy["id"], busy["id"]))
+            return EXIT_QUOTA
+    m["reclaim"] = {"kind": "next" if a.next else "all", "at": iso(now()), "run": None, "finished": None}
+    save_meta(m)
+    cmd_handoff_done(argparse.Namespace(id=m["id"], status="REASSIGNED", force=True, note=a.note or (
+        "reclaimed from the pool as the next task" if a.next else "reclaimed from the pool by the orchestrator")))
+    print("Run it: orch run <provider> … --handoff %s (a successful run marks it finished), or do it another way and "
+          "then: orch handoff done %s" % (m["id"], m["id"]))
+    return 0
+
+
+def finish_reclaimed(hid, status, run_id=None):
+    """A reclaimed pooled task was executed: free the one-at-a-time slot. Never fails (called from orch run)."""
+    try:
+        m = load_meta(hid)
+        r = m.get("reclaim") or {"kind": "all", "at": iso(now())}
+        r.update(finished=iso(now()), status=status)
+        if run_id:
+            r["run"] = run_id
+        m["reclaim"] = r
+        save_meta(m)
+    except (SystemExit, Exception):
+        pass
+
+
+def cmd_handoff_take(a):
+    """The operator takes a pooled task (optionally for another manual agent): materialize it and show the card."""
+    refuse_in_worker()
+    m = load_meta(a.id.upper())
+    st = result_status(m)
+    if st in TERMINAL:
+        print("%s is already closed (%s) — nothing to take." % (m["id"], st))
+        return 1
+    if st != "OFFERED":
+        print("%s is already handed out (%s):" % (m["id"], effective_state(m)))
+        print_card(m, a.clip)
+        return 0
+    for f in ("model", "model_key", "effort"):
+        if getattr(a, f):
+            m[f] = getattr(a, f)
+    if a.agent:
+        m["provider"] = a.agent.lower()
+    gate, rc = manual_gate(m["provider"], m.get("model_key"), a.profile, a.max_open, a.force, check_operator=False)
+    if rc is not None:
+        return rc
+    prof, max_open = gate
+    if limit_reached(max_open, a.max_open, a.force):
+        return EXIT_QUOTA
+    assign_handoff(m, prof)
+    print_card(m, a.clip)
+    return 0
+
+
+def handoff_line(m):
+    st = effective_state(m)
+    if st == "OFFERED":
+        return "%-9s %-11s %-10s %s · suggested: %s" % (m["id"], st, human_delta(parse_iso(m["created"])),
+                                                        m["title"][:50], suggestion(m))
+    act = last_activity(m) if st not in TERMINAL else None
+    act_s = ("activity %s" % human_delta(act)) if act else "no activity"
+    who = agent_reported(m) or suggestion(m)
+    return "%-9s %-11s %-10s %s · %s · %s" % (m["id"], st, human_delta(taken_at(m)), m["title"][:50], who, act_s)
+
+
+def cmd_handoff_list(a):
+    metas = all_metas()
+    if not a.all:
+        metas = [m for m in metas if result_status(m) not in TERMINAL]
+    if a.json:
+        print(json.dumps([dict(m, state=effective_state(m), agent_reported=agent_reported(m)) for m in metas],
+                         ensure_ascii=False, indent=2))
+        return 0
+    if not metas:
+        print("No open manual tasks." if not a.all else "No manual tasks.")
+        return 0
+    pool = [m for m in metas if result_status(m) == "OFFERED"]
+    rest = [m for m in metas if result_status(m) != "OFFERED"]
+    if pool:
+        print("Pool — available to take (%d):" % len(pool))
+        print("\n".join("  " + handoff_line(m) for m in pool))
+    if rest:
+        print("Handed out (%d):" % len(rest))
+        print("\n".join("  " + handoff_line(m) for m in rest))
+    print("Board: %s" % (state_dir() / "MANUAL.md"))
+    return 0
+
+
+POOL_CHECK_MIN = 5
+
+
+def pool_state(pool_ids, check_min=None):
+    """.orchestra/handoffs/.pool.json: pooled ids, when the pool opened, its check interval, the last check reported.
+    Updated on every meta save (write_board)."""
+    path = handoffs_root() / ".pool.json"
+    state = read_json(path, {})
+    before = dict(state)
+    if pool_ids and not state.get("ids"):          # the pool opens: its clock starts
+        state["started"] = iso(now())
+    state["ids"] = pool_ids
+    if check_min is not None:
+        state["check_min"] = check_min
+    if state != before and (pool_ids or path.exists()):
+        write_json(path, state)
+    return state
+
+
+def pool_clock(metas, state):
+    """(anchor, taken): the pool's clock runs from the operator's last take from the pool, else from its opening.
+    Reclaims by the orchestrator do not restart it."""
+    started = parse_iso(state.get("started") or state.get("changed") or "") or now()
+    takes = [t for t in (parse_iso(m.get("taken") or "") for m in metas if m.get("offered")) if t]
+    last = max(takes) if takes else None
+    return (last, True) if last and last > started else (started, False)
+
+
+def next_running(metas):
+    """The pooled task reclaimed as "the next one" that is still being executed, if any (one at a time)."""
+    return next((m for m in metas if (m.get("reclaim") or {}).get("kind") == "next"
+                 and not m["reclaim"].get("finished")), None)
+
+
+def pool_event(metas, mark=True):
+    """⌛ once per check interval without a take: reclaim every task no longer worth waiting for, else the next one."""
+    pool = sorted((m for m in metas if result_status(m) == "OFFERED"), key=lambda m: m.get("offered") or m["created"])
+    if not pool:
+        return None
+    state = pool_state(sorted(m["id"] for m in pool))
+    every = max(int(state.get("check_min") or POOL_CHECK_MIN), 1)
+    anchor, took = pool_clock(metas, state)
+    t = now()
+    tick = int((t - anchor).total_seconds() // (every * 60))
+    seen = state.get("reported") or {}
+    if tick < 1 or (seen.get("anchor") == iso(anchor) and seen.get("tick", 0) >= tick):
+        return None
+    if mark:
+        state["reported"] = {"anchor": iso(anchor), "tick": tick}
+        write_json(handoffs_root() / ".pool.json", state)
+    lines = ["⌛ Manual pool: no task taken for %d min (since %s; check %d, every %d min). Untaken, oldest first:" % (
+        (t - anchor).total_seconds() // 60, "the last take" if took else "the pool opened", tick, every)]
+    for m in pool:
+        lines.append("  %s “%s” — %s · in the pool %s%s" % (
+            m["id"], m["title"], suggestion(m), human_delta(parse_iso(m.get("offered") or m["created"])).replace(" ago", ""),
+            " · fallback: %s" % m["fallback"] if m.get("fallback") else ""))
+    if not availability("operator")[0]:
+        lines.append("  The operator is away: none of these is worth waiting for.")
+    busy = next_running(metas)
+    nxt = ("not now: %s “%s”, reclaimed as the next task %s, is still running" % (
+        busy["id"], busy["title"], human_delta(parse_iso(busy["reclaim"]["at"]))) if busy
+        else "orch handoff reclaim %s --next" % pool[0]["id"])
+    lines.append("Reclaim every task no longer worth waiting for (orch handoff reclaim <id>; run them in parallel where "
+                 "they may run in parallel). If there is none, reclaim only the next one — %s." % nxt)
+    return "\n".join(lines)
+
+
+def write_board():
+    """<project>/.orchestra/MANUAL.md — the manual lane at a glance for the operator (any editor or the agent's IDE)."""
+    metas = [m for m in all_metas() if not m.get("archived")]
+    states = {m["id"]: result_status(m) for m in metas}       # no workdir scans: the board is rewritten from hooks
+    pool = [m for m in metas if states[m["id"]] == "OFFERED"]
+    state = pool_state(sorted(m["id"] for m in pool))
+    out = [m for m in metas if states[m["id"]] in OPEN_TAKEN]
+    done = [m for m in metas if states[m["id"]] in TERMINAL][-10:]
+    lines = ["# Orchestra manual tasks", "",
+             "Updated %s · `%s` · maintained by orch, do not edit." % (now().strftime("%Y-%m-%d %H:%M"), project_dir()),
+             "Take from the pool: tell the orchestrator “AG-0004 to Antigravity” "
+             "(or `/orchestra:manual take AG-0004`). Done / cancel: “AG-0004 done” / “AG-0004: cancel”.", "",
+             "## Pool — available to take (%d)" % len(pool)]
+    if pool:
+        anchor, took = pool_clock(metas, state)
+        every = max(int(state.get("check_min") or POOL_CHECK_MIN), 1)
+        lines.append("_%s %s. After %d min without a take the orchestrator starts taking tasks back for automated "
+                     "executors (one at a time while waiting still makes sense) and checks again every %d min._" % (
+                         "Last take" if took else "Pool opened", anchor.astimezone().strftime("%H:%M"), every, every))
+    for m in pool:
+        lines.append("- **%s** · %s — %s · %s in the pool%s" % (
+            m["id"], m["title"], suggestion(m), human_delta(parse_iso(m["created"])).replace(" ago", ""),
+            " · fallback: %s" % m["fallback"] if m.get("fallback") else ""))
+    lines += ([] if pool else ["_empty_"]) + ["", "## Handed out (%d)" % len(out)]
+    for m in out:
+        lines.append("- **%s** · %s — %s · %s" % (m["id"], m["title"], states[m["id"]], agent_reported(m) or suggestion(m)))
+        lines.append("  - folder: `%s`%s" % (m["workdir"], " (Windows: `%s`)" % m["workdir_win"] if m.get("workdir_win") else ""))
+        lines.append("  - paste: `%s`" % m["paste"])
+    lines += ([] if out else ["_none_"]) + ["", "## Recently finished"]
+    for m in done:
+        lines.append("- %s %s — %s%s" % (m["id"], states[m["id"]], m["title"],
+                                         " (%s)" % (agent_reported(m) or agent_name(m.get("provider"))) if m.get("taken") else ""))
+    lines += [] if done else ["_none_"]
+    (state_dir() / "MANUAL.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def result_excerpt(m, n=40):
+    rp = Path(m["result_path"])
+    if not rp.exists():
+        return "(no RESULT.md — %s)" % (m.get("manual_note") or "marked manually")
+    lines = rp.read_text(encoding="utf-8", errors="replace").splitlines()
+    out = "\n".join(lines[:n])
+    if len(lines) > n:
+        out += "\n…[%d lines, full text: %s]" % (len(lines), rp)
+    return out
+
+
+def mark_final(m, st, log=True):
+    """Remember that the final status was reported; log a handed-out task to the usage ledger once."""
+    m.setdefault("notified", {})["final"] = iso(now())
+    if log and m.get("taken") and not m.get("logged"):
+        m["logged"] = True
+        proj = project_root(project_dir())
+        ledger_append({"kind": "handoff", "session": m.get("session"), "project": canon_path(proj),
+                       "project_path": str(proj), "id": m["id"], "provider": m.get("provider"),
+                       "label": (m.get("provider") or "") + ("@" + m["profile"] if m.get("profile") else ""),
+                       "model": m.get("model") or m.get("model_key"), "agent": agent_reported(m),
+                       "effort": m.get("effort"), "task": m["title"], "status": st,
+                       "elapsed_s": int((now() - taken_at(m)).total_seconds())})
+
+
+def check_events(mark=True, fast=False):
+    """Return list of human-readable events not yet reported.
+    fast=True: only status transitions read from RESULT.md (no workdir scan, no reminders)."""
+    events = []
+    t = now()
+    metas = [m for m in all_metas() if not m.get("archived")]
+    pool_ev = pool_event(metas, mark=mark)          # cheap (no workdir scan): the throttled post-tool hook runs it too
+    if pool_ev:
+        events.append(pool_ev)
+    for m in metas:
+        st = result_status(m)
+        note = m.setdefault("notified", {})
+        changed = False
+        age_min = (t - taken_at(m)).total_seconds() / 60
+        if st in TERMINAL and st not in ("CANCELLED", "REASSIGNED") and not note.get("final"):
+            who = agent_reported(m)
+            events.append("✅ %s finished: STATUS %s — %s%s\n%s" % (m["id"], st, m["title"],
+                                                                " (%s)" % who if who else "", result_excerpt(m, 15)))
+            mark_final(m, st, log=mark)
+            changed = True
+        elif st == "IN_PROGRESS" and not note.get("started"):
+            events.append("▶ %s picked up (%s) — %s" % (m["id"], agent_reported(m) or agent_name(m.get("provider")),
+                                                       m["title"]))
+            note["started"] = iso(t)
+            changed = True
+        elif st == "OFFERED":
+            pass                   # the pool is checked as a whole: pool_event
+        elif fast:
+            pass
+        elif st == "WAITING" and not last_activity(m):
+            if age_min >= m.get("reassign_min", 180) and not note.get("reassign"):
+                events.append("⚠ %s not started after %d min. Reassign it to the fallback (%s) and tell the operator."
+                              % (m["id"], age_min, m.get("fallback") or "pick one from the registry"))
+                note["reassign"] = iso(t)
+                changed = True
+            elif age_min >= m.get("pickup_min", 30) and not note.get("pickup"):
+                events.append("⏰ %s waiting for the operator for %d min — remind them once (do not block your work)."
+                              % (m["id"], age_min))
+                note["pickup"] = iso(t)
+                changed = True
+        elif st in ("IN_PROGRESS", "STARTED?") and age_min >= m.get("reassign_min", 180) * 2 and not note.get("overdue"):
+            events.append("⚠ %s in progress for %d min without a final status — check with the operator."
+                          % (m["id"], age_min))
+            note["overdue"] = iso(t)
+            changed = True
+        if changed and mark:
+            save_meta(m)
+    return events
+
+
+def cmd_handoff_check(a):
+    events = check_events(mark=not a.peek)
+    if events:
+        print("Orchestra: manual lane events\n" + "\n".join(events))
+    elif not a.quiet:
+        print("No new events.")
+    return 0
+
+
+def notify(message):
+    """Optional desktop notification: set ORCH_NOTIFY_CMD to a command that takes the message as $1."""
+    cmd = os.environ.get("ORCH_NOTIFY_CMD")
+    if not cmd:
+        return
+    sh = find_bash() if IS_WINDOWS else "/bin/sh"
+    if not sh:
+        return
+    try:
+        subprocess.run([sh, "-c", cmd + ' "$1"', "orch-notify", message], timeout=15,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def hook_input():
+    try:
+        raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+        return json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return {}
+
+
+def cmd_hook(a):
+    """Claude Code hook entry point. Never fails: any error -> silent exit 0."""
+    if os.environ.get("ORCH_WORKER"):
+        return 0      # inside a worker the plugin (if loaded at all) must stay silent: events belong to the orchestrator
+    try:
+        data = hook_input()
+        if data.get("cwd") and not os.environ.get("ORCH_PROJECT_DIR") and not os.environ.get("CLAUDE_PROJECT_DIR"):
+            os.environ["ORCH_PROJECT_DIR"] = data["cwd"]
+        if a.event == "session-end":
+            log_session(data)         # usage snapshot of the main thread + subagents; silent
+            return 0
+        has_state = (project_dir() / ".orchestra").exists()
+        sid = data.get("session_id") or session_id()
+        if a.event == "session-start":
+            out = io_capture(lambda: cmd_status(argparse.Namespace(brief=True)))
+            print(out.rstrip())
+            print("Route tasks to models with the orchestra:orchestrate skill "
+                  "(registry — at the path above; availability — `orch status`).")
+            budget_event(sid, announce=False)        # the status above already shows the budget mode
+            return 0
+        if a.event == "user-prompt":
+            events = [e for e in [budget_event(sid)] if e] + (check_events(mark=True) if has_state else [])
+            if events:
+                print("Orchestra — events since the last message:\n" + "\n".join(events))
+            return 0
+        if a.event == "post-tool":
+            events = [e for e in [budget_event(sid)] if e]      # cheap: one small file, on a mode change only
+            if has_state:
+                stamp = state_dir() / ".last_hook_check"
+                last = stamp.stat().st_mtime if stamp.exists() else 0
+                if time.time() - last >= a.throttle:
+                    stamp.touch()
+                    events += check_events(mark=True, fast=True)
+            if events:
+                print(json.dumps({"hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": "Orchestra — event:\n" + "\n".join(events)}},
+                    ensure_ascii=False))
+            return 0
+        if not has_state:
+            return 0
+        if a.event == "stop":
+            events = check_events(mark=True)
+            if events:
+                print(json.dumps({"decision": "block", "reason":
+                    "Orchestra: manual lane events came in while you were working. Handle them per the "
+                    "orchestra:orchestrate skill (integrate the result / remind / pool / reassign), then "
+                    "continue:\n" + "\n".join(events)}, ensure_ascii=False))
+            return 0
+    except Exception:
+        return 0
+    return 0
+
+
+def io_capture(fn):
+    import io
+    buf, old = io.StringIO(), sys.stdout
+    sys.stdout = buf
+    try:
+        fn()
+    finally:
+        sys.stdout = old
+    return buf.getvalue()
+
+
+def cmd_handoff_wait(a):
+    deadline = time.time() + parse_duration(a.timeout, "m") if a.timeout else None
+    targets = [h.upper() for h in a.ids]
+    if not targets and not a.any:
+        raise SystemExit("orch: pass handoff IDs or --any")
+    initial = {m["id"]: result_status(m) for m in all_metas()}
+    watch = list(targets) or [i for i, s in initial.items() if s not in TERMINAL + ("OFFERED",)]
+    while True:
+        metas = {m["id"]: m for m in all_metas()}
+        if not targets:                     # --any: tasks the operator takes from the pool meanwhile count too
+            watch += [i for i, m in metas.items() if i not in watch and not m.get("archived")
+                      and result_status(m) not in TERMINAL + ("OFFERED",)]
+            pooled = [m for m in metas.values() if not m.get("archived") and result_status(m) == "OFFERED"]
+            if not watch and not pooled:
+                print("No manual tasks to wait for.")
+                return 0
+            ev = pool_event([m for m in metas.values() if not m.get("archived")]) if pooled else None
+            if ev:                          # a pool check is due: wake the orchestrator up to decide what to reclaim
+                print(ev)
+                notify("Orchestra: manual pool check — nothing taken for a while")
+                return 3
+        for hid in watch:
+            m = metas.get(hid)
+            if m is None:
+                raise SystemExit("orch: handoff %s not found" % hid)
+            st = result_status(m)
+            if st in TERMINAL:
+                mark_final(m, st)
+                save_meta(m)
+                print("%s: STATUS %s — %s\n%s" % (hid, st, m["title"], result_excerpt(m)))
+                notify("Orchestra: %s — %s (%s)" % (hid, st, m["title"]))
+                return 0 if st == "DONE" else 2
+        if deadline and time.time() >= deadline:
+            print("TIMEOUT: not finished: %s. Check orch handoff list; reassign if needed." % ", ".join(watch))
+            return EXIT_TIMEOUT
+        time.sleep(a.interval)
+
+
+def cmd_handoff_show(a):
+    m = load_meta(a.id.upper())
+    print(operator_card(m))
+    print("\nState: %s" % effective_state(m))
+    if m.get("task_path"):
+        print("TASK:   %s\nRESULT: %s" % (m["task_path"], m["result_path"]))
+    if Path(m["result_path"]).exists() or m.get("manual_status"):
+        print("\n" + result_excerpt(m, 80))
+    return 0
+
+
+def cmd_handoff_done(a):
+    m = load_meta(a.id.upper())
+    st = a.status.upper()
+    if st not in TERMINAL:
+        raise SystemExit("orch: status must be one of %s" % ", ".join(TERMINAL))
+    rp = Path(m["result_path"])
+    current = result_status(m)
+    if current in TERMINAL and (m.get("reclaim") or {}).get("kind") and not m["reclaim"].get("finished"):
+        finish_reclaimed(m["id"], st)      # the orchestrator executed a reclaimed pooled task another way
+        print("%s: the reclaimed task is finished (%s)%s" % (m["id"], st, "; the next pooled task may be reclaimed"
+                                                             if m["reclaim"]["kind"] == "next" else ""))
+        return 0
+    if current in TERMINAL and not a.force:
+        print("%s is already %s" % (m["id"], current))
+        return 0
+    m["manual_status"] = st
+    m["manual_note"] = a.note or "marked manually by the operator"
+    m["closed"] = iso(now())
+    mark_final(m, st)        # orchestrator did this itself — no hook event
+    if st in ("CANCELLED", "REASSIGNED"):
+        if rp.parent.exists():
+            rp.write_text("STATUS: %s\n\n%s\n" % (st, m["manual_note"]), encoding="utf-8")
+    save_meta(m)
+    print("%s → %s (%s)" % (m["id"], st, m["manual_note"]))
+    return 0
+
+
+def cmd_handoff_close(a):
+    m = load_meta(a.id.upper())
+    if a.remove_worktree and m.get("branch"):
+        r = git(["worktree", "remove", "--force", m["workdir"]], project_dir()) if a.force else \
+            git(["worktree", "remove", m["workdir"]], project_dir())
+        print("worktree removed" if r and r.returncode == 0 else "worktree remove failed: %s" % (r.stderr.strip() if r else "git?"))
+    m["archived"] = iso(now())
+    save_meta(m)
+    print("%s closed." % m["id"])
+    return 0
+
+
+# ───────────────────────── usage report (orch usage) ─────────────────────────
+#
+# Claude Code writes every API response of a session to ~/.claude/projects/<project>/<session>.jsonl (model,
+# effort, usage) and each subagent to <session>/subagents/agent-<id>.jsonl (+ .meta.json: agent type,
+# description). Streaming splits a response into several lines with the same message id — counted once.
+
+def fmt_tok(n):
+    if n is None:
+        return "—"
+    if n < 1000:
+        return str(n)
+    if n < 10000:
+        return "%.1fk" % (n / 1000.0)
+    if n < 1000000:
+        return "%dk" % round(n / 1000.0)
+    return "%.1fM" % (n / 1000000.0)
+
+
+def fmt_dur(s):
+    if s is None:
+        return ""
+    s = int(s)
+    if s < 60:
+        return "%ds" % s
+    h, m = divmod(s // 60, 60)
+    return ("%dh %dm" % (h, m)) if h else ("%dm" % m)
+
+
+def usage_brief(u):
+    return "tokens: input %s · cache %s · output %s" % (fmt_tok(u.get("input_tokens")),
+                                                       fmt_tok(u.get("cached_input_tokens")),
+                                                       fmt_tok(u.get("output_tokens")))
+
+
+def claude_dir():
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def transcript_for(session):
+    base = claude_dir() / "projects"
+    hits = sorted(base.glob("*/%s.jsonl" % session)) if base.is_dir() else []
+    if not hits and base.is_dir() and len(session) >= 4:          # id prefix
+        hits = sorted(base.glob("*/%s*.jsonl" % session))
+    return hits[0] if hits else None
+
+
+def project_transcripts(project):
+    """Transcripts of the project's sessions, newest first (Claude Code names the folder after the path)."""
+    base = claude_dir() / "projects"
+    name = re.sub(r"[^A-Za-z0-9]", "-", str(project)).lower()
+    dirs = [d for d in base.iterdir() if d.is_dir() and d.name.lower() == name] if base.is_dir() else []
+    files = [f for d in dirs for f in d.glob("*.jsonl")]
+    return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
+
+
+def claude_tokens(u):
+    """Anthropic usage → uncached input (incl. cache writes), cache reads, output."""
+    return {"input_tokens": int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0),
+            "cached_input_tokens": int(u.get("cache_read_input_tokens") or 0),
+            "output_tokens": int(u.get("output_tokens") or 0)}
+
+
+def parse_transcript(path):
+    path = Path(path)
+    msgs, agents = {}, {}
+    info = {"session": path.stem, "title": None, "start": None, "end": None, "cost_usd": None}
+
+    def scan(f, who):
+        with f.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"type":"assistant"' in line:
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+                    model = msg.get("model")
+                    if ev.get("type") != "assistant" or not model or model.startswith("<"):
+                        continue
+                    owner = "agent:" + ev["agentId"] if ev.get("isSidechain") and ev.get("agentId") else who
+                    msgs[msg.get("id") or ev.get("requestId") or ev.get("uuid")] = (owner, model, ev.get("effort"),
+                                                                                     msg.get("usage") or {})
+                    if who == "main" and ev.get("timestamp"):
+                        info["start"] = info["start"] or ev["timestamp"]
+                        info["end"] = ev["timestamp"]
+                elif '"type":"ai-title"' in line or '"type":"cost-state"' in line:
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    if ev.get("type") == "ai-title" and ev.get("aiTitle"):
+                        info["title"] = ev["aiTitle"]
+                    elif ev.get("type") == "cost-state" and ev.get("totalCostUSD") is not None:
+                        info["cost_usd"] = ev["totalCostUSD"]
+
+    scan(path, "main")
+    sub = path.with_suffix("") / "subagents"
+    if sub.is_dir():
+        for f in sorted(sub.glob("agent-*.jsonl")):
+            meta = read_json(f.with_name(f.stem + ".meta.json"), {}) or {}
+            agents[f.stem[len("agent-"):]] = meta
+            scan(f, "agent:" + f.stem[len("agent-"):])
+    rows = {}
+    for owner, model, effort, u in msgs.values():
+        r = rows.setdefault((owner, model), {"model": model, "efforts": [], "calls": 0, "input_tokens": 0,
+                                             "cached_input_tokens": 0, "output_tokens": 0})
+        r["calls"] += 1
+        for k, v in claude_tokens(u).items():
+            r[k] += v
+        if effort and effort not in r["efforts"]:
+            r["efforts"].append(effort)
+    out = []
+    for (owner, model), r in rows.items():
+        if owner.startswith("agent:"):
+            meta = agents.get(owner[6:], {})
+            r.update({"who": "subagent", "agent_type": meta.get("agentType"), "task": meta.get("description")})
+        else:
+            r.update({"who": "main", "task": None})
+        out.append(r)
+    out.sort(key=lambda r: (r["who"] != "main", -(r["input_tokens"] + r["cached_input_tokens"] + r["output_tokens"])))
+    info["rows"] = out
+    return info
+
+
+def log_session(data):
+    """SessionEnd hook: keep the session's Claude numbers in the ledger (transcripts are cleaned up after a while)."""
+    tp = data.get("transcript_path")
+    if not tp or not Path(tp).is_file():
+        return
+    info = parse_transcript(tp)
+    if not info["rows"]:
+        return
+    proj = project_root(project_dir())
+    ledger_append({"kind": "session", "session": data.get("session_id") or info["session"], "project": canon_path(proj),
+                   "project_path": str(proj), "title": info["title"], "start": info["start"], "end": info["end"],
+                   "cost_usd": info["cost_usd"], "rows": info["rows"], "lead": os.environ.get("ORCH_LEAD")})
+
+
+def session_data(sid, ledger):
+    """(info, external records) of a session: live transcript if it still exists, else the SessionEnd snapshot."""
+    tp = transcript_for(sid)
+    info = parse_transcript(tp) if tp else None
+    if info:
+        sid = info["session"]
+        info["lead"] = next((r.get("lead") for r in reversed(ledger)
+                             if r.get("kind") == "session" and r.get("session") == sid), None)
+    else:
+        snaps = [r for r in ledger if r.get("kind") == "session" and str(r.get("session", "")).startswith(sid)]
+        info = dict(snaps[-1]) if snaps else {"session": sid, "title": None, "start": None, "end": None, "rows": [],
+                                             "cost_usd": None}
+        sid = info["session"]
+    ext = [r for r in ledger if r.get("kind") in ("run", "handoff") and r.get("session") == sid]
+    return info, ext
+
+
+def short_time(ts):
+    t = parse_iso(ts.replace("Z", "+00:00")) if ts else None
+    return t.astimezone().strftime("%d.%m %H:%M") if t else "?"
+
+
+def usage_rows(info, ext):
+    """Uniform rows: who, model, effort, what for, tokens."""
+    out = []
+    for r in info["rows"]:
+        who = "orchestrator" if r["who"] == "main" else "subagent " + (r.get("agent_type") or "?").split(":")[-1]
+        out.append({"who": who, "model": r["model"], "effort": ",".join(r.get("efforts") or []),
+                    "task": r.get("task") or ("main thread" if r["who"] == "main" else ""), "usage": r})
+    for r in ext:
+        manual = r["kind"] == "handoff"
+        task = "%s · %s · %s" % (r.get("task") or "", r.get("status"), fmt_dur(r.get("elapsed_s")))
+        out.append({"who": (r.get("label") or r.get("provider") or "?") + (" (manual)" if manual else ""),
+                    "model": r.get("agent") or r.get("model") or "(default)", "effort": r.get("effort") or "",
+                    "task": task, "usage": r.get("usage")})
+    return out
+
+
+def print_session(info, ext):
+    span = "%s–%s" % (short_time(info.get("start")), short_time(info.get("end"))[-5:]) if info.get("start") else "time ?"
+    lead = info.get("lead") or (os.environ.get("ORCH_LEAD") if info["session"] == session_id() else None)
+    main_models = {str(r.get("model")) for r in info.get("rows") or [] if r.get("who") == "main"} - {"<synthetic>"}
+    if not lead and main_models and not any(m.startswith("claude") for m in main_models):
+        lead = ", ".join(sorted(main_models))         # a session started with orch launch, seen in its transcript
+    print("Session %s · %s · %s%s" % (info["session"][:8], ("“%s”" % info["title"]) if info.get("title") else "untitled",
+                                      span, " · lead: %s" % lead if lead else ""))
+    rows = usage_rows(info, ext)
+    if not rows:
+        print("  (no usage data)")
+        return
+    def cut(s, n):
+        return s if len(s) <= n else s[:n - 1] + "…"
+    print("  %-28s %-24s %-7s %-44s %7s %7s %7s" % ("who", "model", "effort", "what for", "input", "cache", "output"))
+    totals = {}
+    for r in rows:
+        u = r["usage"] or {}
+        print("  %-28s %-24s %-7s %-44s %7s %7s %7s" % (cut(r["who"], 28), cut(r["model"], 24), cut(r["effort"], 7),
+                                                       cut(r["task"], 44), fmt_tok(u.get("input_tokens")),
+                                                       fmt_tok(u.get("cached_input_tokens")), fmt_tok(u.get("output_tokens"))))
+        if r["usage"]:
+            t = totals.setdefault(r["model"], [0, 0, 0])
+            for i, k in enumerate(("input_tokens", "cached_input_tokens", "output_tokens")):
+                t[i] += int(u.get(k) or 0)
+    print("  Totals by model:")
+    for model, (i, c, o) in sorted(totals.items(), key=lambda kv: -sum(kv[1])):
+        print("    %-24s input %s · cache %s · output %s" % (model, fmt_tok(i), fmt_tok(c), fmt_tok(o)))
+    if info.get("cost_usd") and lead:
+        print("  Claude Code's estimate ($%.2f) assumes Claude prices: not meaningful with a %s lead." % (
+            info["cost_usd"], lead))
+    elif info.get("cost_usd"):
+        print("  Claude Code estimates the session at $%.2f at API prices (notional on a subscription)." % info["cost_usd"])
+    if any(r["who"].endswith("(manual)") for r in rows):
+        print("  Manual executors do not report tokens: for them the agent, model and time are shown.")
+
+
+def cmd_usage(a):
+    ledger = ledger_read()
+    proj = project_root(project_dir())
+    if a.list:
+        seen, lines = set(), []
+        for tp in project_transcripts(proj)[:a.limit]:
+            info = parse_transcript(tp)
+            seen.add(info["session"])
+            lines.append((info, [r for r in ledger if r.get("session") == info["session"] and r.get("kind") != "session"]))
+        for r in reversed(ledger):
+            sid = r.get("session")
+            if r.get("project") == canon_path(proj) and sid and sid not in seen and len(lines) < a.limit:
+                seen.add(sid)
+                lines.append(session_data(sid, ledger))
+        if a.json:
+            print(json.dumps([{"session": i["session"], "title": i.get("title"), "start": i.get("start"),
+                               "rows": usage_rows(i, e)} for i, e in lines], ensure_ascii=False, indent=2))
+            return 0
+        if not lines:
+            print("No sessions with usage data for %s." % canon_path(proj))
+        for info, ext in lines:
+            tok = sum(int((r["usage"] or {}).get(k) or 0) for r in usage_rows(info, ext)
+                      for k in ("input_tokens", "output_tokens"))
+            models = sorted({r["model"] for r in usage_rows(info, ext)})
+            print("%s  %s  %-40s  %s tokens (uncached) · %s" % (
+                short_time(info.get("start")), info["session"][:8], (info.get("title") or "")[:40], fmt_tok(tok),
+                ", ".join(models)[:80]))
+        print("Details: orch usage --session <id>")
+        return 0
+    sid = a.session or session_id()
+    if not sid:
+        latest = project_transcripts(proj)
+        sid = latest[0].stem if latest else next((r["session"] for r in reversed(ledger)
+                                                   if r.get("project") == canon_path(proj) and r.get("session")), None)
+    if not sid:
+        print("No session to show: pick one with orch usage --list / --session <id>.")
+        return 1
+    info, ext = session_data(sid, ledger)
+    if a.json:
+        print(json.dumps({"session": info["session"], "title": info.get("title"), "start": info.get("start"),
+                          "end": info.get("end"), "cost_usd": info.get("cost_usd"), "rows": usage_rows(info, ext)},
+                         ensure_ascii=False, indent=2))
+        return 0
+    print_session(info, ext)
+    return 0
+
+
+# ───────────────────────── guide / footprint ─────────────────────────
+
+GUIDE_DIR = PLUGIN_ROOT / "skills" / "orchestrate" / "reference"
+
+
+def cmd_guide(a):
+    """Reference parts of the orchestrate skill, loaded only when needed (keeps the skill itself small)."""
+    topics = sorted(p.stem for p in GUIDE_DIR.glob("*.md"))
+    if not a.topic:
+        print("Topics: %s\norch guide <topic>" % ", ".join(topics))
+        return 0
+    p = GUIDE_DIR / (a.topic.lower() + ".md")
+    if not p.is_file():
+        raise SystemExit("orch: no topic %r (available: %s)" % (a.topic, ", ".join(topics)))
+    print(p.read_text(encoding="utf-8").rstrip())
+    return 0
+
+
+def cmd_footprint(a):
+    """What Orchestra created outside Claude Code's own plugin registry — the cleanup list after uninstalling."""
+    print("In Claude Code (the standard way): the orchestra marketplace and the orchestra@orchestra plugin "
+          "with its hooks, commands, subagents and skill.\n"
+          "  Disable: claude plugin disable orchestra@orchestra · remove: "
+          "claude plugin uninstall orchestra@orchestra && claude plugin marketplace remove orchestra")
+    print("Outside Claude Code:")
+    for p in (Path.home() / ".local" / "bin" / "orch", Path.home() / ".local" / "bin" / "orch.cmd"):
+        if p.exists() or p.is_symlink():
+            print("  %s — orch launcher" % p)
+    if ORCH_HOME.exists():
+        print("  %s — personal data: %s" % (ORCH_HOME, ", ".join(sorted(
+            c.name + ("/" if c.is_dir() else "") for c in ORCH_HOME.iterdir())) or "empty"))
+    data, _ = load_profiles()
+    for provider in data["providers"]:
+        for name, d in provider_section(data, provider)[1].items():
+            home = local_path(str(d["home"])) if isinstance(d, dict) and d.get("home") else None
+            if home and Path(home).exists():
+                print("  %s — account directory of profile %s@%s (holds the login; delete it yourself if the account "
+                      "is no longer needed)" % (home, provider, name))
+    projects = {r.get("project_path") for r in ledger_read() if r.get("project_path")}
+    if (project_dir() / ".orchestra").exists():
+        projects.add(str(project_root(project_dir())))
+    for p in sorted(x for x in projects if x):
+        p = Path(p)
+        found = [s for s in (p / ".orchestra", p.parent / (p.name + ".wt")) if s.exists()]
+        if found:
+            print("  project %s: %s (+ .orchestra/ lines in .git/info/exclude)" % (p, ", ".join(str(s) for s in found)))
+    print("Remove everything outside Claude Code: bash uninstall.sh --purge (without --purge personal data is kept).")
+    return 0
+
+
+# ───────────────────────── registry ─────────────────────────
+
+def registry_path():
+    for p in (project_dir() / ".orchestra" / "providers.yaml", ORCH_HOME / "providers.yaml",
+              PLUGIN_ROOT / "registry" / "providers.yaml"):
+        if p.exists():
+            return p
+    return PLUGIN_ROOT / "registry" / "providers.yaml"
+
+
+def cmd_registry(a):
+    if a.action == "path":
+        print(registry_path())
+    elif a.action == "show":
+        print(registry_path().read_text(encoding="utf-8"))
+    elif a.action == "init":
+        dest = (project_dir() / ".orchestra" / "providers.yaml") if a.project else (ORCH_HOME / "providers.yaml")
+        if dest.exists() and not a.force:
+            print("already exists: %s" % dest)
+            return 0
+        if a.project:
+            state_dir()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(str(PLUGIN_ROOT / "registry" / "providers.yaml"), str(dest))
+        print("created: %s (edit it; it overrides the built-in registry)" % dest)
+    return 0
+
+
+# ───────────────────────── status / doctor ─────────────────────────
+
+def cmd_status(a):
+    data = load_avail()
+    lines = [lead_line()] if lead_line() else []
+    if a.brief:
+        lines.append("Orchestra: executor registry — %s" % registry_path())
+    mode, budget = claude_budget()
+    if budget:
+        lines.append(budget)
+    if data["entries"]:
+        lines.append("Availability restrictions:")
+        lines += ["  " + describe_entry(k, e) for k, e in sorted(data["entries"].items())]
+    else:
+        lines.append("No availability restrictions — every executor in the registry is available.")
+    if PROFILES_FILE.exists():
+        where = project_dir()
+        lines.append("Executor profiles for %s (orch profile show):" % canon_path(project_root(where)))
+        lines += profile_lines(where)
+    metas =[m for m in all_metas() if result_status(m) not in TERMINAL] if (project_dir() / ".orchestra").exists() else []
+    if metas:
+        lines.append("Open manual tasks (pooled and handed out; board .orchestra/MANUAL.md):")
+        lines += ["  " + handoff_line(m) for m in metas]
+    if not a.brief:
+        events = check_events(mark=False)
+        if events:
+            lines.append("Unreported events:")
+            lines += ["  " + ev.splitlines()[0] for ev in events]
+    print("\n".join(lines))
+    return 0
+
+
+def cmd_doctor(a):
+    ok = True
+
+    def row(name, good, info, optional=False):
+        nonlocal ok
+        ok = ok and (good or optional)
+        print("%s %-22s %s" % ("✔" if good else "·" if optional else "✘", name, info))
+
+    row("platform", True, platform_name())
+    row("python", sys.version_info >= (3, 8), sys.version.split()[0])
+    row("git", bool(shutil.which("git")), shutil.which("git") or "not found")
+    if IS_WINDOWS:
+        bash = find_bash()
+        row("bash (shell adapters)", bool(bash), bash or "needed only for shell adapters: Git for Windows", optional=True)
+    cx, note = find_codex()
+    row("codex CLI", bool(cx), (cx + note) if cx else "npm i -g @openai/codex && codex login (or ORCH_CODEX_BIN)")
+    if cx:
+        try:
+            r = subprocess.run(exe_command(cx) + ["login", "status"], capture_output=True, text=True, timeout=20,
+                               stdin=subprocess.DEVNULL)
+            row("codex login", r.returncode == 0, (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr).strip() else "?")
+        except Exception as ex:
+            row("codex login", False, str(ex))
+    cl = os.environ.get("ORCH_CLAUDE_BIN") or shutil.which("claude")
+    row("claude CLI (headless)", bool(cl), cl or "needed for the DeepSeek and Claude executors and orch launch",
+        optional=True)
+    if os.environ.get("ORCH_LEAD"):
+        row("lead", True, "%s · %s (orch launch)" % (os.environ["ORCH_LEAD"], os.environ.get("ORCH_LEAD_MODEL") or "?"))
+    src = secret_source("DEEPSEEK_API_KEY")
+    row("DEEPSEEK_API_KEY", bool(src), ("set: " + src) if src else "missing — add a line DEEPSEEK_API_KEY=sk-… to %s"
+        % SECRETS_FILE, optional=True)
+    data, err = load_profiles()
+    if err:
+        row("profiles", False, err)
+    elif PROFILES_FILE.exists():
+        row("profiles", True, str(PROFILES_FILE))
+        for provider in sorted(data["providers"]):
+            for name, d in provider_section(data, provider)[1].items():
+                d = d if isinstance(d, dict) else {}
+                if d.get("key"):
+                    src = secret_source(d["key"])
+                    row("%s@%s key" % (provider, name), bool(src), ("%s set: %s" % (d["key"], src)) if src else
+                        "missing — add a line %s=… to %s" % (d["key"], SECRETS_FILE), optional=True)
+                if provider == "codex" and d.get("home") and cx:
+                    home = local_path(str(d["home"]))
+                    try:
+                        r = subprocess.run(exe_command(cx) + ["login", "status"], capture_output=True, text=True,
+                                           timeout=20, stdin=subprocess.DEVNULL,
+                                           env=dict(os.environ, CODEX_HOME=home))
+                        info = ((r.stdout or r.stderr).strip().splitlines() or ["?"])[0]
+                        row("codex@%s login" % name, r.returncode == 0, info if r.returncode == 0 else
+                            "%s — %s" % (info, login_hint(home)), optional=True)
+                    except Exception as ex:
+                        row("codex@%s login" % name, False, str(ex), optional=True)
+    hint = "bash install.sh (creates the orch and orch.cmd launchers in ~/.local/bin)" if IS_WINDOWS else \
+        "ln -s %s ~/.local/bin/orch" % Path(__file__).resolve()
+    row("orch on PATH", bool(shutil.which("orch")), shutil.which("orch") or hint)
+    row("registry", registry_path().exists(), str(registry_path()))
+    row("adapters", True, ", ".join(sorted({p.name for b in (ORCH_HOME / "adapters", PLUGIN_ROOT / "adapters")
+                                             if b.exists() for p in b.iterdir()
+                                             if p.is_file() and not p.name.startswith(("_", "."))})) or "none")
+    clip = next((c for c in ("clip.exe", "wl-copy", "xclip", "pbcopy") if shutil.which(c)), None)
+    row("clipboard (optional)", True, clip or "none — copy the paste line by hand")
+    return 0 if ok else 1
+
+
+# ───────────────────────── argparse ─────────────────────────
+
+def utf8_stdio():
+    """Pipes default to the ANSI code page on Windows (and to ASCII under LANG=C): Claude Code reads hook output as UTF-8."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+def main(argv=None):
+    utf8_stdio()
+    p = argparse.ArgumentParser(prog="orch", description="Orchestra helper CLI")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("status", help="availability + open handoffs")
+    s.add_argument("--brief", action="store_true")
+    s.set_defaults(fn=cmd_status)
+
+    q = sub.add_parser("quota", help="provider availability")
+    qs = q.add_subparsers(dest="action", required=True)
+    x = qs.add_parser("set")
+    x.add_argument("key", help="provider[/model], e.g. codex, codex/gpt-5.6-sol, antigravity/gemini-4-argon, claude/opus, operator")
+    x.add_argument("status", help="|".join(STATUSES))
+    x.add_argument("--until", help="+3h | 18:00 | 2026-10-26 09:00 | tomorrow 09:00")
+    x.add_argument("--note")
+    x = qs.add_parser("clear")
+    x.add_argument("key")
+    x = qs.add_parser("show")
+    x.add_argument("--json", action="store_true")
+    x = qs.add_parser("check")
+    x.add_argument("key")
+    q.set_defaults(fn=cmd_quota)
+
+    r = sub.add_parser("run", help="run automated executor via adapter")
+    r.add_argument("provider")
+    r.add_argument("--model")
+    r.add_argument("--effort")
+    r.add_argument("--mode", choices=("analysis", "write"), default="analysis")
+    r.add_argument("--cd", help="working directory (e.g. a worktree)")
+    r.add_argument("--timeout", default="45m", help="e.g. 30m, 2h")
+    r.add_argument("--prompt-file")
+    r.add_argument("--max-chars", type=int, default=6000)
+    r.add_argument("--quota-backoff", type=int, default=60, help="minutes to block provider when reset time unknown")
+    r.add_argument("--quota-scope", choices=("provider", "model"), default="provider")
+    r.add_argument("--allow", action="append", metavar="RULE",
+                   help="extra permission for the worker, e.g. 'Bash(npm test:*)' (repeatable; deepseek)")
+    r.add_argument("--profile", help="one-off profile instead of the project's (only on the operator's request)")
+    r.add_argument("--task", help="short title for the usage log (default: first line of the prompt)")
+    r.add_argument("--handoff", metavar="ID", help="the reclaimed pooled task this run executes (marked finished on OK)")
+    r.add_argument("--force", action="store_true", help="ignore availability block")
+    r.add_argument("prompt", nargs="*")
+    r.set_defaults(fn=cmd_run)
+
+    x = sub.add_parser("budget", help="Claude subscription budget for routing: surplus (use it) / tight (conserve)")
+    x.add_argument("action", nargs="?", choices=("show", "set", "clear"), default="show")
+    x.add_argument("--used", type=float, help="set: percent of the 5-hour window used")
+    x.add_argument("--resets", help="set: when the 5-hour window resets (18:00, +2h, …)")
+    x.add_argument("--week", type=float, help="set: percent of the weekly limit used")
+    x.add_argument("--week-resets", help="set: when the weekly limit resets")
+    x.set_defaults(fn=cmd_budget)
+
+    x = sub.add_parser("statusline", help="Claude Code statusLine command: records rate_limits, prints a short line")
+    x.add_argument("--then", metavar="CMD", help="your own status line command; its output comes first")
+    x.set_defaults(fn=cmd_statusline)
+
+    x = sub.add_parser("launch", help="start Claude Code with another model as the lead (e.g. deepseek)")
+    x.add_argument("provider", help="an adapter declaring `# orch-launch: env` (deepseek)")
+    x.add_argument("--profile", help="the lead's profile (key, models) instead of the project's")
+    x.add_argument("--model", help="the lead's model (default: the profile's first, else the adapter's default)")
+    x.add_argument("--no-claude", action="store_true", help="no Claude models at all in this session (claude=off)")
+    x.add_argument("--use", action="append", metavar="PROVIDER=PROFILE",
+                   help="session-wide profile choice, e.g. codex=alt (repeatable)")
+    x.add_argument("--dry-run", action="store_true", help="print the command and environment (secrets masked)")
+    x.add_argument("--force", action="store_true", help="start even if the lead's quota is marked exhausted")
+    x.set_defaults(fn=cmd_launch, claude_args=[])      # orch launch deepseek … -- <claude arguments>, see below
+
+    f = sub.add_parser("profile", help="executor profiles: keys/accounts, models, rules; default and per project")
+    fs = f.add_subparsers(dest="action", required=True)
+    x = fs.add_parser("show", help="active profile of every executor for this project")
+    x.add_argument("--path", help="directory instead of the current project")
+    x.add_argument("--json", action="store_true")
+    x = fs.add_parser("list", help="all profiles, defaults and directory bindings")
+    x.add_argument("provider", nargs="?")
+    x.add_argument("--json", action="store_true")
+    x = fs.add_parser("use", help="bind a profile (or off / inherit) to this project, a directory or the default")
+    x.add_argument("provider")
+    x.add_argument("name", help="profile | off | inherit")
+    xg = x.add_mutually_exclusive_group()
+    xg.add_argument("--default", action="store_true", help="provider default for every project")
+    xg.add_argument("--path", help="bind to this directory (covers its subdirectories)")
+    x = fs.add_parser("set", help="create or update a profile ('' removes a field)")
+    x.add_argument("provider")
+    x.add_argument("name")
+    x.add_argument("--key", help="NAME of the variable in secrets.env holding the API key (not the key itself)")
+    x.add_argument("--models", help="allowed models, comma-separated; the first is the default")
+    x.add_argument("--max-effort", help="|".join(EFFORT_ORDER))
+    x.add_argument("--write", help="yes|no — may the executor change files")
+    x.add_argument("--use-for", help="task types it may take: tests,docs,review,… (empty = any)")
+    x.add_argument("--prefer-for", help="task types to route to it first")
+    x.add_argument("--rules", help="free-text rules the orchestrator follows for this profile")
+    x.add_argument("--max-open", help="manual lane: open handoffs at most")
+    x.add_argument("--home", help="codex: CODEX_HOME of the account (created; then codex login); "
+                                  "claude: CLAUDE_CONFIG_DIR of the account")
+    x.add_argument("--codex-profile", help="codex: --profile <name> ($CODEX_HOME/<name>.config.toml)")
+    x.add_argument("--fast-model", help="deepseek: model for the worker's light background calls")
+    x.add_argument("--base-url", help="deepseek: Anthropic-compatible endpoint")
+    x.add_argument("--opt", action="append", metavar="FIELD=VALUE", help="adapter-specific field (# orch-profile-env)")
+    x.add_argument("--default", action="store_true", help="also make it the provider default")
+    x = fs.add_parser("rm", help="delete a profile")
+    x.add_argument("provider")
+    x.add_argument("name")
+    x.add_argument("--force", action="store_true", help="also drop the default/bindings that use it")
+    f.set_defaults(fn=cmd_profile)
+
+    w = sub.add_parser("worktree", help="git worktree helpers")
+    ws = w.add_subparsers(dest="action", required=True)
+    x = ws.add_parser("add")
+    x.add_argument("name")
+    x.add_argument("--base", default="HEAD")
+    x.add_argument("--branch")
+    w.set_defaults(fn=cmd_worktree)
+
+    h = sub.add_parser("handoff", help="manual lane (Antigravity)")
+    hs = h.add_subparsers(dest="action", required=True)
+    x = hs.add_parser("new")
+    x.add_argument("--title", required=True)
+    x.add_argument("--provider", default="antigravity")
+    x.add_argument("--model", help="display name for the operator, e.g. 'Gemini 4 Argon'")
+    x.add_argument("--model-key", help="availability key part, e.g. gemini-4-argon")
+    x.add_argument("--effort", help="thinking level to select, e.g. High")
+    x.add_argument("--prompt-file")
+    x.add_argument("--worktree", action="store_true", help="isolated git worktree + branch ag/<id>")
+    x.add_argument("--base", default="HEAD")
+    x.add_argument("--fallback", help="e.g. 'codex gpt-5.6-terra high'")
+    x.add_argument("--pickup-min", type=int, default=30)
+    x.add_argument("--reassign-min", type=int, default=180)
+    x.add_argument("--max-open", type=int, default=2)
+    x.add_argument("--prefix", default="AG")
+    x.add_argument("--clip", action="store_true", help="copy the paste line to clipboard")
+    x.add_argument("--profile", help="one-off profile instead of the project's (only on the operator's request)")
+    x.add_argument("--force", action="store_true")
+    x.set_defaults(fn=cmd_handoff_new)
+    x = hs.add_parser("offer", help="put a task into the pool; the operator takes it when convenient")
+    x.add_argument("--title", required=True)
+    x.add_argument("--provider", default="antigravity", help="suggested manual agent")
+    x.add_argument("--model")
+    x.add_argument("--model-key")
+    x.add_argument("--effort")
+    x.add_argument("--prompt-file")
+    x.add_argument("--worktree", action="store_true", help="when taken: isolated git worktree + branch ag/<id>")
+    x.add_argument("--base", default="HEAD")
+    x.add_argument("--fallback")
+    x.add_argument("--pickup-min", type=int, default=30)
+    x.add_argument("--reassign-min", type=int, default=180)
+    x.add_argument("--check-min", type=int, default=POOL_CHECK_MIN,
+                   help="pool check interval: an event every N min without a take (pool-wide; the latest offer sets it)")
+    x.add_argument("--max-offers", type=int, default=5)
+    x.add_argument("--prefix", default="AG")
+    x.add_argument("--profile")
+    x.add_argument("--force", action="store_true")
+    x.set_defaults(fn=cmd_handoff_offer)
+    x = hs.add_parser("take", help="the operator takes a pooled task: worktree, TASK.md, paste line")
+    x.add_argument("id")
+    x.add_argument("--agent", help="manual agent that takes it (default: the suggested one)")
+    x.add_argument("--model")
+    x.add_argument("--model-key")
+    x.add_argument("--effort")
+    x.add_argument("--max-open", type=int, default=2)
+    x.add_argument("--clip", action="store_true")
+    x.add_argument("--profile")
+    x.add_argument("--force", action="store_true")
+    x.set_defaults(fn=cmd_handoff_take)
+    x = hs.add_parser("reclaim", help="take a pooled task back for an automated executor")
+    x.add_argument("id")
+    x.add_argument("--next", action="store_true",
+                   help="the one-at-a-time reclaim of a pool check (refused while the previous one is running)")
+    x.add_argument("--note")
+    x.set_defaults(fn=cmd_handoff_reclaim)
+    x = hs.add_parser("list")
+    x.add_argument("--all", action="store_true")
+    x.add_argument("--json", action="store_true")
+    x.set_defaults(fn=cmd_handoff_list)
+    x = hs.add_parser("check")
+    x.add_argument("--quiet", action="store_true")
+    x.add_argument("--peek", action="store_true", help="do not mark events as reported")
+    x.set_defaults(fn=cmd_handoff_check)
+    x = hs.add_parser("wait")
+    x.add_argument("ids", nargs="*")
+    x.add_argument("--any", action="store_true")
+    x.add_argument("--timeout", default="8h")
+    x.add_argument("--interval", type=int, default=15)
+    x.set_defaults(fn=cmd_handoff_wait)
+    x = hs.add_parser("show")
+    x.add_argument("id")
+    x.set_defaults(fn=cmd_handoff_show)
+    x = hs.add_parser("done")
+    x.add_argument("id")
+    x.add_argument("--status", default="DONE")
+    x.add_argument("--note")
+    x.add_argument("--force", action="store_true")
+    x.set_defaults(fn=cmd_handoff_done)
+    x = hs.add_parser("cancel")
+    x.add_argument("id")
+    x.add_argument("--note")
+    x.add_argument("--reassigned", action="store_true")
+    x.set_defaults(fn=lambda a: cmd_handoff_done(argparse.Namespace(
+        id=a.id, status="REASSIGNED" if a.reassigned else "CANCELLED", note=a.note, force=True)))
+    x = hs.add_parser("close")
+    x.add_argument("id")
+    x.add_argument("--remove-worktree", action="store_true")
+    x.add_argument("--force", action="store_true", help="remove the worktree even with uncommitted changes")
+    x.set_defaults(fn=cmd_handoff_close)
+
+    g = sub.add_parser("registry", help="model registry")
+    g.add_argument("action", choices=("path", "show", "init"))
+    g.add_argument("--project", action="store_true", help="init into project .orchestra/ instead of ~/.orchestra/")
+    g.add_argument("--force", action="store_true")
+    g.set_defaults(fn=cmd_registry)
+
+    d = sub.add_parser("doctor", help="environment check")
+    d.set_defaults(fn=cmd_doctor)
+
+    u = sub.add_parser("usage", help="per session: which model did what, tokens (Claude + CLI executors + manual)")
+    u.add_argument("--session", help="session id or prefix (default: current, else the latest of this project)")
+    u.add_argument("--list", action="store_true", help="recent sessions of this project")
+    u.add_argument("--limit", type=int, default=10)
+    u.add_argument("--json", action="store_true")
+    u.set_defaults(fn=cmd_usage)
+
+    x = sub.add_parser("guide", help="reference parts of the orchestrate skill (manual, profiles, quota, …)")
+    x.add_argument("topic", nargs="?")
+    x.set_defaults(fn=cmd_guide)
+
+    x = sub.add_parser("footprint", help="what Orchestra created outside Claude Code (cleanup list)")
+    x.set_defaults(fn=cmd_footprint)
+
+    k = sub.add_parser("hook", help="Claude Code hook entry point (internal)")
+    k.add_argument("event", choices=("session-start", "user-prompt", "post-tool", "stop", "session-end"))
+    k.add_argument("--throttle", type=int, default=60, help="post-tool: min seconds between checks")
+    k.set_defaults(fn=cmd_hook)
+
+    argv = sys.argv[1:] if argv is None else list(argv)
+    tail = []
+    if argv[:1] == ["launch"] and "--" in argv:        # everything after -- goes to claude untouched
+        argv, tail = argv[:argv.index("--")], argv[argv.index("--") + 1:]
+    a, extra = p.parse_known_args(argv)
+    if a.cmd == "launch":
+        a.claude_args = tail
+    if extra and a.cmd == "run" and not any(x.startswith("-") for x in extra):
+        a.prompt = (a.prompt or []) + extra      # argparse < 3.13 leaves `run … --opt v "text"` text unparsed
+    elif extra:
+        p.error("unrecognized arguments: %s" % " ".join(extra))
+    return a.fn(a) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

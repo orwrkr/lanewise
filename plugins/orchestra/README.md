@@ -1,0 +1,338 @@
+# Orchestra — a multi-model orchestrator for Claude Code
+
+Claude Code stays in charge: it breaks the task down and decides on its own who gets each subtask and at what effort:
+
+- **Claude subagents** — Haiku, Sonnet, Opus, Fable at different effort levels;
+- **Codex CLI** — on a ChatGPT subscription, automatically, in the background;
+- **DeepSeek** — with an API key (paid from your balance), automatically, in the background, with the same tools Claude has;
+- **the manual task pool** — you pick a task yourself and hand it to Antigravity (or Cursor, etc.) with a single pasted line.
+
+It takes into account subscription limits and balance (which you report in plain words or which executors report themselves), your availability and the project's executor profiles. It keeps the manual channel off the critical path so you don't become the bottleneck, and for every session it keeps a log: which model did what and how many tokens it spent.
+
+Claude doesn't have to be the lead: `orch launch deepseek` starts the same setup with DeepSeek as the orchestrator, and `--no-claude` keeps Claude models out of it entirely (see [DeepSeek as the lead](#deepseek-as-the-lead)).
+
+```
+                ┌──────────────── Claude Code (orchestrator, skill orchestrate) ────────────────┐
+ registry ─────►│ decomposition → difficulty 1–5 → slot (model × effort) → fallback             │◄── orch status
+ providers.yaml │                                                                               │    (limits, manual tasks)
+                └──────┬──────────────────┬──────────────────────┬─────────────────────┬────────┘
+                       │ Agent tool       │ orch run codex       │ orch run deepseek   │ orch handoff offer
+                       ▼                  ▼  (background)        ▼  (background)       ▼
+              orch-* subagents     Codex CLI (gpt-6.1-*)   headless Claude Code   pool → you take it → TASK.md
+              (model + effort)     codex sandbox           + DeepSeek API         → Antigravity → RESULT.md
+                                   exit 75 = limit         exit 75 = balance      hooks detect completion
+                       └──────────────────┴──────────────────────┴─────────────────────┴─► tokens → orch usage
+```
+
+## Installation
+
+Requirements: Claude Code, Python ≥ 3.8 and git; optionally Codex CLI and a DeepSeek API key.
+
+```bash
+git clone https://github.com/orwrkr/orchestra && cd orchestra && bash install.sh
+```
+
+Or, without a clone, from inside Claude Code: `/plugin install orchestra --marketplace orwrkr/orchestra`. The plugin's
+`orch` is then available to the session's Bash tool, but not in your terminal: for `orch launch` and the terminal
+commands below use the clone and `install.sh`.
+
+You can keep the clone anywhere: the plugin is installed straight from this folder, and edits in it are "live" — they take effect after `/reload-plugins` or in a new session. Both environments are supported: Claude Code in **WSL** and Claude Code running **natively on Windows** (where its Bash tool is Git Bash). Each environment has its own Claude Code installation, so run `install.sh` in every environment you work in:
+
+```bash
+# WSL (a repository on the Windows drive lives under /mnt/c/...)
+cd /path/to/repo && bash install.sh
+
+# Windows: in Git Bash (or from Claude Code on Windows — its Bash tool is Git Bash)
+cd /c/path/to/repo && bash install.sh
+```
+
+The script registers the marketplace, installs the plugin, puts `orch` into `~/.local/bin`, creates your personal registry and then runs `orch doctor`. On Windows, instead of a symlink it installs the launchers `orch` (for Git Bash) and `orch.cmd` (for PowerShell and cmd).
+
+`install.sh` is safe to re-run, including after moving the folder: it re-registers the marketplace at the current location. Personal data lives in `~/.orchestra/`, not in the repository: limits, your model registry, API keys. WSL and Windows use separate folders. If you want limits, registry and keys to be shared, set `export ORCH_HOME=/mnt/c/Users/<you>/.orchestra` in WSL (in `~/.bashrc`).
+
+If you already have a personal registry `~/.orchestra/providers.yaml`, it overrides the built-in one. Copy new entries into it from `registry/providers.yaml`, or recreate it: `orch registry init --force`. Up to version 0.4 the marketplace was called `orchestra-local`; `install.sh` removes that installation before adding the current one.
+
+### What the plugin changes and how to remove it
+
+It is installed and removed **the standard way**: `install.sh` calls `claude plugin marketplace add` and `claude plugin install` and never edits `settings.json` or other Claude Code files by hand. Hooks, commands, subagents and the skill live inside the plugin and go away with it. To disable it without removing: `/plugin` → orchestra → Disable, or `claude plugin disable orchestra@orchestra` (re-enable with `enable`).
+
+Outside Claude Code the plugin creates only:
+- the launchers `~/.local/bin/orch` (plus `orch.cmd` on Windows);
+- personal data in `~/.orchestra/` (limits, profiles, keys, usage log, the isolated config of the DeepSeek executor);
+- in projects where you have used it: a `<project>/.orchestra/` folder, `<project>.wt/` worktrees and a `.orchestra/` line in `.git/info/exclude`. `.gitignore` is left alone; projects where the plugin was never used get nothing;
+- Codex account directories, if you created such profiles (`--home`).
+
+`orch footprint` shows the full list for the current environment. `bash uninstall.sh` removes the plugin and the launchers and lists what is left in projects; `--purge` also deletes `~/.orchestra/`.
+
+Line endings are pinned to LF (`.gitattributes`), except for `*.cmd`, which use CRLF. If files still end up with CRLF (which breaks the bash scripts and `orch`), `install.sh` detects it and tells you how to fix it.
+
+### Codex
+Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex login`. The login is stored in `~/.codex` and is separate for Windows and WSL. The adapter is written in Python and drives `codex exec --json`: from the event stream it builds a compact log and a token count. On Windows it runs the native `codex.exe` from the npm package, bypassing the `codex.cmd` wrapper, and needs no Git Bash. If only the Codex app is installed, the adapter finds the `codex.exe` bundled with it. You can also point it at a binary explicitly: `ORCH_CODEX_BIN=<path>`. `codex debug models` lists the models available to your account.
+
+### DeepSeek
+1. Get a key at platform.deepseek.com and put it in `~/.orchestra/secrets.env` (or in the `DEEPSEEK_API_KEY` environment variable):
+   ```
+   DEEPSEEK_API_KEY=sk-…
+   ```
+   Only the `deepseek` adapter receives the key, because it declares `# orch-secrets: DEEPSEEK_API_KEY` in its header. Keys from this file are not passed to other executors.
+2. The `claude` CLI must be available in the same environment: the DeepSeek executor is headless Claude Code, see below.
+3. `orch doctor` should show `✔ DEEPSEEK_API_KEY`.
+
+Multiple keys (personal, work) and per-project key selection are handled by [profiles](#executor-profiles-keys-accounts-rules-projects). A second Codex account is a profile too.
+
+## How CLI executors work
+
+A Claude subagent (Agent tool) is an agent loop inside the same Claude Code session: the session itself executes its tool calls. You can't plug a foreign model in there, since subagents call the same API as the session. Claude Code doesn't drive an external process; to Claude Code it is just a command: start it in the background, get notified when it finishes, read the output. So the executor needs an agent loop of **its own**:
+
+- **Codex** has one (`codex exec`), with a `read-only` / `workspace-write` sandbox;
+- **DeepSeek** has none — over the API it only answers with text. The loop comes from headless Claude Code (`claude -p`) pointed at DeepSeek's Anthropic-compatible API (`https://api.deepseek.com/anthropic`). The DeepSeek model gets Read/Grep/Glob/Edit/Write/Bash and works like a Sonnet subagent. You pay from your DeepSeek balance; subscription limits are not consumed.
+
+To the orchestrator both look the same: `orch run <provider> … ` in the background → a `STATUS: DONE | PARTIAL | BLOCKED` report with the sections "Done / Changed files / Verification / Blockers", plus the paths to `output.md` and `log.txt`. `orch` adds the executor role to the task itself: who the executor is, that another Claude Code instance is directing it, the rules and the report format. For DeepSeek the role goes into the system prompt, for Codex at the top of the prompt.
+
+### Why the nested Claude Code doesn't conflict with yours
+
+| Risk | Mitigation |
+|---|---|
+| The executor latches onto your session (message-channel socket and token, session id, effort) | `orch` strips every `CLAUDECODE` / `CLAUDE_*` variable from the executor's environment (except the Git Bash path) |
+| It uses your Claude subscription, your settings or your `ANTHROPIC_*` variables | a config directory of its own, `~/.orchestra/workers/deepseek-<platform>` (no OAuth, plugins or sessions); all `ANTHROPIC_*` are replaced with DeepSeek values; the variables are set only for the child process, your terminal is unchanged |
+| Hooks fire — yours, the plugin's or the project's | no plugins are installed in its config; `--setting-sources user` doesn't load the project's `.claude/settings*.json`; `ORCH_WORKER` silences Orchestra's hooks if the plugin loads anyway |
+| MCP servers, auto-memory | `--strict-mcp-config`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
+| The executor starts delegating on its own | with `ORCH_WORKER` set, `orch run` / `orch handoff` refuse to run; it is not given the Agent tool |
+| It goes beyond the task | `--permission-mode dontAsk`: only what is explicitly allowed runs. Reading and search only inside `--cd`; writing via `Edit(./**)`, `Write(./**)`; Bash: read-only git plus whatever the orchestrator granted with `--allow 'Bash(npm test:*)'`. Everything else is denied without prompting, and the list of denials comes at the end of the report |
+| A hung or orphaned process burns money | on timeout `orch` kills the whole tree: the process group on Linux, a Job Object on Windows (where the tree also dies together with `orch`) |
+| It doesn't see the project rules | `--setting-sources user` also skips the project's CLAUDE.md, so `orch` passes CLAUDE.md (with `@` imports expanded) and AGENTS.md into the system prompt itself — see "Project rules for every executor" |
+
+Out of balance (HTTP 402) → exit 75, and DeepSeek is blocked until `orch quota clear deepseek`. Rate limit (429) → blocked for 15 minutes. Invalid key (401) is an ordinary error. The words "quota" and "429" in the DeepSeek executor's own output do not trigger a block (`# orch-limit-detect: exit-code`).
+
+### Claude as an external executor
+
+`adapters/claude` runs headless Claude Code on **your own** Claude login (`orch run claude --model sonnet --effort high …`). In a Claude-led session you don't need it — Claude workers are the plugin's subagents. It is the Claude lane of a [non-Claude lead](#deepseek-as-the-lead), where every in-session request goes to the lead's API. Same isolation as the DeepSeek executor, but on your Claude config, because that is where the login lives: `--setting-sources user` plus `disableAllHooks`, no MCP servers, no auto-memory or session files, and the lead's endpoint and token are stripped from its environment. A profile can point it at another config directory (`--home`, a second account) or at an API key (`--key`). A usage limit → exit 75 with the reset time.
+
+## Usage
+
+Usually there is nothing special to do: give it a task and the skill kicks in on its own. To invoke it explicitly:
+
+| Command | What it does |
+|---|---|
+| `/orchestra:run <task>` | split → assign models and effort → execute |
+| `/orchestra:status` | who is unavailable, what is pending on the manual channel, what comes next |
+| `/orchestra:quota codex is out until 18:00` | report a limit (or "codex works again", "topped up DeepSeek") |
+| `/orchestra:profile deepseek work` | executor profiles: which key/account, models and rules, per project or by default (see below) |
+| `/orchestra:manual` · `AG-0004 to Antigravity` | the manual task pool: show it, take a task, mark it done or cancel it |
+| `/orchestra:done AG-0003` | a manual task is done (if the agent did not write RESULT.md) |
+| `/orchestra:away until 19:00` / `back` | close or reopen the manual channel |
+| `/orchestra:usage` · `list` | session usage: which model did what and how many tokens it spent |
+
+You can also report limits without commands, in plain words: "Sol is out until 9 am tomorrow", "Argon's weekly quota ran out, it resets on Wednesday", "Opus is running low — go easy on it". Restrictions with a stated time lift on their own. If Codex hits a limit or DeepSeek runs out of balance, exit code 75 signals it: the block is set automatically and the task goes to a fallback.
+
+## Claude subscription budget: use it or lose it
+
+A Claude subscription's 5-hour window expires at its reset, and whatever was not used is gone, while DeepSeek and
+other API-key executors cost money per token. Orchestra projects the window from the pace so far:
+
+- **surplus** — at least 30% of the window would expire unused, and the weekly limit has room. Until the reset, the
+  orchestrator gives Claude subagents the subtasks it would otherwise give to API-billed executors. Codex and the
+  manual pool keep their tasks.
+- **tight** — at this pace the window runs out before the reset. The orchestrator treats Claude as low and offloads
+  to Codex and DeepSeek.
+
+The mode appears in `orch status` and at session start, and the orchestrator gets an event when it changes. The
+numbers come from Claude Code itself, which passes them to the status line command (`rate_limits`). Set Orchestra's
+command as your status line once, in `~/.claude/settings.json`:
+
+```json
+"statusLine": {"type": "command", "command": "orch statusline"}
+```
+
+To keep your own status line, use `orch statusline --then "<your command>"`. Without the status line you can give the
+numbers in plain words ("Claude: 40% of the session used, resets at 18:00") → `orch budget set --used 40 --resets 18:00`.
+`orch budget` shows the current state. The threshold lives in the `claude` profile: `--opt surplus=50`, or
+`surplus=off` to switch the mode off.
+
+## DeepSeek as the lead
+
+When Claude limits run out, to save Claude quota, or for a setup without Claude at all, start the session with
+DeepSeek as the orchestrator — from a terminal, in the project:
+
+```bash
+orch launch deepseek                       # DeepSeek leads; Claude is still available as an executor
+orch launch deepseek --no-claude           # no Claude models at all in this session
+orch launch deepseek --profile work --model deepseek-v4-pro --use codex=alt -- --resume
+orch launch deepseek --dry-run             # show the command and the environment (key masked)
+```
+
+This is the same Claude Code with your settings and plugins, but every model request goes to DeepSeek's
+Anthropic-compatible API: the main thread and all subagents run on the lead model (default `deepseek-v4-pro`), and
+background calls run on the profile's fast model. The key comes from the `deepseek` profile or `secrets.env`. Your
+`ANTHROPIC_*` variables are dropped for the session, so no Anthropic credential is sent to DeepSeek. The skill, the
+registry, profiles and the manual pool work as usual; `orch status` starts with `Lead: …`, and the orchestrator
+follows [`reference/lead.md`](skills/orchestrate/reference/lead.md):
+
+- Claude is reached only through the Claude executor (`orch run claude`, on your Claude login and its limits);
+- `--no-claude` (or `orch profile use claude off`) turns that off too: `orch run claude` answers `PROFILE_OFF`, and
+  cross-review goes Codex ↔ DeepSeek;
+- `--use PROVIDER=PROFILE` picks profiles for the whole session, the same way.
+
+Limits of the mode: Claude Code features that rely on Anthropic-only API capabilities (web search, image input) may
+not work on the DeepSeek endpoint, and Claude Code's cost estimate in `orch usage` assumes Claude prices.
+
+## Executor profiles: keys, accounts, rules, projects
+
+A profile describes **how** the orchestrator uses an executor: with which API key or account, which models and effort levels are allowed, whether it may change files, which tasks to use it for. Each provider (`claude`, `deepseek`, `codex`, `antigravity`) has a default profile, and a project can pin a different profile or switch the executor off entirely (`off`). With no configuration the built-in `default` profile applies: the normal environment (`~/.codex`, `DEEPSEEK_API_KEY`) with no restrictions, so everything works out of the box.
+
+You can manage profiles right in the session, in plain words or with `/orchestra:profile`: "don't use DeepSeek in this project", "use DeepSeek with the work key here", "don't offer Antigravity in this project", "leave Codex alone by default". The orchestrator turns this into commands:
+
+```bash
+# several DeepSeek keys: the keys themselves go in ~/.orchestra/secrets.env, the profile holds only the variable name
+#   DEEPSEEK_API_KEY=sk-…        (personal)
+#   DEEPSEEK_API_KEY_WORK=sk-…   (work)
+orch profile set deepseek personal --key DEEPSEEK_API_KEY --default
+orch profile set deepseek work --key DEEPSEEK_API_KEY_WORK --models deepseek-flash,deepseek-v4-pro \
+  --max-effort high --write no --use-for tests,review --rules "open-source code only"
+
+# a second Codex account: its own CODEX_HOME (login) and, optionally, a codex --profile settings layer
+orch profile set codex alt --home ~/.codex-alt --codex-profile fast
+CODEX_HOME=~/.codex-alt codex login          # PowerShell: $env:CODEX_HOME="$HOME\.codex-alt"; codex login
+
+# manual channel: Argon only, and no more than one task in hand
+orch profile set antigravity argon --models gemini-4-argon --max-open 1
+
+orch profile use deepseek work               # for the current project (the whole git project, including its worktrees)
+orch profile use antigravity off             # no manual tasks in this project
+orch profile use codex off --default         # Codex is off by default
+orch profile use claude off                  # no Claude workers in this project (no orch-* subagents, no orch run claude)
+orch profile use deepseek work --path ~/work # every project under ~/work
+orch profile use deepseek inherit            # remove the project binding
+orch profile show                            # what applies here and where it comes from
+orch profile list                            # all profiles, defaults and bindings
+```
+
+Resolution order: `--profile` on a specific run (only when you ask for it) → session-wide choices (`ORCH_PROFILES=claude=off,codex=alt`, set by `orch launch --no-claude` / `--use`) → the binding of the project or of the nearest directory above it → the default profile → the built-in `default`.
+
+| Field | Meaning | Enforced by |
+|---|---|---|
+| `key` | name of the variable holding the API key (from the environment or `secrets.env`); the adapter receives its value as `DEEPSEEK_API_KEY` (`ANTHROPIC_API_KEY` for `claude`) | `orch` |
+| `home`, `codex_profile` | Codex account (`CODEX_HOME`) and the `codex --profile` settings layer; for `claude`, its config directory (`CLAUDE_CONFIG_DIR`) | `orch` |
+| `fast_model`, `base_url` | DeepSeek: model for light background calls, endpoint | `orch` |
+| `off` (instead of a profile) | the executor is not started: `orch run` / `orch handoff new` → `PROFILE_OFF`, exit 75 (`--force` doesn't help) | `orch` |
+| `models` | allowed models, the first one is the default; for Antigravity, model keys (`gemini-4-argon`) | `orch` |
+| `max_effort` | effort ceiling: anything higher is lowered, with a note in the report | `orch` |
+| `write: false` | `analysis` only, writing tasks are rejected | `orch` |
+| `max_open` | Antigravity: how many manual tasks at once | `orch` |
+| `use_for`, `prefer_for` | task types (`tests`, `docs`, `review`, `implement`…): only for these / these first | orchestrator |
+| `rules` | free-form rules ("open-source code only", "don't touch migrations") | orchestrator |
+
+What a project binding gives you:
+- **Its own balance and its own limit.** If the `work` key runs out of money, only `deepseek@work` is blocked. Projects on other keys keep working. "Topped up DeepSeek" lifts the blocks on all keys.
+- **Keys stay out of the repository.** Everything is stored in `~/.orchestra/profiles.json`, with the project path recorded in a normalized form (`c:/users/…`). If `ORCH_HOME` is shared, the bindings match between Windows and WSL.
+- **A corrupted file doesn't re-enable what you turned off.** If `profiles.json` can't be read, CLI executors and manual tasks are not started, and `orch status` warns about it.
+
+## Manual channel: a task pool for Antigravity and other agents
+
+Tasks that are worth doing by hand in Antigravity (UI checks in a browser, a broad review, a second opinion from another model family, long autonomous work) go **into a pool** instead of being dumped on you right away. You choose what to take and when.
+
+1. **Browse the pool:** `/orchestra:manual` (or "what's in the pool?"). The same list is in `<project>/.orchestra/MANUAL.md`, which you can keep open in your editor. It shows each task, the suggested agent and model, and how long it has been waiting.
+2. **Take a task:** "AG-0004 to Antigravity" (or "AG-0004 to Cursor"). The orchestrator runs `orch handoff take`: it creates a separate worktree and an `ag/ag-000N` branch, completes TASK.md and shows a card with the folder, the model and thinking level, and the line to paste (already on your clipboard).
+3. You open the folder in the agent, pick the model and paste the line. **That's it.** You don't need to report back when it's done: the agent writes `RESULT.md` itself.
+
+The pool has a clock that runs from your last take (or from when the pool opened). Each time 5 minutes pass without a take, the orchestrator checks the pool. It takes back every task that is no longer worth waiting for — you are away, the task now blocks other work, or an automated executor would do it just as well — and runs them, in parallel where that is allowed. If there is no such task, it takes back only the next one, and only once the previous one it took this way has finished. So while you are picking tasks nothing is taken away, and an ignored pool drains one task at a time. A take restarts the clock. It hands a task straight to you, bypassing the pool, only when you ask (`orch handoff new`).
+
+**How the agent learns it is part of the system.** `orch` adds to TASK.md:
+- the role: you are an Orchestra executor, the task was set by the orchestrator (Claude Code), which will also review the result;
+- links to the project rules (`CLAUDE.md`, `AGENTS.md` — whichever exist);
+- the protocol: on start, `RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: product · model`, at the end `DONE`, `BLOCKED` or `FAILED` and a report; the scope; a ban on launching other agents; a note about the worktree (install dependencies, don't copy secrets).
+
+For Antigravity, the task's worktree also gets the rule `.agents/rules/orchestra-task.md` with `trigger: always_on`. Antigravity injects it into every turn, so the protocol isn't lost in a long session. The rule is excluded from git and disappears with the worktree. Antigravity needs no extra setup. If you like, add a line to your global rules (`~/.gemini/GEMINI.md`): "follow tasks from `.orchestra/handoffs/*/TASK.md` strictly according to their protocol".
+
+The `AGENT:` line goes into the usage log, so you can see who completed a manual task and with which model.
+
+How the orchestrator learns that a task is finished:
+- **while it is working** — a hook after tool calls, at most once a minute;
+- **at the end of each of its turns** — the Stop hook won't let it finish if a result has arrived and makes it process the result: verification, cross-review, merge;
+- **on any message from you** — the prompt-submit hook;
+- **when there is nothing else to wait for** — it starts `orch handoff wait --any` in the background. If your version of Claude Code wakes the session when a background command finishes, it carries on by itself. If not, the event is picked up with your next message, even just "so?". For desktop notifications, set `ORCH_NOTIFY_CMD` to any command that takes the text as `$1`.
+
+If an assigned task hasn't been started within 30 minutes, you get a single reminder. If it hasn't been started within 180 minutes, the orchestrator reassigns it to a fallback. You have at most two tasks in hand at once, and the pool holds at most five. Small tasks are batched and handed out together. All these numbers are configurable in the registry, in the `operator` section. An `antigravity` profile (or `cursor`, etc.) lets you turn off the manual channel for a project and limit the models and the number of tasks.
+
+**Important (Google ToS):** the plugin does not control Antigravity programmatically. It doesn't run `agy`, doesn't use computer use, doesn't paste text and doesn't touch OAuth. It only writes and reads files in the task's working folder. Do not add such automation: Google bans accounts for it.
+
+## Usage log: who did what and how much it spent
+
+`orch usage` (or `/orchestra:usage`) shows, for the current session:
+
+```
+Session 3f9a1c2e · “Config parser” · 29.10 12:01–16:40
+  who                          model                    effort  what for                          input   cache  output
+  orchestrator                 claude-opus-5-5          xhigh   main thread                        1.2M     45M    310k
+  subagent orch-sonnet-high    claude-sonnet-5-5        high    Find parse() calls                  80k    1.1M     12k
+  codex                        gpt-6.1-terra            high    Implement the parser · OK · 6m     210k    1.8M     25k
+  deepseek@work                deepseek-flash           high    Parser tests · OK · 3m              95k    600k    9.0k
+  antigravity (manual)         Antigravity · Gemini 4…  High    Form UI check · DONE · 42m            —       —       —
+  Totals by model: …
+```
+
+- **Claude: main thread and subagents** — taken straight from the Claude Code session transcript: the model, effort and tokens of every response. For a subagent, its type and the task `description` are shown.
+- **Codex, DeepSeek and the Claude executor** — every `orch run` writes to `~/.orchestra/usage.jsonl` the model, the task (`--task` or the first line of the prompt), the status, the time and the tokens reported by the adapter.
+- **A DeepSeek-led session** shows `lead: deepseek…` in its header and DeepSeek model ids for the main thread and subagents.
+- **Manual agents** don't report tokens. For them you see who did the work (the `AGENT:` line from RESULT.md), with which model and how long it took.
+
+There are other modes too: `orch usage --list` shows the project's recent sessions, `--session <id>` a specific one, `--json` gives output for your own reports. Claude Code deletes old transcripts over time, so the SessionEnd hook saves the session's numbers to the log when the session ends. To disable the log, set `ORCH_USAGE_LOG=0`.
+
+## Project rules for every executor
+
+Different agents read project rules from different files:
+- Claude Code — `CLAUDE.md` with `@` imports;
+- Codex and Antigravity — `AGENTS.md`;
+- the DeepSeek executor (headless Claude Code without project settings) — nothing.
+
+`orch` evens this out: each CLI executor gets exactly the files it doesn't read on its own. Codex gets CLAUDE.md, DeepSeek gets CLAUDE.md and AGENTS.md. `@` imports are expanded, and no rule arrives twice. For a manual agent, TASK.md points to these files.
+
+A convenient layout for a project that uses this workflow is the one this repository uses itself:
+- shared rules go in `AGENTS.md`: every agent reads them;
+- `CLAUDE.md` holds the line `@AGENTS.md` plus whatever only Claude Code needs.
+
+This way the rules don't drift apart, and each agent sees them exactly once.
+
+## Model registry
+
+`orch registry path` shows which file is currently in effect. Precedence: `<project>/.orchestra/providers.yaml`, then `~/.orchestra/providers.yaml`, then the built-in one.
+
+What it contains:
+- **slots** — provider × model × effort, each with a cost (`cost`: the load on the subscription limit; for DeepSeek, the relative token price), a difficulty ceiling (`max_difficulty`) and strengths (`good_for`);
+- **default routes** (`routing`) for each task type, including cross-review between the claude · openai · deepseek families;
+- **`policy.never_auto`** — slots that are used only with your permission (Codex ultra, Fable);
+- **manual channel parameters** (`operator`).
+
+Model names and effort levels change. Check against `/model` in Claude Code, `/model` in Codex, the Antigravity model picker and api-docs.deepseek.com (currently `deepseek-flash` — V4.1 Flash — and `deepseek-v4-pro`; for a 1M context you can pass `--model deepseek-flash[1m]`).
+
+## New executors (CLI / API / MCP)
+
+- **CLI or API:** copy `adapters/_template.example` to `~/.orchestra/adapters/<name>` and add the provider with its slots to the registry. An adapter can be bash or Python: `orch` runs a Python adapter with its own interpreter, which is simpler on Windows. Invocation: `orch run <name> --model … --effort … --mode analysis|write [--allow …]`. The adapter contract is described in the template: environment variables, exit codes, `usage.json` with tokens, and the `orch-secrets`, `orch-limit-detect`, `orch-context-native` and `orch-profile-env` directives. Examples: `adapters/codex` is a CLI with its own agent loop, `adapters/deepseek` is an API without one (any Anthropic-compatible endpoint will do), `adapters/claude` is headless Claude Code on your own login; the last two share `adapters/_claude_headless.py`. An adapter that declares `# orch-launch: env` can also lead a session (`orch launch <name>`).
+- **A manual agent** (Cursor, Windsurf, Jules…) needs no adapter: the same pool, `orch handoff take <id> --agent cursor`. Its profile and quota are tracked under its own name.
+- **MCP:** add the server to Claude Code and describe the provider in the registry with `lane: mcp`. You keep track of such a provider's quota with `orch quota`.
+
+## Where things are stored
+
+| Path | Contents |
+|---|---|
+| `~/.orchestra/availability.json` | limits and availability, shared by all projects |
+| `~/.orchestra/providers.yaml` | your registry |
+| `~/.orchestra/secrets.env` | API keys (`DEEPSEEK_API_KEY=…`, `DEEPSEEK_API_KEY_WORK=…`), only for the adapters that declare them |
+| `~/.orchestra/profiles.json` | executor profiles, defaults and project bindings (`orch profile …`) |
+| `~/.orchestra/usage.jsonl` | usage log: runs, manual tasks, session snapshots (`orch usage`) |
+| `~/.orchestra/claude_usage.json` | the Claude subscription's last known window usage, for the budget mode (`orch budget`) |
+| `~/.orchestra/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
+| `<project>/.orchestra/runs/` | executor runs: prompt, role, project rules, response, log, tokens |
+| `<project>/.orchestra/handoffs/AG-…/` | manual tasks: meta, BODY.md, TASK.md, RESULT.md |
+| `<project>/.orchestra/MANUAL.md` | the manual task board: pool, assigned, completed |
+| `<project>.wt/<name>/` | worktrees for isolated tasks (next to the repository); for Antigravity, with `.agents/rules/orchestra-task.md` |
+
+`.orchestra/` and the Antigravity rule are added to `.git/info/exclude` automatically, and `.gitignore` is left alone. `orch footprint` lists everything outside Claude Code.
+
+## Alongside maestro-flow
+
+You can install both: maestro commands also run inside Claude Code, and this skill will suggest the model and effort. In maestro's `cli-tools.json`, keep `agy` disabled (`"enabled": false`) for the same ToS reason. For Codex and DeepSeek, prefer `orch run …` over `maestro delegate`: only `orch` automatically catches limits and balance and isolates the executor.
+
+## Testing
+
+`bash tests/run_tests.sh` runs 282 checks against a temporary repository with fake `codex` and `claude`: limits, detection of exhausted quotas and balance, timeouts and process-tree termination, DeepSeek and Claude executor isolation (environment, permissions, role, CLAUDE.md), the DeepSeek lead (`orch launch`: endpoint, token, models, no Anthropic credentials, `--no-claude`), profiles (keys and accounts, project and directory bindings, `off`, models, effort, write ban, separate per-key balance blocks), project rules for each executor (CLAUDE.md with imports, AGENTS.md), the usage log (transcript parsing, Codex/DeepSeek tokens, SessionEnd snapshot), the manual task pool (offer → take → result, the Antigravity rule, the pool clock and its checks, one-at-a-time reclaims), the Claude budget mode (status line snapshot, surplus / tight projection, weekly headroom, profile threshold), the ban on nested delegation, worktrees, reminders, hooks, guide and footprint. The tests run both in WSL/Linux and in Git Bash on Windows — run them in both.

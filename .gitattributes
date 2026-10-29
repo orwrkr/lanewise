@@ -1,0 +1,6 @@
+# LF everywhere: a CRLF shebang or bash script breaks under WSL/Linux
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.zip binary
+*.cmd text eol=crlf

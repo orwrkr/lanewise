@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+# Orchestra adapter: Claude as an external executor (headless Claude Code on your own Claude login).
+#
+# In a Claude-led session Claude workers are the plugin's subagents (orch-*). This adapter is the Claude lane when the
+# lead is another model (`orch launch deepseek`): every in-session request of such a lead goes to its own API, so work
+# for Claude goes out through `orch run claude`. `orch profile use claude off` (or `orch launch … --no-claude`) turns
+# Claude off completely: orch refuses these runs, and the skill keeps Claude subagents out of a Claude-led session.
+#
+# Isolation as for the deepseek executor, but on your Claude config (that is where the login lives):
+#   - --setting-sources user + disableAllHooks: no hooks, no settings of the target repo (its CLAUDE.md and AGENTS.md
+#     come from orch); --strict-mcp-config: no MCP servers; auto-memory and session files off;
+#   - variables of the orchestrating session are stripped, including a non-Claude lead's endpoint and token;
+#   - --permission-mode dontAsk with the analysis / write tool rules of the deepseek executor.
+# Auth: your `claude` login (subscription). A profile may use another config dir (home=CLAUDE_CONFIG_DIR; log in there
+# once: CLAUDE_CONFIG_DIR=<dir> claude) or an API key (--key VAR → ANTHROPIC_API_KEY, billed per token).
+# Models: aliases haiku | sonnet | opus | fable or full model ids; registry slot claude/<alias>-<effort>.
+#
+# orch-secrets: ANTHROPIC_API_KEY
+# orch-limit-detect: exit-code
+# orch-profile-env: home=CLAUDE_CONFIG_DIR
+# Contract: adapters/_template.example. Exit 75 = usage limit (reset time → $ORCH_RUN_DIR/quota_until).
+# Overrides: ORCH_CLAUDE_BIN, ORCH_CLAUDE_EXTRA_ARGS.
+import datetime as dt
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.dont_write_bytecode = True        # no __pycache__ inside the plugin's adapters/
+import _claude_headless as H  # noqa: E402
+
+DEFAULT_MODEL = "sonnet"
+LIMIT_RE = re.compile(r"usage limit|hit your (?:usage )?limit|limit reached|out of (?:extra )?usage|rate.?limit", re.I)
+RESET_EPOCH = re.compile(r"\|(\d{10})\b")
+RESET_IN = re.compile(r"(?:resets?|try again)\s+in\s+(\d+)\s*(minute|min|hour|hr|h|m)", re.I)
+RESET_AT = re.compile(r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.I)
+
+
+def say(msg):
+    print("[claude] " + msg, flush=True)
+
+
+def reset_hint(text):
+    """'…limit reached|1767225600' → ISO time, 'resets in 2 hours' → '+120m', 'resets 3pm' → '15:00'."""
+    m = RESET_EPOCH.search(text)
+    if m:
+        return dt.datetime.fromtimestamp(int(m.group(1))).astimezone().isoformat(timespec="minutes")
+    m = RESET_IN.search(text)
+    if m:
+        return "+%dm" % (int(m.group(1)) * (60 if m.group(2).lower().startswith("h") else 1))
+    m = RESET_AT.search(text)
+    if m and (m.group(2) or m.group(3)):
+        h, ap = int(m.group(1)), (m.group(3) or "").lower()
+        h = h + 12 if ap == "pm" and h < 12 else 0 if ap == "am" and h == 12 else h
+        return "%02d:%02d" % (h, int(m.group(2) or 0))
+    return None
+
+
+def main():
+    H.utf8_stdio()
+    claude = H.find_claude()
+    if not claude:
+        say("claude CLI not found: the Claude executor is headless Claude Code (or set ORCH_CLAUDE_BIN)")
+        return 127
+    run_dir = Path(os.environ["ORCH_RUN_DIR"])
+    model = os.environ.get("ORCH_MODEL") or DEFAULT_MODEL
+    env = H.base_env(keep=("CLAUDE_CONFIG_DIR",))
+    home = os.environ.get("CLAUDE_CONFIG_DIR")
+    if home and not Path(home).is_dir():
+        say("CLAUDE_CONFIG_DIR=%s (profile %s) does not exist; log in there once: CLAUDE_CONFIG_DIR='%s' claude"
+            % (home, os.environ.get("ORCH_PROFILE") or "?", home))
+        return 1
+    env.update({"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "DISABLE_AUTOUPDATER": "1"})
+    isolation = ["--setting-sources", "user", "--settings", json.dumps({"disableAllHooks": True})]
+    cmd = H.command(claude, model, run_dir, isolation, os.environ.get("ORCH_CLAUDE_EXTRA_ARGS"), say)
+    result, rc = H.run(cmd, env)
+
+    if result is None:
+        say("claude exited without a result (rc=%s); see the log above" % rc)
+        return rc or 1
+    H.write_usage(run_dir, result, model)
+    text = result.get("result") or ""
+    status = result.get("api_error_status")
+    if result.get("is_error") or result.get("subtype") != "success":
+        say("error: %s" % H.one_line(text or result.get("subtype"), 500))
+        if status == 429 or LIMIT_RE.search(text):
+            hint = reset_hint(text) or ("+15m" if status == 429 and not LIMIT_RE.search(text) else None)
+            if hint:
+                (run_dir / "quota_until").write_text(hint + "\n", encoding="utf-8")
+            say("Claude usage limit: %s" % H.one_line(text, 300))
+            return H.EXIT_QUOTA
+        if status == 401 or "/login" in text:
+            say("Claude rejected the credentials: log in with `claude` (or check the profile's config dir / key)")
+        return rc or 1
+    H.write_output(result)
+    say("done: %s turns, %.0f s" % (result.get("num_turns"), (result.get("duration_ms") or 0) / 1000.0))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

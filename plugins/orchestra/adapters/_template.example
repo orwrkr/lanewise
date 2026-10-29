@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Orchestra adapter template for a new CLI/API executor.
+# 1) Copy it to ~/.orchestra/adapters/<provider> (or to the plugin's adapters/<provider>), chmod +x.
+#    An adapter may also be written in Python (first line `#!/usr/bin/env python3`): orch then runs it with
+#    its own interpreter, which is simpler on Windows. Example: adapters/deepseek.
+# 2) Add the provider and its slots to the registry (orch registry init → providers.yaml).
+# 3) Call: orch run <provider> --model M --effort E --mode analysis|write [--allow RULE] --prompt-file F
+#
+# Contract:
+#   env:  ORCH_MODEL ORCH_EFFORT ORCH_MODE ORCH_CWD ORCH_PROMPT_FILE ORCH_OUTPUT_FILE ORCH_RUN_DIR ORCH_HOME
+#         ORCH_ROLE_FILE — the executor role from orch (who you are, rules, the STATUS: … report format): pass
+#                          it to the model before the task (system prompt or the start of the prompt)
+#         ORCH_CONTEXT_FILE — project rules (CLAUDE.md with @imports inlined, AGENTS.md) that the agent does
+#                          not read itself; empty — no rules. Pass it along with the role
+#         The orchestrator's session id is not passed on: orch itself links the run to the session in the usage log
+#         ORCH_ALLOW     — extra permissions from the orchestrator, one rule per line (if the channel understands them)
+#         ORCH_WORKER    — run id; while it is set, orch will not let the executor delegate further
+#         ORCH_PROFILE   — name of the active profile (orch profile …); empty — the built-in profile, no limits.
+#                          orch has already fitted model, effort and mode to the profile's limits; an adapter
+#                          whose profile is off is not started at all.
+#         orch has already removed the orchestrator session variables (CLAUDECODE, CLAUDE_CODE_*, …) and those of a
+#         non-Claude lead (listed in ORCH_LEAD_ENV: its endpoint, token, models) from the env.
+#   result: final answer → $ORCH_OUTPUT_FILE; everything else (stdout/stderr) → the run log
+#   tokens: if possible $ORCH_RUN_DIR/usage.json —
+#         {"input_tokens": <uncached>, "cached_input_tokens": <from cache>, "output_tokens": N, "model": "<actual>"}
+#         (goes into orch usage — which model, what for and how much it spent)
+#   exit: 0 ok · 75 subscription/balance limit (the reset time can be written to $ORCH_RUN_DIR/quota_until,
+#         format: "18:00", "+2h", "2026-10-26 09:00"; "manual" — until a manual `orch quota clear`) · other — error
+#   Even without exit 75, orch itself scans the log for phrases like "usage limit", "429", "rate limit".
+#
+# Directives in the header comments (first 40 lines):
+#   # orch-secrets: NAME1 NAME2      — take these keys from ~/.orchestra/secrets.env (if not in the environment);
+#                                      the profile field `key: VAR` supplies the value of VAR under the name NAME1
+#   # orch-limit-detect: exit-code   — do not scan the log for limits, trust only the exit code
+#   # orch-context-native: AGENTS.md — rule files the agent reads itself: they are left out of ORCH_CONTEXT_FILE
+#   # orch-profile-env: home=SOME_HOME region=SOME_REGION
+#                                    — profile fields the adapter receives as environment variables
+#                                      (orch profile set <provider> <profile> --opt region=eu); the `home` field
+#                                      is a directory, orch creates it on `profile set`
+#   # orch-launch: env               — the provider can lead a session (orch launch <provider>): called with
+#                                      --launch-env, print {"set": {VAR: value}, "unset": [VAR], "args": [claude args],
+#                                      "model": M} — the environment of an interactive Claude Code session on its API
+#                                      (example: adapters/deepseek)
+set -euo pipefail
+
+# Example: a CLI that takes the prompt on stdin and prints the answer to stdout
+# { cat "$ORCH_ROLE_FILE"; echo; cat "$ORCH_PROMPT_FILE"; } | some-cli --model "$ORCH_MODEL" > "$ORCH_OUTPUT_FILE"
+
+# Example: an HTTP API (key from the environment or secrets.env, never from project files) — text answer only,
+# no agent loop: good for a review/second opinion, not for editing code
+# curl -sS https://api.example.com/v1/chat -H "Authorization: Bearer $EXAMPLE_API_KEY" \
+#   --data-binary @"$ORCH_PROMPT_FILE" > "$ORCH_OUTPUT_FILE"
+
+echo "template adapter: edit me" >&2
+exit 1

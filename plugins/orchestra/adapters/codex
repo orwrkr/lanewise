@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+# Orchestra adapter: OpenAI Codex CLI (ChatGPT subscription via `codex login`).
+#
+# `codex exec --json` runs its own agent loop in the codex sandbox (read-only / workspace-write). The event stream is
+# condensed into the run log (→ commands, edits; · messages; ✘ errors); token usage goes to $ORCH_RUN_DIR/usage.json.
+# Prompt via stdin: executor role (orch) + project rules codex does not read itself (CLAUDE.md; AGENTS.md it reads
+# natively) + the task.
+#
+# Contract: adapters/_template.example. Exit 75 = usage limit (reset time → $ORCH_RUN_DIR/quota_until).
+# codex binary: $ORCH_CODEX_BIN → codex on PATH (on Windows the native codex.exe inside the npm package is preferred
+# over the codex.cmd shim) → the CLI bundled with the Codex desktop app.
+# Profiles (orch profile set codex <name> --home DIR --codex-profile P): the account is CODEX_HOME (auth.json),
+# P layers $CODEX_HOME/P.config.toml (codex --profile).
+# orch-limit-detect: exit-code
+# orch-context-native: AGENTS.md
+# orch-profile-env: home=CODEX_HOME codex_profile=ORCH_CODEX_PROFILE
+# Extra flags for your setup: ORCH_CODEX_EXTRA_ARGS="--search" (shell-style).
+import json
+import os
+import queue
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+EXIT_QUOTA = 75
+LIMIT_RE = re.compile(r"usage limit|rate[ _-]?limit|too many requests|\b429\b|quota|out of credits"
+                      r"|limit (?:has been )?(?:reached|exceeded)", re.I)
+IN_RE = re.compile(r"(?:try again|retry|resets?|available again)\s+in\s+(?:about\s+)?(\d+)\s*"
+                   r"(second|sec|minute|min|hour|hr|day|h|m|d)s?", re.I)
+AT_RE = re.compile(r"(?:try again|retry|resets?|available again)\s+(?:at|after)\s+(\d{1,2}):(\d{2})\s*(am|pm)?", re.I)
+
+
+def say(msg):
+    print("[codex] " + msg, flush=True)
+
+
+def one_line(text, n):
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= n else text[:n] + "…"
+
+
+def find_codex():
+    c = os.environ.get("ORCH_CODEX_BIN") or shutil.which("codex")
+    if c and os.name == "nt" and c.lower().endswith((".cmd", ".bat")):
+        native = sorted(Path(c).parent.glob("node_modules/@openai/codex/node_modules/@openai/codex-*/vendor/*/bin/codex.exe"))
+        if native:
+            return str(native[-1])       # skip node + cmd.exe argument re-parsing
+    if c:
+        return c
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        app = sorted(Path(os.environ["LOCALAPPDATA"], "OpenAI", "Codex", "bin").glob("*/codex.exe"),
+                     key=lambda p: p.stat().st_mtime)
+        if app:
+            return str(app[-1])
+    return None
+
+
+def reset_hint(text):
+    """'try again in 2 hours' → '+2h', 'try again at 3:45 PM' → '15:45' (orch quota_until format)."""
+    m = IN_RE.search(text)
+    if m:
+        n, u = int(m.group(1)), m.group(2).lower()
+        mins = n * (60 if u.startswith("h") else 1440 if u.startswith("d") else 1 if u.startswith("m") else 0)
+        return "+%dm" % max(mins, 1)
+    m = AT_RE.search(text)
+    if m:
+        h, mi, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").lower()
+        h = h + 12 if ap == "pm" and h < 12 else 0 if ap == "am" and h == 12 else h
+        return "%02d:%02d" % (h, mi)
+    return None
+
+
+def config_model():
+    """Model codex uses without -m: the --profile layer first, then config.toml (for the usage log)."""
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    layer = os.environ.get("ORCH_CODEX_PROFILE")
+    for name in ([layer + ".config.toml"] if layer else []) + ["config.toml"]:
+        try:
+            m = re.search(r'^model\s*=\s*"([^"]+)"', (home / name).read_text(encoding="utf-8"), re.M)
+        except OSError:
+            continue
+        if m:
+            return m.group(1)
+    return None
+
+
+def prompt_text():
+    parts = []
+    for var in ("ORCH_ROLE_FILE", "ORCH_CONTEXT_FILE"):
+        p = os.environ.get(var)
+        if p and Path(p).is_file():
+            parts.append(Path(p).read_text(encoding="utf-8"))
+    task = Path(os.environ["ORCH_PROMPT_FILE"]).read_text(encoding="utf-8")
+    return "\n\n---\n\n".join(parts + ["# Task\n\n" + task]) if parts else task
+
+
+def log_item(ev):
+    item = ev.get("item") if isinstance(ev.get("item"), dict) else {}
+    kind = item.get("type") or item.get("item_type")
+    if ev["type"] == "item.started" and kind == "command_execution":
+        print("→ $ " + one_line(item.get("command"), 160), flush=True)
+    elif ev["type"] != "item.completed":
+        return None
+    elif kind == "agent_message" and item.get("text"):
+        print("· " + one_line(item["text"], 300), flush=True)
+    elif kind == "file_change":
+        print("→ edit " + ", ".join(str(c.get("path")) for c in item.get("changes") or [] if isinstance(c, dict)),
+              flush=True)
+    elif kind == "command_execution" and item.get("exit_code") not in (0, None):
+        print("  ✘ exit %s: %s" % (item.get("exit_code"), one_line(item.get("command"), 120)), flush=True)
+    elif kind == "mcp_tool_call":
+        print("→ mcp %s.%s" % (item.get("server"), item.get("tool")), flush=True)
+    elif kind == "web_search":
+        print("→ web " + one_line(item.get("query"), 120), flush=True)
+    elif kind == "error":
+        print("✘ " + one_line(item.get("message"), 300), flush=True)
+        return item.get("message")
+    return None
+
+
+def handle(raw, state):
+    line = raw.decode("utf-8", "replace").rstrip()
+    if not line:
+        return
+    try:
+        ev = json.loads(line)
+        if not isinstance(ev, dict) or "type" not in ev:
+            raise ValueError
+    except ValueError:
+        print(line, flush=True)          # stderr / plain text: may carry the limit message
+        state["errors"].append(line)
+        return
+    kind = ev["type"]
+    if kind.startswith("item."):
+        err = log_item(ev)
+        if err:
+            state["errors"].append(err)
+    elif kind == "turn.completed":
+        state["turns"] += 1
+        u = ev.get("usage") or {}
+        for k in state["usage"]:
+            state["usage"][k] += int(u.get(k) or 0)
+    elif kind in ("turn.failed", "error"):
+        msg = (ev.get("error") or {}).get("message") if isinstance(ev.get("error"), dict) else ev.get("message")
+        print("✘ " + one_line(msg, 500), flush=True)
+        state["errors"].append(str(msg or ""))
+
+
+def pump(proc, state, drain=1.5):
+    """Read events until codex exits — not until EOF: on Windows codex leaves codex-windows-sandbox-setup.exe
+    running with our stdout handle inherited, so the pipe stays open after codex is gone (orch's job object
+    reaps that helper when the run ends)."""
+    lines = queue.Queue()
+
+    def reader():
+        for raw in proc.stdout:
+            lines.put(raw)
+        lines.put(None)
+    threading.Thread(target=reader, daemon=True).start()
+    exited = None
+    while True:
+        try:
+            raw = lines.get(timeout=0.3)
+        except queue.Empty:
+            raw = b""
+        if raw is None:
+            break
+        if raw:
+            handle(raw, state)
+        if proc.poll() is not None:
+            exited = exited or time.time()
+            if time.time() - exited > drain and lines.empty():
+                break
+    return proc.wait()
+
+
+def main():
+    for stream in (sys.stdout, sys.stderr):     # the run log is UTF-8; Windows pipes/files default to the ANSI page
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    codex = find_codex()
+    if not codex:
+        say("codex CLI not found: npm i -g @openai/codex && codex login (or set ORCH_CODEX_BIN)")
+        return 127
+    home = os.environ.get("CODEX_HOME")
+    if home and not Path(home).is_dir():
+        say("CODEX_HOME=%s (profile %s) does not exist — log in to the account: CODEX_HOME='%s' codex login"
+            % (home, os.environ.get("ORCH_PROFILE") or "?", home))
+        return 1
+    run_dir = Path(os.environ["ORCH_RUN_DIR"])
+    model, effort = os.environ.get("ORCH_MODEL"), os.environ.get("ORCH_EFFORT")
+    args = ["exec", "--json", "--skip-git-repo-check", "-C", os.environ["ORCH_CWD"], "-o", os.environ["ORCH_OUTPUT_FILE"]]
+    if os.environ.get("ORCH_CODEX_PROFILE"):
+        args += ["--profile", os.environ["ORCH_CODEX_PROFILE"]]
+    if model:
+        args += ["-m", model]
+    if effort:
+        args += ["-c", 'model_reasoning_effort="%s"' % effort]
+    # write: may edit files inside ORCH_CWD only · analysis: review / planning, nothing changes
+    args += ["--sandbox", "workspace-write" if os.environ.get("ORCH_MODE") == "write" else "read-only"]
+    args += shlex.split(os.environ.get("ORCH_CODEX_EXTRA_ARGS", "")) + ["-"]
+    cmd = ([sys.executable, codex] if codex.endswith(".py") else [codex]) + args
+    say("model=%s effort=%s mode=%s" % (model or "(config)", effort or "(config)", os.environ.get("ORCH_MODE")))
+
+    state = {"usage": {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}, "turns": 0, "errors": []}
+    prompt = run_dir / "codex_prompt.md"
+    prompt.write_text(prompt_text(), encoding="utf-8")
+    with prompt.open("rb") as fh:
+        proc = subprocess.Popen(cmd, stdin=fh, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    rc = pump(proc, state)
+    usage, turns, errors = state["usage"], state["turns"], state["errors"]
+
+    if turns:       # OpenAI counts cached input inside input_tokens; the ledger keeps them apart
+        usage["input_tokens"] = max(usage["input_tokens"] - usage["cached_input_tokens"], 0)
+        usage["model"] = model or config_model()
+        (run_dir / "usage.json").write_text(json.dumps(usage), encoding="utf-8")
+    if rc != 0:
+        text = "\n".join(errors)
+        if LIMIT_RE.search(text):
+            hint = reset_hint(text)
+            if hint:
+                (run_dir / "quota_until").write_text(hint + "\n", encoding="utf-8")
+            say("ChatGPT/Codex subscription limit: %s" % one_line(text, 300))
+            return EXIT_QUOTA
+        say("codex exited with code %s" % rc)
+        return rc
+    say("done: %d turns, input %d (+cache %d), output %d" % (turns, usage["input_tokens"], usage["cached_input_tokens"],
+                                                           usage["output_tokens"]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

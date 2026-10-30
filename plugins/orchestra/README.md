@@ -128,13 +128,17 @@ You can also report limits without commands, in plain words: "Sol is out until 9
 ## Claude subscription budget: use it or lose it
 
 A Claude subscription's 5-hour window expires at its reset, and whatever was not used is gone, while DeepSeek and
-other API-key executors cost money per token. Orchestra projects the window from the pace so far:
+other API-key executors cost money per token. Orchestra projects the window to its reset at the current pace. The
+usage numbers are account-wide, so every session on the account is included. The pace is the higher of the window
+average and the last 15–60 minutes, which tracks every instance that is consuming right now. A reserve (10% of the
+window and 10% of the week by default) is kept for your other sessions and as a safety margin:
 
-- **surplus** — at least 30% of the window would expire unused, and the weekly limit has room. Until the reset, the
-  orchestrator gives Claude subagents the subtasks it would otherwise give to API-billed executors. Codex and the
-  manual pool keep their tasks.
-- **tight** — at this pace the window runs out before the reset. The orchestrator treats Claude as low and offloads
-  to Codex and DeepSeek.
+- **surplus** — at least 30% of the window would expire unused beyond the reserve, and the weekly limit has room.
+  Until the reset, the orchestrator gives Claude subagents the subtasks it would otherwise give to API-billed
+  executors. Codex and the manual pool keep their tasks. When several orchestrator sessions are active, each one
+  gets its share of the surplus, so they don't all pile onto Claude at once.
+- **tight** — at the current pace the window reaches the reserve before the reset. The orchestrator treats Claude as
+  low and offloads to Codex and DeepSeek.
 
 The mode appears in `orch status` and at session start, and the orchestrator gets an event when it changes. The
 numbers come from Claude Code itself, which passes them to the status line command (`rate_limits`). Set Orchestra's
@@ -146,8 +150,10 @@ command as your status line once, in `~/.claude/settings.json`:
 
 To keep your own status line, use `orch statusline --then "<your command>"`. Without the status line you can give the
 numbers in plain words ("Claude: 40% of the session used, resets at 18:00") → `orch budget set --used 40 --resets 18:00`.
-`orch budget` shows the current state. The threshold lives in the `claude` profile: `--opt surplus=50`, or
-`surplus=off` to switch the mode off.
+`orch budget` shows the current state and the active consumers Orchestra knows of. Those are the orchestrator
+sessions with the plugin seen in the last 15 minutes and running `orch run claude` executors; a session led by
+DeepSeek doesn't count. The thresholds live in the `claude` profile: `--opt reserve=25` (keep more for other
+sessions), `week_reserve=15`, `surplus=50`, or `surplus=off` to switch the mode off.
 
 ## DeepSeek as the lead
 
@@ -320,7 +326,8 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `~/.orchestra/secrets.env` | API keys (`DEEPSEEK_API_KEY=…`, `DEEPSEEK_API_KEY_WORK=…`), only for the adapters that declare them |
 | `~/.orchestra/profiles.json` | executor profiles, defaults and project bindings (`orch profile …`) |
 | `~/.orchestra/usage.jsonl` | usage log: runs, manual tasks, session snapshots (`orch usage`) |
-| `~/.orchestra/claude_usage.json` | the Claude subscription's last known window usage, for the budget mode (`orch budget`) |
+| `~/.orchestra/claude_usage.json` | the Claude subscription's last known window usage and its recent history, for the budget mode (`orch budget`) |
+| `~/.orchestra/sessions.json` | active orchestrator sessions and Claude executor runs: the budget's consumer count |
 | `~/.orchestra/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
 | `<project>/.orchestra/runs/` | executor runs: prompt, role, project rules, response, log, tokens |
 | `<project>/.orchestra/handoffs/AG-…/` | manual tasks: meta, BODY.md, TASK.md, RESULT.md |
@@ -335,4 +342,4 @@ You can install both: maestro commands also run inside Claude Code, and this ski
 
 ## Testing
 
-`bash tests/run_tests.sh` runs 282 checks against a temporary repository with fake `codex` and `claude`: limits, detection of exhausted quotas and balance, timeouts and process-tree termination, DeepSeek and Claude executor isolation (environment, permissions, role, CLAUDE.md), the DeepSeek lead (`orch launch`: endpoint, token, models, no Anthropic credentials, `--no-claude`), profiles (keys and accounts, project and directory bindings, `off`, models, effort, write ban, separate per-key balance blocks), project rules for each executor (CLAUDE.md with imports, AGENTS.md), the usage log (transcript parsing, Codex/DeepSeek tokens, SessionEnd snapshot), the manual task pool (offer → take → result, the Antigravity rule, the pool clock and its checks, one-at-a-time reclaims), the Claude budget mode (status line snapshot, surplus / tight projection, weekly headroom, profile threshold), the ban on nested delegation, worktrees, reminders, hooks, guide and footprint. The tests run both in WSL/Linux and in Git Bash on Windows — run them in both.
+`bash tests/run_tests.sh` runs 294 checks against a temporary repository with fake `codex` and `claude`: limits, detection of exhausted quotas and balance, timeouts and process-tree termination, DeepSeek and Claude executor isolation (environment, permissions, role, CLAUDE.md), the DeepSeek lead (`orch launch`: endpoint, token, models, no Anthropic credentials, `--no-claude`), profiles (keys and accounts, project and directory bindings, `off`, models, effort, write ban, separate per-key balance blocks), project rules for each executor (CLAUDE.md with imports, AGENTS.md), the usage log (transcript parsing, Codex/DeepSeek tokens, SessionEnd snapshot), the manual task pool (offer → take → result, the Antigravity rule, the pool clock and its checks, one-at-a-time reclaims), the Claude budget mode (status line snapshot, surplus / tight projection, reserves, the recent pace of all sessions, active consumers and the shared surplus, profile thresholds), the ban on nested delegation, worktrees, reminders, hooks, guide and footprint. The tests run both in WSL/Linux and in Git Bash on Windows — run them in both.

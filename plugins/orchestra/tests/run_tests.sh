@@ -84,6 +84,8 @@ rec = {"args": args, "allowed": args[args.index("--allowedTools") + 1:] if "--al
                "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "ORCH_WORKER", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDECODE",
                "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
                "ORCH_LEAD", "ORCH_LEAD_ENV", "ORCH_PROFILES")}}
+sf = os.path.join(os.environ.get("ORCH_HOME", ""), "sessions.json")
+rec["sessions"] = json.load(open(sf, encoding="utf-8")) if os.path.isfile(sf) else {}   # consumers during the run
 json.dump(rec, open(os.environ["FAKE_CLAUDE_LOG"], "w", encoding="utf-8"), ensure_ascii=False)
 emit = lambda o: print(json.dumps(o, ensure_ascii=False), flush=True)
 mode = os.environ.get("FAKE_CLAUDE", "ok")
@@ -636,9 +638,9 @@ out=$(echo '{}' | $ORCH statusline); rc=$?; [[ $rc -eq 0 && -n "$out" ]] && ok "
 out=$(echo 'garbage' | $ORCH statusline); expect_rc 0 $? "statusline survives garbage input"
 out=$($ORCH budget); contains "$out" "No current Claude subscription numbers" "budget: no numbers yet"
 out=$(sl 10 $((now + 7200)) "$(week 40)")
-contains "$out" "Opus 5.5 · 5h 10% → .* · week 40% · surplus: Claude first" "statusline shows the usage and the surplus mode"
+contains "$out" "Opus 5.5 · 5h 10% → .* · week 40% .*surplus: Claude first" "statusline shows the usage and the surplus mode"
 [[ -f "$ORCH_HOME/claude_usage.json" ]] && ok "statusline keeps the snapshot in ORCH_HOME" || bad "no snapshot"
-out=$($ORCH status); contains "$out" "SURPLUS: about 8[0-9]% of the window would expire unused" "status: surplus projected from the pace"
+out=$($ORCH status); contains "$out" "SURPLUS: at the current pace (window average) about 7[0-9]% of the window would expire unused beyond the reserve" "status: surplus beyond the reserve, projected from the pace"
 out=$(echo '{}' | $ORCH hook session-start); contains "$out" "Claude subscription: 5-hour window 10% used" "session-start shows the budget"
 out=$(echo '{}' | $ORCH hook user-prompt); grep -q "Claude subscription" <<<"$out" && bad "budget re-announced" || ok "the mode shown at session start is not repeated"
 sl 80 $((now + 7200)) >/dev/null
@@ -660,6 +662,45 @@ rm -f "$ORCH_HOME/profiles.json"
 $ORCH budget set --used 20 --resets +3h --week 50 >/dev/null
 out=$($ORCH budget); contains "$out" "20% used.*reported by the operator.*SURPLUS" "numbers reported by the operator"
 out=$(echo '{}' | $ORCH statusline --then "echo mine"); contains "$out" "^mine  " "statusline --then keeps your own status line first"
+# reserve and the pace of all sessions: snap USED [BASE_USED MINUTES_AGO] — window resets in 2 h, optional sample
+snap() { $PY - "$(native "$ORCH_HOME/claude_usage.json")" "$@" <<'EOF'
+import datetime as dt, json, sys
+p, used = sys.argv[1], float(sys.argv[2])
+t = dt.datetime.now().astimezone()
+reset = (t + dt.timedelta(hours=2)).isoformat(timespec="seconds")
+s = {"updated": t.isoformat(timespec="seconds"), "source": "statusline", "five_hour": {"used": used, "resets_at": reset}}
+if len(sys.argv) > 3:
+    s["history"] = [[(t - dt.timedelta(minutes=int(sys.argv[4]))).isoformat(timespec="seconds"), float(sys.argv[3]), reset]]
+json.dump(s, open(p, "w", encoding="utf-8"))
+EOF
+}
+snap 50
+out=$($ORCH budget); grep -q "TIGHT\|SURPLUS" <<<"$out" && bad "50% after 3 h: $out" || ok "default reserve: 50% after 3 h is neither tight nor surplus"
+$ORCH profile set claude r --opt reserve=20 >/dev/null && $ORCH profile use claude r >/dev/null
+out=$($ORCH budget); contains "$out" "reserve 20%.*TIGHT: at the current pace (window average) it reaches the reserve" "a larger reserve turns the same pace tight"
+$ORCH profile set claude r --opt reserve=95 >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "reserve out of range refused" || bad "reserve=95 accepted"
+rm -f "$ORCH_HOME/profiles.json"
+snap 35
+out=$($ORCH budget); contains "$out" "SURPLUS: at the current pace (window average)" "35% after 3 h at the window average: surplus"
+snap 35 10 40
+out=$($ORCH budget); contains "$out" "TIGHT: at the current pace (last 4[0-9] min, all sessions)" "the recent pace of all sessions wins: 10% → 35% in 40 min is tight"
+# the consumers: orchestrator sessions (hooks, status line), Claude executor runs; a DeepSeek-led session doesn't count
+rm -f "$ORCH_HOME/sessions.json"
+echo '{"session_id": "s-a"}' | $ORCH hook user-prompt >/dev/null
+echo '{"session_id": "s-b"}' | $ORCH hook user-prompt >/dev/null
+echo '{"session_id": "s-lead"}' | ORCH_LEAD=deepseek $ORCH hook user-prompt >/dev/null
+snap 10
+out=$($ORCH budget); contains "$out" "active: 2 orchestrator sessions" "active sessions counted, a DeepSeek-led one not"
+contains "$out" "≈3[0-9]% for each of the 2 orchestrator sessions" "the surplus is shared between the sessions"
+contains "$out" "s-a .*session" "budget lists the active consumers"
+out=$(printf '{"session_id": "s-c", "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": %s}}}' "$((now + 7200))" | $ORCH statusline)
+contains "$out" "3 sessions" "the status line marks its session as a consumer"
+echo '{"session_id": "s-b"}' | $ORCH hook session-end >/dev/null
+out=$($ORCH budget); contains "$out" "active: 2 orchestrator sessions" "SessionEnd removes the session"
+FAKE_CLAUDE=ok $ORCH run claude --model haiku "x" >/dev/null
+check 'any(v.get("kind") == "executor" for v in r["sessions"].values())' "a running Claude executor counts as a consumer"
+grep -q '"executor"' "$ORCH_HOME/sessions.json" && bad "finished run still listed" || ok "the run leaves the consumer list when it ends"
+rm -f "$ORCH_HOME/sessions.json"
 $ORCH budget clear >/dev/null
 
 echo "── registry & doctor"

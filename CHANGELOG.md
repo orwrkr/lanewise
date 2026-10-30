@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+- **Budget reserve**: a share of the Claude window (default 10%) and of the week (10%) is kept for other sessions
+  and as a safety margin — profile `claude`: `--opt reserve=N`, `week_reserve=N`. TIGHT now means "reaches the
+  reserve before the reset", SURPLUS counts only what would be left beyond it.
+- **All instances in the forecast**: the pace is the higher of the window average and the last 15–60 minutes of
+  samples, which every session's `orch statusline` adds to a shared history — so the projection follows every
+  instance consuming right now. Active orchestrator sessions and running Claude executors are tracked in
+  `~/.orchestra/sessions.json`; a surplus is split between the active sessions; `orch budget` lists them.
+
 ## 0.5.0 — first public release
 
 - **DeepSeek as the lead**: `orch launch deepseek` starts Claude Code with DeepSeek as the orchestrator; `--no-claude`

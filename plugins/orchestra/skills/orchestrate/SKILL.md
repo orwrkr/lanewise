@@ -21,8 +21,9 @@ files `reference/*.md` next to this one) — read one when you reach its topic.
 1. `orch status` — availability restrictions, this project's executor profiles, manual tasks (pool and handed out).
    If it starts with `Lead: …`, you are not Claude: read `orch guide lead` first (orch-* subagents run on your own
    model there; Claude is reachable only as `orch run claude`, if its profile allows).
-   `Claude subscription: … SURPLUS` (or a `💡` event) — the 5-hour window would expire half-unused: give Claude what
-   would go to API-billed executors (DeepSeek, API-key profiles); `TIGHT` — treat Claude as `low`. `orch guide budget`.
+   `Claude subscription: … SURPLUS` (or a `💡` event) — the 5-hour window would expire with a lot unused beyond the
+   reserve: give Claude what would go to API-billed executors (DeepSeek, API-key profiles), within your session's
+   share; `TIGHT` — treat Claude as `low`. `orch guide budget`.
 2. Registry — once per session (and whenever the operator changed it): `orch registry show`. It holds slots
    (provider × model × effort), cost, `max_difficulty`, `good_for`, operator parameters, routes (`routing`).
 3. A slot is unavailable if `orch status` shows a restriction on its key or on its provider's key

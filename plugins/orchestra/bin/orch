@@ -386,15 +386,21 @@ def cmd_quota(a):
 
 # ───────────────────────── Claude subscription budget (use it or lose it) ─────────────────────────
 #
-# Claude Code hands the statusLine command `rate_limits` (5-hour and 7-day windows: % used, reset time). `orch
-# statusline` keeps a snapshot of it; the operator can report the same numbers in words (`orch budget set`). From the
-# pace so far orch projects the 5-hour window to its reset: a large projected leftover is a SURPLUS (it would expire
-# unused — give subtasks to Claude rather than to API-billed executors), running out before the reset is TIGHT.
+# Claude Code hands the statusLine command `rate_limits` (5-hour and 7-day windows: % used, reset time). The numbers
+# are account-wide: every session on the account is already in them. `orch statusline`, running in every session,
+# adds them to a shared snapshot with a short history; the operator can report the same numbers (`orch budget set`).
+# The pace is the higher of the window average and the last 15–60 minutes, so the projection follows every instance
+# consuming right now. A reserve is kept for other sessions and safety (profile claude: reserve, week_reserve):
+# SURPLUS — the window would expire with a lot left beyond the reserve (shared between the active orchestrator
+# sessions); TIGHT — it would reach the reserve before the reset.
 
 USAGE_SNAPSHOT = ORCH_HOME / "claude_usage.json"
-SURPLUS_MIN = 30           # projected unused % of the 5-hour window that makes a surplus (profile claude: surplus=N|off)
-PACE_MIN_ELAPSED = 30      # minutes into a window before its pace is trusted
-WEEKLY_HEADROOM = 90       # no surplus while the weekly limit is (projected) at or above this %
+SESSIONS_FILE = ORCH_HOME / "sessions.json"
+BUDGET_DEFAULTS = {"surplus": 30, "reserve": 10, "week_reserve": 10}    # % — profile claude: --opt surplus=N|off, …
+PACE_MIN_ELAPSED = 30      # minutes into a window before its average pace is trusted
+RECENT_PACE = (15, 60)     # the recent pace: the oldest sample 15–60 minutes back
+ACTIVE_MIN = 15            # an orchestrator session seen within this many minutes is active
+HISTORY_KEEP_H = 6
 
 
 def epoch_iso(v):
@@ -405,12 +411,22 @@ def epoch_iso(v):
 
 
 def save_usage(windows, source):
-    """{"five_hour": {"used": %, "resets_at": iso}, "seven_day": {…}} → the snapshot shared by all sessions."""
+    """{"five_hour": {"used": %, "resets_at": iso}, "seven_day": {…}} → the snapshot shared by all sessions, plus a
+    sample of the 5-hour window for the recent pace."""
     snap = read_json(USAGE_SNAPSHOT, {})
-    stale = (now() - (parse_iso(snap.get("updated") or "") or now() - dt.timedelta(days=1))).total_seconds() > 60
+    t = now()
+    stale = (t - (parse_iso(snap.get("updated") or "") or t - dt.timedelta(days=1))).total_seconds() > 60
     if all(snap.get(k) == v for k, v in windows.items()) and snap.get("source") == source and not stale:
         return                     # the status line refreshes often: write only on a change (or once a minute)
-    snap.update(windows, updated=iso(now()), source=source)
+    snap.update(windows, updated=iso(t), source=source)
+    five = windows.get("five_hour")
+    if five:
+        keep = t - dt.timedelta(hours=HISTORY_KEEP_H)
+        hist = [h for h in snap.get("history") or [] if isinstance(h, list) and len(h) == 3
+                and (parse_iso(str(h[0])) or keep) > keep]
+        if not hist or hist[-1][1:] != [five["used"], five["resets_at"]] or stale:
+            hist.append([iso(t), five["used"], five["resets_at"]])
+        snap["history"] = hist[-300:]
     write_json(USAGE_SNAPSHOT, snap)
 
 
@@ -425,28 +441,90 @@ def usage_window(snap, name):
     return float(w["used"]), reset
 
 
-def pace(used, reset, hours):
-    """(projected % at reset, minutes until 100 % at this pace) — (None, None) while too early to tell."""
+def window_pace(snap, used, reset, hours):
+    """(%/min, basis): the higher of the window average and the recent pace of all sessions; (None, None) if unknown."""
     if reset is None:
         return None, None
     t = now()
     elapsed = (t - (reset - dt.timedelta(hours=hours))).total_seconds() / 60
-    if elapsed < PACE_MIN_ELAPSED:
-        return None, None
-    rate = used / elapsed
-    return used + rate * (reset - t).total_seconds() / 60, ((100 - used) / rate if rate > 0 else None)
+    rates = []
+    if elapsed >= PACE_MIN_ELAPSED:
+        rates.append((used / elapsed, "window average"))
+    if hours == 5:
+        lo, hi = t - dt.timedelta(minutes=RECENT_PACE[1]), t - dt.timedelta(minutes=RECENT_PACE[0])
+        base = []
+        for h in snap.get("history") or []:
+            if not (isinstance(h, list) and len(h) == 3):
+                continue
+            ts, r = parse_iso(str(h[0])), parse_iso(str(h[2] or ""))
+            if ts and r and abs((r - reset).total_seconds()) < 600 and lo <= ts <= hi:
+                base.append((ts, float(h[1])))
+        if base:
+            ts0, u0 = min(base)                     # the longest baseline in the range
+            mins = (t - ts0).total_seconds() / 60
+            rates.append((max(used - u0, 0) / mins, "last %d min, all sessions" % mins))
+    return max(rates) if rates else (None, None)
 
 
-def surplus_threshold(where=None):
-    """The claude profile's `surplus` field: off → 0, N → N % (default SURPLUS_MIN); Claude off → 0."""
+def projected_at_reset(used, reset, rate):
+    return used + rate * (reset - now()).total_seconds() / 60
+
+
+def budget_settings(where=None):
+    """surplus / reserve / week_reserve (%) from the claude profile, else BUDGET_DEFAULTS; Claude off → no surplus."""
+    out = dict(BUDGET_DEFAULTS)
     try:
         prof = resolve_profile("claude", where or project_dir())
     except ProfileError:
-        return SURPLUS_MIN
+        return out
     if prof.name == "off":
-        return 0
-    v = str(prof.data.get("surplus", SURPLUS_MIN)).lower()
-    return 0 if v in ("off", "0", "no", "false") else int(v) if v.isdigit() else SURPLUS_MIN
+        out["surplus"] = 0
+        return out
+    for k in out:
+        v = str(prof.data.get(k, out[k])).lower()
+        out[k] = 0 if v in ("off", "no", "false") else int(v) if v.isdigit() else out[k]
+    return out
+
+
+def heartbeat(key, where=None, kind="session"):
+    """Mark an orchestrator session (or a running Claude executor) as a Claude consumer; at most once a minute."""
+    if not key:
+        return
+    data = read_json(SESSIONS_FILE, {})
+    data = data if isinstance(data, dict) else {}
+    t = now()
+    e = data.get(key) if isinstance(data.get(key), dict) else {}
+    seen, lead = parse_iso(e.get("seen") or ""), os.environ.get("ORCH_LEAD") or None
+    if seen and (t - seen).total_seconds() < 60 and e.get("lead") == lead:
+        return
+    data = {k: v for k, v in data.items() if isinstance(v, dict) and parse_iso(v.get("seen") or "")
+            and (t - parse_iso(v["seen"])).total_seconds() < 86400}
+    project = e.get("project")
+    if where is not None or not project:
+        project = canon_path(project_root(Path(where) if where else project_dir()))
+    data[key] = {"seen": iso(t), "since": e.get("since") or iso(t), "kind": kind, "lead": lead, "project": project}
+    write_json(SESSIONS_FILE, data)
+
+
+def forget(key):
+    data = read_json(SESSIONS_FILE, {})
+    if isinstance(data, dict) and data.pop(key, None) is not None:
+        write_json(SESSIONS_FILE, data)
+
+
+def claude_consumers():
+    """Active Claude consumers orch knows of: Claude-led orchestrator sessions seen within ACTIVE_MIN minutes, and
+    Claude executor runs in progress (a session led by another model does not spend Claude)."""
+    data = read_json(SESSIONS_FILE, {})
+    t, out = now(), {}
+    for k, v in (data.items() if isinstance(data, dict) else []):
+        seen = parse_iso(v.get("seen") or "") if isinstance(v, dict) else None
+        if not seen:
+            continue
+        age = (t - seen).total_seconds()
+        if (v.get("kind") == "executor" and age < 3 * 3600) or (not v.get("lead") and age < ACTIVE_MIN * 60):
+            out[k] = v
+    return out
 
 
 def claude_budget(where=None):
@@ -457,28 +535,40 @@ def claude_budget(where=None):
         return "unknown", None
     used, reset = five
     week = usage_window(snap, "seven_day")
+    cfg = budget_settings(where)
+    users = claude_consumers()
+    sessions = sum(1 for v in users.values() if v.get("kind") != "executor")
+    runs = len(users) - sessions
     at = reset.astimezone().strftime("%H:%M")
-    line = "Claude subscription: 5-hour window %d%% used, resets %s (%s)%s%s" % (
+    active = ("; active: %d orchestrator session%s%s" % (sessions, "" if sessions == 1 else "s",
+                                                        ", %d Claude executor run%s" % (runs, "" if runs == 1 else "s")
+                                                        if runs else "")) if users else ""
+    line = "Claude subscription: 5-hour window %d%% used, resets %s (%s)%s%s; reserve %d%%%s" % (
         used, at, human_delta(reset), ", week %d%%" % week[0] if week else "",
-        " — reported by the operator" if snap.get("source") == "operator" else "")
-    projected, to_full = pace(used, reset, 5)
-    if projected is not None and projected >= 100 and to_full is not None:
-        out_at = (now() + dt.timedelta(minutes=to_full)).astimezone().strftime("%H:%M")
-        return "tight", (line + ". TIGHT: at this pace it runs out ≈%s, before the reset — treat Claude as low "
-                                "(conserve it; offload to Codex / DeepSeek)." % out_at)
-    threshold = surplus_threshold(where)
-    if projected is None or threshold <= 0 or 100 - projected < threshold:
+        " — reported by the operator" if snap.get("source") == "operator" else "", cfg["reserve"], active)
+    rate, basis = window_pace(snap, used, reset, 5)
+    if rate is None:
         return "normal", line + "."
-    weekly = week[0] if week else None
+    cap = 100 - cfg["reserve"]
+    projected = projected_at_reset(used, reset, rate)
+    if projected >= cap and rate > 0:
+        hit = (now() + dt.timedelta(minutes=max(cap - used, 0) / rate)).astimezone().strftime("%H:%M")
+        return "tight", line + (". TIGHT: at the current pace (%s) it reaches the reserve ≈%s, before the reset — "
+                                "treat Claude as low (conserve it; offload to Codex / DeepSeek)." % (basis, hit))
+    spare = cap - projected
+    if cfg["surplus"] <= 0 or spare < cfg["surplus"]:
+        return "normal", line + "."
     if week:
-        wproj, _ = pace(week[0], week[1], 24 * 7)
-        weekly = max(week[0], wproj or 0)
-    if weekly is not None and weekly >= WEEKLY_HEADROOM:
-        return "normal", line + (". About %d%% of the window would expire unused, but the weekly limit is tight "
-                                 "(%d%% projected): no surplus mode." % (100 - projected, weekly))
-    return "surplus", line + (". SURPLUS: about %d%% of the window would expire unused — until %s give subtasks to "
-                              "Claude subagents rather than to API-billed executors (DeepSeek, API-key profiles); "
-                              "orch guide budget." % (100 - projected, at))
+        wrate, _ = window_pace(snap, week[0], week[1], 24 * 7)
+        weekly = max(week[0], projected_at_reset(week[0], week[1], wrate) if wrate is not None else 0)
+        if weekly >= 100 - cfg["week_reserve"]:
+            return "normal", line + (". About %d%% of the window would expire unused beyond the reserve, but the "
+                                     "weekly limit is tight (%d%% projected, reserve %d%%): no surplus mode."
+                                     % (spare, weekly, cfg["week_reserve"]))
+    each = " — ≈%d%% for each of the %d orchestrator sessions" % (spare / sessions, sessions) if sessions > 1 else ""
+    return "surplus", line + (". SURPLUS: at the current pace (%s) about %d%% of the window would expire unused beyond "
+                              "the reserve%s — until %s give subtasks to Claude subagents rather than to API-billed "
+                              "executors (DeepSeek, API-key profiles); orch guide budget." % (basis, spare, each, at))
 
 
 def budget_event(session, announce=True):
@@ -520,6 +610,17 @@ def cmd_budget(a):
               "(orch guide budget), or report them: orch budget set --used 40 --resets 18:00")
         return 0
     print(line)
+    users = claude_consumers()
+    if users:
+        print("Active Claude consumers known to orch (sessions seen within %d min, Claude executor runs):" % ACTIVE_MIN)
+        for k, v in sorted(users.items(), key=lambda kv: kv[1].get("since") or ""):
+            print("  %-14s %-8s %s · since %s · seen %s%s" % (
+                k[:14], "run" if v.get("kind") == "executor" else "session", v.get("project") or "?",
+                short_time(v.get("since")), human_delta(parse_iso(v["seen"])), " (this session)" if k == session_id() else ""))
+    cfg = budget_settings()
+    print("Thresholds: surplus ≥ %d%% beyond a reserve of %d%% of the window, week reserve %d%% "
+          "(profile claude: --opt surplus=N|off, reserve=N, week_reserve=N)." % (
+              cfg["surplus"], cfg["reserve"], cfg["week_reserve"]))
     return 0
 
 
@@ -545,12 +646,17 @@ def cmd_statusline(a):
         if model:
             parts.append(model)
         cwd = (data.get("workspace") or {}).get("current_dir") if isinstance(data.get("workspace"), dict) else None
+        if data.get("session_id"):
+            heartbeat(str(data["session_id"]), cwd)          # this session counts among the Claude consumers
         snap = read_json(USAGE_SNAPSHOT, {})
         five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
         if five and five[1]:
             parts.append("5h %d%% → %s" % (five[0], five[1].astimezone().strftime("%H:%M")))
         if week:
             parts.append("week %d%%" % week[0])
+        n = sum(1 for v in claude_consumers().values() if v.get("kind") != "executor")
+        if n > 1:
+            parts.append("%d sessions" % n)
         mode, _ = claude_budget(Path(cwd) if cwd else None)
         if mode in ("surplus", "tight"):
             parts.append({"surplus": "surplus: Claude first", "tight": "tight: conserve Claude"}[mode])
@@ -826,7 +932,7 @@ def profile_fields(provider):
     if adapter is None:                      # manual lane: models = model keys (gemini-4-argon, …)
         return ["models", "use_for", "prefer_for", "rules", "max_open"]
     directives = adapter_directives(adapter_head(adapter))
-    extra = ["surplus"] if provider.lower() == "claude" else []      # budget mode: surplus=N (% leftover) | off
+    extra = list(BUDGET_DEFAULTS) if provider.lower() == "claude" else []    # budget mode: surplus, reserve, week_reserve
     return (["key"] if directives.get("secrets") else []) + list(RULE_FIELDS) + list(profile_env_map(directives)) + extra
 
 
@@ -901,6 +1007,10 @@ def parse_profile_value(field, raw):
             return "off"
         if not raw.isdigit() or not 1 <= int(raw) <= 100:
             raise SystemExit("orch: surplus=N (projected unused percent of the 5-hour window, 1–100) or surplus=off")
+        return int(raw)
+    if field in ("reserve", "week_reserve"):
+        if not raw.isdigit() or not 0 <= int(raw) <= 90:
+            raise SystemExit("orch: %s=N — percent kept for other sessions and safety, 0–90" % field)
         return int(raw)
     if field == "key" and not VAR_RE.fullmatch(raw):
         raise SystemExit("orch: --key takes a variable name (e.g. DEEPSEEK_API_KEY_WORK), not the key itself: "
@@ -1463,6 +1573,12 @@ def cmd_run(a):
     # on timeout or stop the whole tree goes, not just the adapter
     detach = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | 0x4} if IS_WINDOWS   # | CREATE_SUSPENDED
               else {"start_new_session": True})
+    consumer = "run:" + run_id if provider == "claude" else None      # spends the Claude subscription (budget)
+    if consumer:
+        try:
+            heartbeat(consumer, cwd, kind="executor")
+        except Exception:
+            consumer = None
     t0 = time.time()
     with log_file.open("w", encoding="utf-8") as log:
         try:
@@ -1489,6 +1605,11 @@ def cmd_run(a):
             kill_tree(proc, job)
             raise
     elapsed = int(time.time() - t0)
+    if consumer:
+        try:
+            forget(consumer)
+        except Exception:
+            pass
     log_text = log_file.read_text(encoding="utf-8", errors="replace")
 
     status = "OK" if rc == 0 else "FAILED"
@@ -2390,11 +2511,13 @@ def cmd_hook(a):
         data = hook_input()
         if data.get("cwd") and not os.environ.get("ORCH_PROJECT_DIR") and not os.environ.get("CLAUDE_PROJECT_DIR"):
             os.environ["ORCH_PROJECT_DIR"] = data["cwd"]
+        sid = data.get("session_id") or session_id()
         if a.event == "session-end":
+            forget(sid)               # no longer a Claude consumer
             log_session(data)         # usage snapshot of the main thread + subagents; silent
             return 0
         has_state = (project_dir() / ".orchestra").exists()
-        sid = data.get("session_id") or session_id()
+        heartbeat(sid)                # an active orchestrator instance (for the budget's consumer count)
         if a.event == "session-start":
             out = io_capture(lambda: cmd_status(argparse.Namespace(brief=True)))
             print(out.rstrip())

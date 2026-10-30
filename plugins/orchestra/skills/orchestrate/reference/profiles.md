@@ -16,6 +16,7 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 | "for all projects in /path/to/work — the work key" | `orch profile use deepseek work --path "/path/to/work"` |
 | "don't offer Antigravity in this project" | `orch profile use antigravity off` |
 | "no Claude in this project" (no orch-* subagents, no `orch run claude`) | `orch profile use claude off` |
+| "keep a quarter of the Claude window for my other sessions" | `orch profile set claude main --opt reserve=25` and `orch profile use claude main --default` |
 | "Claude executor on the second account" | `orch profile set claude alt --home ~/.claude-alt`; the operator logs in there once (`CLAUDE_CONFIG_DIR=… claude`) |
 | "add a DeepSeek profile work: key DEEPSEEK_API_KEY_WORK, flash only, no writing, tests and review only" | `orch profile set deepseek work --key DEEPSEEK_API_KEY_WORK --models deepseek-flash --write no --use-for tests,review` |
 | "a second Codex account" | `orch profile set codex alt --home ~/.codex-alt`; the operator runs the login command from the output (`CODEX_HOME=… codex login`) themselves — login is interactive |

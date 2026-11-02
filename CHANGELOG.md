@@ -23,7 +23,8 @@
   `~/.orchestra/prices.json`). The cost is frozen into each run's ledger entry as `cost_usd` (with the price
   `as_of`), so later price changes don't rewrite history; entries without it are priced when read. Counters are
   cached incrementally in `~/.orchestra/spend_cache.json` and restart on a shrunken ledger; a reset takes effect
-  at once. `prices.json` now holds dated entries (promotions that end) and DeepSeek peak windows — the peak rate
+  at once. Ledger entries and baselines carry microseconds, so a run that ended just before a reset stays out of the
+  new count. `prices.json` now holds dated entries (promotions that end) and DeepSeek peak windows — the peak rate
   applies 01:00–04:00 and 06:00–10:00 UTC Mon–Fri and is halved otherwise. `orch spend` warns when a provider's
   prices are older than 30 days.
 - **Surfaces**: `orch status` shows a line at ≥ 80%, the status line's `session in/out:` gains `deepseek $8.10/$10`,

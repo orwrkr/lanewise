@@ -835,9 +835,8 @@ out=$($ORCH status); grep -q "Codex subscription" <<<"$out" && bad "codex: statu
 rm -rf "$T/cx5"; mkdir -p "$T/cx5/sessions/2026/11/02"
 export CODEX_HOME; CODEX_HOME="$(native "$T/cx5")"
 $PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx5/sessions/2026/11/02/rollout-0001.jsonl")" 10 2 95 168
-cx_status >/dev/null
-out=$($ORCH status)
-contains "$out" "Codex subscription: 5-hour window 10% used" "codex: five-hour window in status"
+out=$($ORCH status)         # no status line ran first: routing must not depend on one being configured
+contains "$out" "Codex subscription: 5-hour window 10% used" "codex: orch status reads the limits by itself"
 contains "$out" "week 95%" "codex: week over the cap in status"
 contains "$out" "TIGHT: treat Codex as low" "codex: week over the cap → TIGHT"
 

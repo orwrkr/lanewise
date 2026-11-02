@@ -1020,6 +1020,10 @@ def codex_state(where=None):
 def codex_budget(where=None):
     """(mode, line) of the Codex subscription: TIGHT when a window's used share or its projection reaches its
     reserve (a weekly projection counts only after 24 h). No current data → no line and no mode."""
+    try:
+        refresh_codex(where)     # at most once a minute; routing must not depend on a status line being configured
+    except Exception:
+        pass
     cfg, _, entry = codex_state(where)
     if cfg is None or not entry:
         return "unknown", None

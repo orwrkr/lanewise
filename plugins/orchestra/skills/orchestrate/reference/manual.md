@@ -23,6 +23,13 @@ Only if ALL of these hold:
   or the task has already been discussed. Handed out at once — at most `operator.max_open_handoffs`.
 
 Tasks in the pool don't count as handed out and don't hold the critical path: keep working, don't wait for them.
+The profile's `max_open` is a hard cap on `new` and `take`, including with `--force`; the flag still bypasses
+the operator's open-task limit and availability blocks. All `handoff` commands refuse inside a worker.
+
+Manual state transitions and capacity checks share a project lock: only one concurrent `take` or `reclaim`
+can win. A take reserves ownership before creating its worktree outside the lock; failure returns it to the
+pool unless it was cancelled meanwhile. IDs remain reserved even if the counter is lost or corrupt. CLI lock
+waits are bounded; hooks and the status line skip busy state silently after a much shorter wait.
 
 ## Preparation
 
@@ -69,7 +76,8 @@ Tasks in the pool don't count as handed out and don't hold the critical path: ke
 - Parallel work is over and there's nothing else to wait for — run `orch handoff wait --any --timeout 8h` in the
   background and end the turn, briefly saying what you're waiting for. It returns when a handed-out task finishes
   (exit 0, or 2 on BLOCKED/FAILED) or when a pool check is due (exit 3, the `⌛` text below) — handle it, then start
-  it again while anything is still pending.
+  it again while anything is still pending. An unarchived final result already present when `wait --any` starts
+  is returned once if it has not been reported; CANCELLED and REASSIGNED are excluded.
 - The operator says "AG-0003 done" / "cancel AG-0003" → `orch handoff done AG-0003` / `orch handoff cancel AG-0003`.
 
 ## "Orchestra" events
@@ -83,8 +91,11 @@ Tasks in the pool don't count as handed out and don't hold the critical path: ke
 - `⚠ … not started after N min` → `orch handoff cancel <id> --reassigned`, run it via the fallback, tell the
   operator.
 - `⚠ … in progress for N min without a final status` → ask the operator once; don't reassign on your own.
+  File activity without RESULT.md (`STARTED?`) gets this warning too; fast post-tool checks never scan workdirs.
 
 ## Pool checks: taking tasks back
+
+A full `orch handoff check` returns an assignment claim older than 10 minutes to the pool; an interrupted direct assignment is cancelled and archived.
 
 The pool's clock runs from the operator's **last take** from the pool (or from when the pool opened, if nothing
 was taken). Every `operator.pool_check_min` (5) minutes without a take, `orch` raises one `⌛` check: in a hook, or
@@ -103,6 +114,7 @@ At each check:
 3. Run a reclaimed task with `orch run … --handoff <id>` — a successful run marks it finished and frees the
    "next" slot; if you did it another way (subagent, yourself) or gave up, `orch handoff done <id>` (or
    `--status FAILED`). Nothing worth doing at a check and nothing to reclaim → leave the pool as it is.
+   A PARTIAL or BLOCKED report keeps the slot busy until `orch handoff done <id>`.
 4. To the operator — one line per check: what you took back and why.
 
 ## Other manual agents

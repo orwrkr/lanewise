@@ -11,7 +11,7 @@ Antigravity and similar agents. Goal: maximum quality for minimum limits, money 
 manual lane. Talk to the operator in their language, briefly.
 
 `orch` is the plugin CLI (already on the Bash tool's PATH; otherwise `python3 ${CLAUDE_PLUGIN_ROOT}/bin/orch`; in
-PowerShell — `orch.cmd`). Exit codes: `0` ok · `75` limit/balance/profile/lane unavailable → take the fallback ·
+PowerShell — `orch.cmd`). Exit codes: `0` report available (read STATUS) · `75` limit/balance/capacity/profile/lane unavailable → take the fallback ·
 `124` timeout · `2` manual task ended with status BLOCKED/FAILED · `3` (`handoff wait --any`) a pool check is due.
 Detailed sections of this skill: `orch guide <section>` (`manual`, `quota`, `profiles`, `usage`, `lead`, `budget`;
 files `reference/*.md` next to this one) — read one when you reach its topic.
@@ -81,9 +81,9 @@ the project rules (CLAUDE.md, AGENTS.md) itself — put only the task in the pro
 4. **DeepSeek permissions** are explicit only: read/write inside `--cd`, git reads; grant tests, build, linter with
    `--allow 'Bash(<command>:*)'`. Permission denials are listed at the end of its answer; if needed, rerun with
    `--allow`. Codex is confined by its sandbox (`read-only` / `workspace-write`) and needs no `--allow`.
-5. While the executor works, do something else. Outcome: `[OK]/[FAILED]/[QUOTA_EXHAUSTED]/[TIMEOUT]`, tokens, the
-   answer, paths to `output.md` and `log.txt`. On timeout `orch` stops the executor's whole process tree.
-6. Exit 75: the Codex limit or DeepSeek balance is already recorded in `orch quota` (a profile has its own key,
+5. While the executor works, do something else. Outcome: `[OK]/[BLOCKED]/[PARTIAL]` (exit 0; read the report),
+   `[FAILED]/[QUOTA_EXHAUSTED]/[TIMEOUT]`, tokens, the answer, paths to `output.md` and `log.txt`. On timeout `orch` stops the executor's whole process tree.
+6. Exit 75: limit/balance/capacity — take the fallback; `orch quota` records the block (a profile has its own key,
    `deepseek@work`) — go straight to the fallback. `PROFILE_OFF` / `PROFILE_DENIED` — the profile doesn't allow it:
    pick an allowed slot, don't work around it.
 7. **Always verify** the result (diff, tests, build), then cross-review if the code is significant.
@@ -138,5 +138,5 @@ same.
 - Don't run two writing executors on the same files in the same working tree.
 - Don't give DeepSeek broad permissions (`--allow 'Bash'`, `--allow 'Bash(*)'`) — only the task's specific commands.
 - Don't work around the profile: `--profile` and `--force` — only at the operator's direct request (`--force` does
-  not unlock a disabled manual lane).
+  not unlock a disabled manual lane or bypass a profile's `max_open`).
 - Don't ask for, post in chat or store API keys — the profile holds only the variable name.

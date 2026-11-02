@@ -29,7 +29,8 @@ from pathlib import Path
 
 EXIT_QUOTA = 75
 LIMIT_RE = re.compile(r"usage limit|rate[ _-]?limit|too many requests|\b429\b|quota|out of credits"
-                      r"|limit (?:has been )?(?:reached|exceeded)", re.I)
+                      r"|limit (?:has been )?(?:reached|exceeded)|selected model is at capacity", re.I)
+CAPACITY_RE = re.compile(r"selected model is at capacity", re.I)
 IN_RE = re.compile(r"(?:try again|retry|resets?|available again)\s+in\s+(?:about\s+)?(\d+)\s*"
                    r"(second|sec|minute|min|hour|hr|day|h|m|d)s?", re.I)
 AT_RE = re.compile(r"(?:try again|retry|resets?|available again)\s+(?:at|after)\s+(\d{1,2}):(\d{2})\s*(am|pm)?", re.I)
@@ -221,7 +222,16 @@ def main():
     if rc != 0:
         text = "\n".join(errors)
         if LIMIT_RE.search(text):
-            hint = reset_hint(text)
+            capacity = CAPACITY_RE.search(text)
+            selected = model or config_model()
+            if capacity and not selected:
+                (run_dir / "quota_model.json").write_text(json.dumps(""), encoding="utf-8")
+                say("model at capacity, but its id is unknown; no provider-wide block recorded")
+                return EXIT_QUOTA
+            if capacity:
+                # orch prefixes this model id with the current profile's availability key.
+                (run_dir / "quota_model.json").write_text(json.dumps(selected), encoding="utf-8")
+            hint = "+10m" if capacity else reset_hint(text)
             if hint:
                 (run_dir / "quota_until").write_text(hint + "\n", encoding="utf-8")
             say("ChatGPT/Codex subscription limit: %s" % one_line(text, 300))

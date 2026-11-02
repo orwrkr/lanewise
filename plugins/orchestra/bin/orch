@@ -35,6 +35,9 @@ import string
 import subprocess
 import sys
 import time
+import tempfile
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -134,19 +137,138 @@ def parse_duration(text, default_unit="m"):
     return n * {"s": 1, "m": 60, "h": 3600, "d": 86400}[u]
 
 
-def read_json(path, default):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return default
+class StateError(Exception):
+    """Shared state is busy or unreadable; never overwrite it with an empty default."""
+
+
+LOCK_WAIT = 10.0
+QUIET_LOCK_WAIT = 1.5
+_held_locks = {}
+_quiet_state = False
+
+
+@contextmanager
+def state_lock(path):
+    """Reentrant process lock on a stable sidecar file; the OS releases it on process death."""
+    path = Path(path)
+    key = os.path.normcase(str(path.resolve()))
+    if key in _held_locks:
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + (QUIET_LOCK_WAIT if _quiet_state else LOCK_WAIT)
+    with path.open("a+b") as f:
+        f.seek(0, os.SEEK_END)
+        if f.tell() == 0:
+            f.write(b"\0")
+            f.flush()
+        while True:
+            try:
+                if IS_WINDOWS:
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise StateError("shared state busy: timed out waiting for %s; retry the command" % path)
+                time.sleep(0.025)
+        _held_locks[key] = f
+        try:
+            yield
+        finally:
+            del _held_locks[key]
+            if IS_WINDOWS:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def locked(scope):
+    def decorate(fn):
+        @wraps(fn)
+        def call(*args, **kwargs):
+            path = ORCH_HOME / ".state.lock" if scope == "home" else state_dir() / ".state.lock"
+            with state_lock(path):
+                return fn(*args, **kwargs)
+        return call
+    return decorate
+
+
+_warned_state = set()
+
+
+def warn_state(path, detail):
+    if not _quiet_state and str(path) not in _warned_state:
+        _warned_state.add(str(path))
+        print("orch: warning: %s: %s" % (path, detail), file=sys.stderr)
+
+
+def read_json(path, default, recover_corrupt=False, object_required=False):
+    if recover_corrupt:
+        lock = ORCH_HOME / ".state.lock" if Path(path) in (USAGE_SNAPSHOT, SESSIONS_FILE) else state_dir() / ".state.lock"
+        with state_lock(lock):
+            return _read_json(path, default, True, object_required)
+    return _read_json(path, default, False, object_required)
+
+
+def _read_json(path, default, recover_corrupt, object_required):
+    for attempt in range(5):
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            if (isinstance(default, dict) or object_required) and not isinstance(data, dict):
+                raise ValueError("expected a JSON object")
+            return data
+        except FileNotFoundError:
+            return default
+        except PermissionError as ex:
+            if attempt == 4:
+                raise StateError("cannot read %s: %s" % (path, ex))
+            time.sleep(0.01 * (2 ** attempt))
+        except ValueError as ex:
+            if recover_corrupt:
+                backup = Path(str(path) + ".corrupt")
+                n = 1
+                while backup.exists():
+                    backup = Path(str(path) + ".corrupt.%d" % n)
+                    n += 1
+                try:
+                    Path(path).rename(backup)
+                except OSError as rename_error:
+                    raise StateError("cannot preserve %s: %s" % (path, rename_error))
+                warn_state(path, "corrupt state preserved as %s; starting fresh" % backup)
+                return default
+            raise StateError("cannot read %s: %s" % (path, ex))
+        except OSError as ex:
+            raise StateError("cannot read %s: %s" % (path, ex))
 
 
 def write_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(str(tmp), str(path))
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", prefix=path.name + ".",
+                                         suffix=".tmp", dir=str(path.parent), delete=False) as f:
+            tmp = Path(f.name)
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        for attempt in range(8):
+            try:
+                os.replace(str(tmp), str(path))
+                break
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(0.01 * (2 ** attempt))
+    except OSError as ex:
+        raise StateError("cannot write %s: %s" % (path, ex))
+    finally:
+        if tmp is not None and tmp.exists():
+            tmp.unlink()
 
 
 def git(args, cwd, check=False):
@@ -175,7 +297,7 @@ def project_dir():
 def state_dir(create=True):
     p = project_dir() / ".orchestra"
     if create and not p.exists():
-        p.mkdir(parents=True)
+        p.mkdir(parents=True, exist_ok=True)
         ensure_git_exclude(project_dir())
     return p
 
@@ -278,8 +400,17 @@ AVAIL_FILE = ORCH_HOME / "availability.json"
 STATUSES = ("ok", "low", "exhausted", "disabled", "away")
 
 
-def load_avail(prune=True):
-    data = read_json(AVAIL_FILE, {"entries": {}})
+@locked("home")
+def load_avail(prune=True, strict=False):
+    try:
+        data = read_json(AVAIL_FILE, {"entries": {}})
+        if not isinstance(data.get("entries", {}), dict) or any(not isinstance(v, dict) for v in data.get("entries", {}).values()):
+            raise StateError("cannot read %s: invalid entries" % AVAIL_FILE)
+    except StateError as ex:
+        if strict:
+            raise
+        warn_state(AVAIL_FILE, str(ex))
+        return {"entries": {}}
     entries = data.setdefault("entries", {})
     if prune:
         changed = False
@@ -321,9 +452,10 @@ def availability(key):
     return (True, None, None)
 
 
+@locked("home")
 def set_avail(key, status, until=None, note=None, source="manual"):
     key = norm_key(key)
-    data = load_avail()
+    data = load_avail(strict=True)
     if status == "ok":
         data["entries"].pop(key, None)
     else:
@@ -342,6 +474,7 @@ def describe_entry(k, e):
     return "%-28s %-9s %s%s" % (k, e.get("status"), when, note)
 
 
+@locked("home")
 def cmd_quota(a):
     if a.action == "show":
         data = load_avail()
@@ -365,7 +498,7 @@ def cmd_quota(a):
         return 0
     if a.action == "clear":
         key = norm_key(a.key)
-        data = load_avail()
+        data = load_avail(strict=True)
         # a bare provider also clears its profile entries (deepseek → deepseek@work), not its model entries
         gone = [k for k in data["entries"] if k == key or ("/" not in key and "@" not in key and "/" not in k
                                                              and k.startswith(key + "@"))]
@@ -410,15 +543,22 @@ def epoch_iso(v):
         return None
 
 
+@locked("home")
 def save_usage(windows, source):
     """{"five_hour": {"used": %, "resets_at": iso}, "seven_day": {…}} → the snapshot shared by all sessions, plus a
     sample of the 5-hour window for the recent pace."""
-    snap = read_json(USAGE_SNAPSHOT, {})
+    snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
     t = now()
-    stale = (t - (parse_iso(snap.get("updated") or "") or t - dt.timedelta(days=1))).total_seconds() > 60
-    if all(snap.get(k) == v for k, v in windows.items()) and snap.get("source") == source and not stale:
+    stale = any((t - (measured_at(snap, k) or t - dt.timedelta(days=1))).total_seconds() > 60 for k in windows)
+    if all({f: snap.get(k, {}).get(f) for f in v} == v for k, v in windows.items()) \
+            and snap.get("source") == source and not stale:
         return                     # the status line refreshes often: write only on a change (or once a minute)
-    snap.update(windows, updated=iso(t), source=source)
+    # Preserve the measurement time of windows absent from this update, including old snapshots.
+    for name in ("five_hour", "seven_day"):
+        if isinstance(snap.get(name), dict):
+            if not snap[name].get("updated"):
+                snap[name]["updated"] = snap.get("updated")
+    snap.update({k: dict(v, updated=iso(t)) for k, v in windows.items()}, updated=iso(t), source=source)
     five = windows.get("five_hour")
     if five:
         keep = t - dt.timedelta(hours=HISTORY_KEEP_H)
@@ -441,11 +581,21 @@ def usage_window(snap, name):
     return float(w["used"]), reset
 
 
+USAGE_FRESH_SECONDS = 20 * 60
+
+
+def measured_at(snap, name):
+    w = snap.get(name) or {}
+    return parse_iso(w.get("updated") or snap.get("updated") or "")
+
+
 def window_pace(snap, used, reset, hours):
     """(%/min, basis): the higher of the window average and the recent pace of all sessions; (None, None) if unknown."""
     if reset is None:
         return None, None
-    t = now()
+    t = measured_at(snap, "five_hour" if hours == 5 else "seven_day")
+    if t is None:
+        return None, None
     elapsed = (t - (reset - dt.timedelta(hours=hours))).total_seconds() / 60
     rates = []
     if elapsed >= PACE_MIN_ELAPSED:
@@ -466,8 +616,8 @@ def window_pace(snap, used, reset, hours):
     return max(rates) if rates else (None, None)
 
 
-def projected_at_reset(used, reset, rate):
-    return used + rate * (reset - now()).total_seconds() / 60
+def projected_at_reset(used, reset, rate, measured):
+    return used + rate * (reset - measured).total_seconds() / 60
 
 
 def budget_settings(where=None):
@@ -475,7 +625,9 @@ def budget_settings(where=None):
     out = dict(BUDGET_DEFAULTS)
     try:
         prof = resolve_profile("claude", where or project_dir())
-    except ProfileError:
+    except ProfileError as ex:
+        if str(PROFILES_FILE) in str(ex):
+            warn_state(PROFILES_FILE, str(ex))
         return out
     if prof.name == "off":
         out["surplus"] = 0
@@ -486,11 +638,12 @@ def budget_settings(where=None):
     return out
 
 
+@locked("home")
 def heartbeat(key, where=None, kind="session"):
     """Mark an orchestrator session (or a running Claude executor) as a Claude consumer; at most once a minute."""
     if not key:
         return
-    data = read_json(SESSIONS_FILE, {})
+    data = read_json(SESSIONS_FILE, {}, recover_corrupt=True)
     data = data if isinstance(data, dict) else {}
     t = now()
     e = data.get(key) if isinstance(data.get(key), dict) else {}
@@ -506,8 +659,9 @@ def heartbeat(key, where=None, kind="session"):
     write_json(SESSIONS_FILE, data)
 
 
+@locked("home")
 def forget(key):
-    data = read_json(SESSIONS_FILE, {})
+    data = read_json(SESSIONS_FILE, {}, recover_corrupt=True)
     if isinstance(data, dict) and data.pop(key, None) is not None:
         write_json(SESSIONS_FILE, data)
 
@@ -515,7 +669,7 @@ def forget(key):
 def claude_consumers():
     """Active Claude consumers orch knows of: Claude-led orchestrator sessions seen within ACTIVE_MIN minutes, and
     Claude executor runs in progress (a session led by another model does not spend Claude)."""
-    data = read_json(SESSIONS_FILE, {})
+    data = read_json(SESSIONS_FILE, {}, recover_corrupt=True)
     t, out = now(), {}
     for k, v in (data.items() if isinstance(data, dict) else []):
         seen = parse_iso(v.get("seen") or "") if isinstance(v, dict) else None
@@ -528,14 +682,32 @@ def claude_consumers():
 
 
 def claude_budget(where=None):
-    """(mode, line): surplus | tight | normal, or ("unknown", None) without current numbers."""
-    snap = read_json(USAGE_SNAPSHOT, {})
-    five = usage_window(snap, "five_hour")
+    """(mode, line): projections stay anchored to measurements; either limit can make Claude tight."""
+    snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
+    five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
+    cfg = budget_settings(where)
+    weekly = None
+    week_tight = False
+    if week:
+        wu, wr = week
+        wm = measured_at(snap, "seven_day")
+        wrate, _ = window_pace(snap, wu, wr, 24 * 7)
+        weekly = max(wu, projected_at_reset(wu, wr, wrate, wm) if wrate is not None else wu)
+        projection = "%d%% projected" % weekly if wrate is not None else "projection unavailable"
+        elapsed = (wm - (wr - dt.timedelta(days=7))).total_seconds() if wm and wr else 0
+        week_tight = wu >= 100 - cfg["week_reserve"] or (
+            elapsed >= 86400 and weekly >= 100 - cfg["week_reserve"])
+    instruction = "treat Claude as low (conserve it; offload to Codex / DeepSeek)."
+    weekly_line = (" TIGHT: weekly limit is tight (%s, %d%% used, reserve %d%%) — %s"
+                   % (projection, week[0], cfg["week_reserve"], instruction)) if week_tight else ""
     if not five or five[1] is None:
+        if week_tight:
+            return "tight", "Claude subscription:" + weekly_line
         return "unknown", None
     used, reset = five
-    week = usage_window(snap, "seven_day")
-    cfg = budget_settings(where)
+    measured = measured_at(snap, "five_hour")
+    age = max((now() - measured).total_seconds(), 0) if measured else None
+    stale = age is None or age > USAGE_FRESH_SECONDS
     users = claude_consumers()
     sessions = sum(1 for v in users.values() if v.get("kind") != "executor")
     runs = len(users) - sessions
@@ -546,38 +718,37 @@ def claude_budget(where=None):
     line = "Claude subscription: 5-hour window %d%% used, resets %s (%s)%s%s; reserve %d%%%s" % (
         used, at, human_delta(reset), ", week %d%%" % week[0] if week else "",
         " — reported by the operator" if snap.get("source") == "operator" else "", cfg["reserve"], active)
+    if stale:
+        line += "; measured %s (stale)" % (human_delta(measured) if measured else "at an unknown time")
+    if week_tight:
+        return "tight", line + "." + weekly_line
     rate, basis = window_pace(snap, used, reset, 5)
-    if rate is None:
-        return "normal", line + "."
     cap = 100 - cfg["reserve"]
-    projected = projected_at_reset(used, reset, rate)
-    if projected >= cap and rate > 0:
-        hit = (now() + dt.timedelta(minutes=max(cap - used, 0) / rate)).astimezone().strftime("%H:%M")
-        return "tight", line + (". TIGHT: at the current pace (%s) it reaches the reserve ≈%s, before the reset — "
-                                "treat Claude as low (conserve it; offload to Codex / DeepSeek)." % (basis, hit))
+    projected = projected_at_reset(used, reset, rate, measured) if rate is not None else used
+    if used >= cap or (projected >= cap and rate is not None and rate > 0):
+        hit = measured + dt.timedelta(minutes=max(cap - used, 0) / rate) if rate else None
+        when = ("it reaches the reserve ≈%s, before the reset" % hit.astimezone().strftime("%H:%M")
+                if hit and hit > now() else "the reserve is already reached or projected to be reached")
+        return "tight", line + ". TIGHT: at the current pace (%s) %s — %s" % (basis or "used share", when, instruction)
     spare = cap - projected
-    if cfg["surplus"] <= 0 or spare < cfg["surplus"]:
+    if rate is None or stale or cfg["surplus"] <= 0 or spare < cfg["surplus"]:
         return "normal", line + "."
-    if week:
-        wrate, _ = window_pace(snap, week[0], week[1], 24 * 7)
-        weekly = max(week[0], projected_at_reset(week[0], week[1], wrate) if wrate is not None else 0)
-        if weekly >= 100 - cfg["week_reserve"]:
-            return "normal", line + (". About %d%% of the window would expire unused beyond the reserve, but the "
-                                     "weekly limit is tight (%d%% projected, reserve %d%%): no surplus mode."
-                                     % (spare, weekly, cfg["week_reserve"]))
+    if weekly is not None and weekly >= 100 - cfg["week_reserve"]:
+        return "normal", line + ". Weekly projection %d%%: no surplus mode yet." % weekly
     each = " — ≈%d%% for each of the %d orchestrator sessions" % (spare / sessions, sessions) if sessions > 1 else ""
     return "surplus", line + (". SURPLUS: at the current pace (%s) about %d%% of the window would expire unused beyond "
                               "the reserve%s — until %s give subtasks to Claude subagents rather than to API-billed "
                               "executors (DeepSeek, API-key profiles); orch guide budget." % (basis, spare, each, at))
 
 
+@locked("home")
 def budget_event(session, announce=True):
     """A hook event when this session's budget mode changes (surplus / tight / normal), once per change.
     announce=False only records the mode (SessionStart already prints it in the status)."""
     mode, line = claude_budget()
     if mode == "unknown":
         return None
-    snap = read_json(USAGE_SNAPSHOT, {})
+    snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
     seen = snap.get("announced") if isinstance(snap.get("announced"), dict) else {}
     key = session or "-"
     if seen.get(key) == mode:
@@ -589,6 +760,7 @@ def budget_event(session, announce=True):
     return ("💡 " + line) if announce else None
 
 
+@locked("home")
 def cmd_budget(a):
     """orch budget [show|set|clear]: the Claude subscription budget used for routing (surplus / tight)."""
     if a.action == "set":
@@ -648,18 +820,27 @@ def cmd_statusline(a):
         cwd = (data.get("workspace") or {}).get("current_dir") if isinstance(data.get("workspace"), dict) else None
         if data.get("session_id"):
             heartbeat(str(data["session_id"]), cwd)          # this session counts among the Claude consumers
-        snap = read_json(USAGE_SNAPSHOT, {})
+        snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
         five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
         if five and five[1]:
             parts.append("5h %d%% → %s" % (five[0], five[1].astimezone().strftime("%H:%M")))
+            measured = measured_at(snap, "five_hour")
+            if not measured or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS:
+                parts.append("stale: %s" % (human_delta(measured) if measured else "age unknown"))
         if week:
             parts.append("week %d%%" % week[0])
         n = sum(1 for v in claude_consumers().values() if v.get("kind") != "executor")
         if n > 1:
             parts.append("%d sessions" % n)
-        mode, _ = claude_budget(Path(cwd) if cwd else None)
+        mode, budget_line = claude_budget(Path(cwd) if cwd else None)
         if mode in ("surplus", "tight"):
-            parts.append({"surplus": "surplus: Claude first", "tight": "tight: conserve Claude"}[mode])
+            weekly = re.search(r"weekly limit is tight \((\d+)% projected", budget_line or "")
+            if weekly:
+                parts.append("tight: weekly limit (%s%% projected); conserve Claude" % weekly.group(1))
+            elif "weekly limit is tight" in (budget_line or ""):
+                parts.append("tight: weekly limit (%d%% used); conserve Claude" % week[0])
+            else:
+                parts.append({"surplus": "surplus: Claude first", "tight": "tight: conserve Claude"}[mode])
     except Exception:
         pass
     line = " · ".join(parts) or "Orchestra"
@@ -821,7 +1002,7 @@ def session_profiles(text=None):
     return out
 
 
-def resolve_profile(provider, where, override=None, data=None):
+def resolve_profile(provider, where, override=None, data=None, choices=None):
     """Active profile of a provider for a directory: --profile → session choice (ORCH_PROFILES) → directory binding →
     provider default → built-in."""
     provider = provider.lower()
@@ -830,7 +1011,7 @@ def resolve_profile(provider, where, override=None, data=None):
         if err:
             raise ProfileError(err)
     sec, profs = provider_section(data, provider)
-    session = session_profiles()
+    session = session_profiles() if choices is None else choices
     if override:
         name, source = override.lower(), "--profile flag"
     elif provider in session:
@@ -968,6 +1149,7 @@ def profile_lines(where, data=None):
     if data is None:
         data, err = load_profiles()
         if err:
+            warn_state(PROFILES_FILE, err)
             return ["⚠ " + err + " — CLI executors and manual tasks will not start until the file is fixed"]
     lines = []
     for provider in managed_providers(data):
@@ -1025,6 +1207,7 @@ def login_hint(home):
     return hint
 
 
+@locked("home")
 def cmd_profile(a):
     data, err = load_profiles()
     if err and a.action != "show":
@@ -1242,9 +1425,10 @@ def ledger_append(rec):
         return
     try:
         USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with USAGE_FILE.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(dict(rec, ts=iso(now())), ensure_ascii=False) + "\n")
-    except OSError:
+        with state_lock(ORCH_HOME / ".usage.lock"):
+            with USAGE_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(dict(rec, ts=iso(now())), ensure_ascii=False) + "\n")
+    except (OSError, StateError):
         pass                     # the ledger is a convenience: never fail a run because of it
 
 
@@ -1612,7 +1796,9 @@ def cmd_run(a):
             pass
     log_text = log_file.read_text(encoding="utf-8", errors="replace")
 
-    status = "OK" if rc == 0 else "FAILED"
+    output = out_file.read_text(encoding="utf-8", errors="replace") if out_file.exists() else ""
+    report = re.search(r"^[ \t]*STATUS:[ \t]*(DONE|BLOCKED|PARTIAL)\b", output, re.M)
+    status = (report.group(1) if report and report.group(1) != "DONE" else "OK") if rc == 0 else "FAILED"
     quota_note = ""
     if rc != 0 and rc != EXIT_TIMEOUT:
         # adapters that report limits themselves opt out of scanning the log (worker output may mention "quota")
@@ -1629,13 +1815,19 @@ def cmd_run(a):
                 pass
         if hit:
             status = "QUOTA_EXHAUSTED"
-            block = prof.label if a.quota_scope == "provider" else key    # each profile has its own key/account
+            # An adapter may narrow an availability failure to the selected model (never widen its scope).
+            scoped_model = read_json(run_dir / "quota_model.json", None)
+            block = (prof.label + "/" + scoped_model if isinstance(scoped_model, str) and scoped_model
+                     else prof.label if a.quota_scope == "provider" else key)
             if manual:
                 quota_note = " (no timed reset — after topping up: orch quota clear %s)" % block
             elif until is None:
                 until = now() + dt.timedelta(minutes=a.quota_backoff)
                 quota_note = " (reset time not recognised — rechecking in %d min)" % a.quota_backoff
-            set_avail(block, "exhausted", until, "auto: limit detected in the output of %s" % run_id, source="auto")
+            if scoped_model == "":
+                quota_note = " (model id unknown — no availability block recorded)"
+            else:
+                set_avail(block, "exhausted", until, "auto: limit detected in the output of %s" % run_id, source="auto")
             rc = EXIT_QUOTA
     if rc == EXIT_TIMEOUT:
         status = "TIMEOUT"
@@ -1650,8 +1842,9 @@ def cmd_run(a):
                    "status": status, "elapsed_s": elapsed, "usage": usage, "handoff": handoff})
     if handoff and status == "OK":
         finish_reclaimed(handoff, "DONE", run_id)     # frees the one-at-a-time slot of the pool
+    elif handoff and status in ("PARTIAL", "BLOCKED"):
+        print("The reclaimed task slot stays busy until orch handoff done %s." % handoff)
 
-    output = out_file.read_text(encoding="utf-8", errors="replace") if out_file.exists() else ""
     if not output.strip() and rc == 0:
         output = log_text[-a.max_chars:]
     shown = model or ("(default: %s)" % usage["model"] if usage and usage.get("model") else "(default)")
@@ -1717,9 +1910,10 @@ def cmd_launch(a):
         choices.append(spec.strip().lower())
     if a.no_claude:
         choices.append("claude=off")
+    selected = session_profiles(",".join(choices))
     cwd = project_dir()
     try:
-        prof = resolve_profile(provider, cwd, a.profile)
+        prof = resolve_profile(provider, cwd, a.profile, choices=selected)
         if prof.name == "off":
             raise SystemExit("orch: PROFILE_OFF %s — off for %s (%s); choose one: orch launch %s --profile <name>"
                              % (provider, canon_path(project_root(cwd)), prof.source, provider))
@@ -1764,12 +1958,10 @@ def cmd_launch(a):
     if not claude:
         raise SystemExit("orch: claude CLI not found (or set ORCH_CLAUDE_BIN)")
     cmd = exe_command(claude) + [str(x) for x in spec.get("args") or []] + list(a.claude_args or [])
-    claude_off = session_profiles(lead.get("ORCH_PROFILES", "")).get("claude") == "off"
-    if not claude_off:
-        try:
-            claude_off = resolve_profile("claude", cwd).name == "off"
-        except ProfileError:
-            pass
+    try:
+        claude_off = resolve_profile("claude", cwd, choices=selected).name == "off"
+    except ProfileError as ex:
+        raise SystemExit("orch: PROFILE_ERROR claude — %s" % ex)
     print("Lead: %s · %s (background calls: %s) — every model request of this session goes to %s"
           % (prof.label, lead["ORCH_LEAD_MODEL"], spec.get("fast_model") or "?", spec.get("endpoint") or provider))
     print("Claude: %s" % ("off — no Claude model is used in this session" if claude_off else
@@ -1807,7 +1999,10 @@ def make_worktree(name, base="HEAD", branch=None):
     if path.exists():
         return path, branch
     wt_root.mkdir(parents=True, exist_ok=True)
-    git(["worktree", "add", "-b", branch, str(path), base], proj, check=True)
+    exists = git(["show-ref", "--verify", "--quiet", "refs/heads/" + branch], proj)
+    args = ["worktree", "add", str(path), branch] if exists and exists.returncode == 0 else \
+        ["worktree", "add", "-b", branch, str(path), base]
+    git(args, proj, check=True)
     ensure_git_exclude(proj)
     return path, branch
 
@@ -1879,24 +2074,37 @@ def handoffs_root():
     return state_dir() / "handoffs"
 
 
+@locked("project")
 def next_handoff_id(prefix):
     root = handoffs_root()
     root.mkdir(parents=True, exist_ok=True)
-    counter = read_json(root / "counter.json", {})
-    n = counter.get(prefix, 0) + 1
+    counter = read_json(root / "counter.json", {}, recover_corrupt=True)
+    numbers = [int(d.name[len(prefix) + 1:]) for d in root.iterdir()
+               if d.name.startswith(prefix + "-") and d.name[len(prefix) + 1:].isdigit()]
+    value = counter.get(prefix, 0)
+    n = max(numbers + [value if isinstance(value, int) else 0])
+    while True:
+        n += 1
+        hid = "%s-%04d" % (prefix, n)
+        try:
+            (root / hid).mkdir()    # a reserved id survives a lost/corrupt counter or a failed assignment
+            break
+        except FileExistsError:
+            continue
     counter[prefix] = n
     write_json(root / "counter.json", counter)
-    return "%s-%04d" % (prefix, n)
+    return hid
 
 
 def load_meta(hid):
     p = handoffs_root() / hid / "meta.json"
-    m = read_json(p, None)
+    m = read_json(p, None, object_required=True)
     if m is None:
         raise SystemExit("orch: handoff %s not found" % hid)
     return m
 
 
+@locked("project")
 def save_meta(m):
     write_json(handoffs_root() / m["id"] / "meta.json", m)
     try:
@@ -1911,7 +2119,11 @@ def all_metas():
         return []
     out = []
     for d in sorted(root.iterdir()):
-        m = read_json(d / "meta.json", None) if d.is_dir() else None
+        try:
+            m = read_json(d / "meta.json", None, object_required=True) if d.is_dir() else None
+        except StateError as ex:
+            warn_state(d / "meta.json", str(ex))
+            continue
         if m:
             out.append(m)
     return out
@@ -2001,7 +2213,7 @@ def operator_card(m):
                  "│ Suggested: %s%s" % (suggestion(m), " (own worktree)" if m.get("worktree") else ""),
                  "│ Take it: say “%s to %s” (or /orchestra:manual take %s) — you then get the folder and paste line."
                  % (m["id"], agent_name(m.get("provider")), m["id"])]
-        every = read_json(handoffs_root() / ".pool.json", {}).get("check_min") or POOL_CHECK_MIN
+        every = read_json(handoffs_root() / ".pool.json", {}, recover_corrupt=True).get("check_min") or POOL_CHECK_MIN
         lines.append("│ No take from the pool for %d min → the orchestrator starts taking tasks back, one at a time while "
                      "waiting still makes sense%s." % (every, " (this one: %s)" % m["fallback"] if m.get("fallback") else ""))
         lines.append("└ Not needed: “%s: cancel”" % m["id"])
@@ -2060,8 +2272,6 @@ def manual_gate(provider, model_key, override, max_open, force, check_operator=T
         print("PROFILE_DENIED %s — model %s not allowed (allowed: %s; %s)." % (
             prof.label, model_key, ", ".join(map(str, models)), prof.source))
         return None, EXIT_QUOTA
-    if isinstance(prof.data.get("max_open"), int):
-        max_open = min(max_open, prof.data["max_open"])
     ok, e, k = availability("operator")
     if check_operator and not ok and not force:
         print("OPERATOR_AWAY — %s\nThe manual lane is closed; assign the task to an automated executor."
@@ -2075,19 +2285,22 @@ def manual_gate(provider, model_key, override, max_open, force, check_operator=T
     return (prof, max_open), None
 
 
-def limit_reached(max_open, cap, force):
+def limit_reached(prof, max_open, force):
     n = taken_count()
+    profile_cap = prof.data.get("max_open")
+    if isinstance(profile_cap, int) and n >= profile_cap:
+        print("HANDOFF_LIMIT: %d manual tasks already open (profile limit %d). Wait for one to finish, "
+              "merge tasks or assign to an automated executor." % (n, profile_cap))
+        return True
     if n >= max_open and not force:
-        print("HANDOFF_LIMIT: %d manual tasks already open (limit %d%s). Wait for one to finish, merge tasks "
-              "into one or assign to an automated executor. (--force to bypass)" % (
-                  n, max_open, ", profile" if max_open < cap else ""))
+        print("HANDOFF_LIMIT: %d manual tasks already open (limit %d). Wait for one to finish, merge tasks "
+              "or assign to an automated executor. (--force to bypass)" % (n, max_open))
         return True
     return False
 
 
 def create_handoff(a, body, offered):
     hid = next_handoff_id(a.prefix)
-    (handoffs_root() / hid).mkdir(parents=True, exist_ok=True)
     (handoffs_root() / hid / "BODY.md").write_text(body, encoding="utf-8")
     return {
         "id": hid, "title": a.title, "provider": a.provider.lower(), "profile": None, "model": a.model,
@@ -2142,7 +2355,7 @@ def assign_handoff(m, prof):
                  "file exactly (RESULT.md status markers)." % rel,
     })
     m["activity_baseline"] = scan_latest_mtime(workdir)   # checkout/creation is not "operator activity"
-    save_meta(m)
+    return m
 
 
 def print_card(m, clip):
@@ -2154,30 +2367,35 @@ def print_card(m, clip):
 
 def refuse_in_worker():
     if os.environ.get("ORCH_WORKER"):
-        raise SystemExit("orch: you are an executor (ORCH_WORKER) — only the orchestrator creates manual tasks")
+        raise SystemExit("orch: you are an executor (ORCH_WORKER) — only the orchestrator may use orch handoff")
 
 
 def cmd_handoff_new(a):
-    """Assign right away: the operator gets the card now."""
-    refuse_in_worker()
+    """Assign right away; reserve capacity before creating a worktree outside the lock."""
     body = read_body(a)
-    gate, rc = manual_gate(a.provider, a.model_key, a.profile, a.max_open, a.force)
-    if rc is not None:
-        return rc
-    prof, max_open = gate
-    if limit_reached(max_open, a.max_open, a.force):
-        return EXIT_QUOTA
-    m = create_handoff(a, body, offered=False)
-    assign_handoff(m, prof)
+    with state_lock(state_dir() / ".state.lock"):
+        gate, rc = manual_gate(a.provider, a.model_key, a.profile, a.max_open, a.force)
+        if rc is not None:
+            return rc
+        prof, max_open = gate
+        if limit_reached(prof, max_open, a.force):
+            return EXIT_QUOTA
+        m = create_handoff(a, body, offered=False)
+        claim_handoff(m, prof)
+    m = materialize_handoff(m, prof)
     print_card(m, a.clip)
     return 0
 
 
 def cmd_handoff_offer(a):
+    body = read_body(a)
+    with state_lock(state_dir() / ".state.lock"):
+        return offer_handoff(a, body)
+
+
+def offer_handoff(a, body):
     """Put a task into the pool: the operator picks it (orch handoff take) when convenient, or the orchestrator
     reclaims it for an automated executor."""
-    refuse_in_worker()
-    body = read_body(a)
     gate, rc = manual_gate(a.provider, a.model_key, a.profile, 10 ** 6, a.force)
     if rc is not None:
         return rc
@@ -2194,11 +2412,11 @@ def cmd_handoff_offer(a):
     return 0
 
 
+@locked("project")
 def cmd_handoff_reclaim(a):
     """Take a pooled task back for an automated executor; --next: the one-at-a-time reclaim of a pool check."""
-    refuse_in_worker()
     m = load_meta(a.id.upper())
-    if result_status(m) != "OFFERED":
+    if result_status(m) != "OFFERED" or m.get("archived"):
         print("%s is not in the pool (%s) — nothing to reclaim." % (m["id"], effective_state(m)))
         return 1
     if a.next:
@@ -2220,41 +2438,79 @@ def cmd_handoff_reclaim(a):
 def finish_reclaimed(hid, status, run_id=None):
     """A reclaimed pooled task was executed: free the one-at-a-time slot. Never fails (called from orch run)."""
     try:
-        m = load_meta(hid)
-        r = m.get("reclaim") or {"kind": "all", "at": iso(now())}
-        r.update(finished=iso(now()), status=status)
-        if run_id:
-            r["run"] = run_id
-        m["reclaim"] = r
-        save_meta(m)
+        with state_lock(state_dir() / ".state.lock"):
+            _finish_reclaimed(hid, status, run_id)
     except (SystemExit, Exception):
         pass
 
 
+def _finish_reclaimed(hid, status, run_id):
+    m = load_meta(hid)
+    r = m.get("reclaim") or {"kind": "all", "at": iso(now())}
+    r.update(finished=iso(now()), status=status)
+    if run_id:
+        r["run"] = run_id
+    m["reclaim"] = r
+    save_meta(m)
+
+
+
+def claim_handoff(m, prof):
+    """Reserve both ownership and capacity before slow work; a competing take/reclaim now fails."""
+    m.update(taken=iso(now()), assigning=rand_suffix(16), profile=prof.name if prof.explicit else None)
+    save_meta(m)
+
+
+def materialize_handoff(claim, prof):
+    token = claim["assigning"]
+    try:
+        assigned = assign_handoff(dict(claim), prof)
+    except BaseException as ex:
+        with state_lock(state_dir() / ".state.lock"):
+            current = load_meta(claim["id"])
+            if current.get("assigning") == token:
+                current.pop("assigning", None)
+                if result_status(current) not in TERMINAL and not current.get("archived"):
+                    current["taken"] = None
+                    if not current.get("offered"):
+                        current.update(manual_status="CANCELLED", archived=iso(now()), closed=iso(now()),
+                                       manual_note="Assignment failed: %s" % ex)
+                save_meta(current)
+        raise
+    with state_lock(state_dir() / ".state.lock"):
+        current = load_meta(claim["id"])
+        if current.get("assigning") != token or result_status(current) in TERMINAL or current.get("archived"):
+            raise SystemExit("orch: %s changed while being assigned; no task handed out" % claim["id"])
+        # Merge only assignment fields, preserving notification marks and other concurrent updates.
+        for field in ("taken", "profile", "workdir", "workdir_win", "branch", "task_path", "result_path", "paste",
+                      "activity_baseline"):
+            current[field] = assigned[field]
+        current.pop("assigning", None)
+        save_meta(current)
+    return current
+
+
 def cmd_handoff_take(a):
-    """The operator takes a pooled task (optionally for another manual agent): materialize it and show the card."""
-    refuse_in_worker()
-    m = load_meta(a.id.upper())
-    st = result_status(m)
-    if st in TERMINAL:
-        print("%s is already closed (%s) — nothing to take." % (m["id"], st))
-        return 1
-    if st != "OFFERED":
-        print("%s is already handed out (%s):" % (m["id"], effective_state(m)))
-        print_card(m, a.clip)
-        return 0
-    for f in ("model", "model_key", "effort"):
-        if getattr(a, f):
-            m[f] = getattr(a, f)
-    if a.agent:
-        m["provider"] = a.agent.lower()
-    gate, rc = manual_gate(m["provider"], m.get("model_key"), a.profile, a.max_open, a.force, check_operator=False)
-    if rc is not None:
-        return rc
-    prof, max_open = gate
-    if limit_reached(max_open, a.max_open, a.force):
-        return EXIT_QUOTA
-    assign_handoff(m, prof)
+    """Claim under the project lock, then create the worktree without holding it."""
+    with state_lock(state_dir() / ".state.lock"):
+        m = load_meta(a.id.upper())
+        st = result_status(m)
+        if st != "OFFERED" or m.get("archived"):
+            print("%s is not available in the pool (%s) — nothing to take." % (m["id"], st))
+            return 1
+        for f in ("model", "model_key", "effort"):
+            if getattr(a, f):
+                m[f] = getattr(a, f)
+        if a.agent:
+            m["provider"] = a.agent.lower()
+        gate, rc = manual_gate(m["provider"], m.get("model_key"), a.profile, a.max_open, a.force, check_operator=False)
+        if rc is not None:
+            return rc
+        prof, max_open = gate
+        if limit_reached(prof, max_open, a.force):
+            return EXIT_QUOTA
+        claim_handoff(m, prof)
+    m = materialize_handoff(m, prof)
     print_card(m, a.clip)
     return 0
 
@@ -2294,13 +2550,14 @@ def cmd_handoff_list(a):
 
 
 POOL_CHECK_MIN = 5
+ASSIGNMENT_TIMEOUT_MIN = 10
 
 
 def pool_state(pool_ids, check_min=None):
     """.orchestra/handoffs/.pool.json: pooled ids, when the pool opened, its check interval, the last check reported.
     Updated on every meta save (write_board)."""
     path = handoffs_root() / ".pool.json"
-    state = read_json(path, {})
+    state = read_json(path, {}, recover_corrupt=True)
     before = dict(state)
     if pool_ids and not state.get("ids"):          # the pool opens: its clock starts
         state["started"] = iso(now())
@@ -2360,6 +2617,7 @@ def pool_event(metas, mark=True):
     return "\n".join(lines)
 
 
+@locked("project")
 def write_board():
     """<project>/.orchestra/MANUAL.md — the manual lane at a glance for the operator (any editor or the agent's IDE)."""
     metas = [m for m in all_metas() if not m.get("archived")]
@@ -2421,6 +2679,7 @@ def mark_final(m, st, log=True):
                        "elapsed_s": int((now() - taken_at(m)).total_seconds())})
 
 
+@locked("project")
 def check_events(mark=True, fast=False):
     """Return list of human-readable events not yet reported.
     fast=True: only status transitions read from RESULT.md (no workdir scan, no reminders)."""
@@ -2432,6 +2691,23 @@ def check_events(mark=True, fast=False):
         events.append(pool_ev)
     for m in metas:
         st = result_status(m)
+        claim_time = parse_iso(m.get("taken") or "")
+        if not fast and st not in TERMINAL and m.get("assigning") and claim_time and \
+                (t - claim_time).total_seconds() >= ASSIGNMENT_TIMEOUT_MIN * 60:
+            m.pop("assigning", None)
+            m["taken"] = None
+            if m.get("offered"):
+                events.append("⚠ %s assignment expired; returned to the pool." % m["id"])
+            else:
+                m.update(manual_status="CANCELLED", archived=iso(t), closed=iso(t),
+                         manual_note="Assignment expired before completion")
+                events.append("⚠ %s assignment expired; task cancelled and archived." % m["id"])
+            if mark:
+                save_meta(m)
+            continue
+        activity = last_activity(m) if not fast and st == "WAITING" and not m.get("assigning") else None
+        if st == "WAITING" and activity:
+            st = "STARTED?"
         note = m.setdefault("notified", {})
         changed = False
         age_min = (t - taken_at(m)).total_seconds() / 60
@@ -2450,7 +2726,7 @@ def check_events(mark=True, fast=False):
             pass                   # the pool is checked as a whole: pool_event
         elif fast:
             pass
-        elif st == "WAITING" and not last_activity(m):
+        elif st == "WAITING" and not m.get("assigning"):
             if age_min >= m.get("reassign_min", 180) and not note.get("reassign"):
                 events.append("⚠ %s not started after %d min. Reassign it to the fallback (%s) and tell the operator."
                               % (m["id"], age_min, m.get("fallback") or "pick one from the registry"))
@@ -2570,38 +2846,50 @@ def io_capture(fn):
     return buf.getvalue()
 
 
+@locked("project")
+def wait_poll(targets, any_task):
+    metas = {m["id"]: m for m in all_metas()}
+    if targets:
+        watch = []
+        for hid in targets:
+            if hid not in metas:
+                raise SystemExit("orch: handoff %s not found" % hid)
+            watch.append(metas[hid])
+    else:
+        watch = [m for m in metas.values() if not m.get("archived") and (
+            result_status(m) not in TERMINAL + ("OFFERED",) or (
+                result_status(m) in TERMINAL and result_status(m) not in ("CANCELLED", "REASSIGNED")
+                and not (m.get("notified") or {}).get("final")))]
+    for m in watch:
+        st = result_status(m)
+        if st in TERMINAL:
+            mark_final(m, st)
+            save_meta(m)
+            return m, None, [x["id"] for x in watch]
+    pooled = [m for m in metas.values() if not m.get("archived") and result_status(m) == "OFFERED"]
+    event = pool_event([m for m in metas.values() if not m.get("archived")]) if any_task and pooled else None
+    return None, event, [m["id"] for m in watch + (pooled if any_task else [])]
+
+
 def cmd_handoff_wait(a):
     deadline = time.time() + parse_duration(a.timeout, "m") if a.timeout else None
     targets = [h.upper() for h in a.ids]
     if not targets and not a.any:
         raise SystemExit("orch: pass handoff IDs or --any")
-    initial = {m["id"]: result_status(m) for m in all_metas()}
-    watch = list(targets) or [i for i, s in initial.items() if s not in TERMINAL + ("OFFERED",)]
     while True:
-        metas = {m["id"]: m for m in all_metas()}
-        if not targets:                     # --any: tasks the operator takes from the pool meanwhile count too
-            watch += [i for i, m in metas.items() if i not in watch and not m.get("archived")
-                      and result_status(m) not in TERMINAL + ("OFFERED",)]
-            pooled = [m for m in metas.values() if not m.get("archived") and result_status(m) == "OFFERED"]
-            if not watch and not pooled:
-                print("No manual tasks to wait for.")
-                return 0
-            ev = pool_event([m for m in metas.values() if not m.get("archived")]) if pooled else None
-            if ev:                          # a pool check is due: wake the orchestrator up to decide what to reclaim
-                print(ev)
-                notify("Orchestra: manual pool check — nothing taken for a while")
-                return 3
-        for hid in watch:
-            m = metas.get(hid)
-            if m is None:
-                raise SystemExit("orch: handoff %s not found" % hid)
+        m, event, watch = wait_poll(targets, a.any)
+        if m:
             st = result_status(m)
-            if st in TERMINAL:
-                mark_final(m, st)
-                save_meta(m)
-                print("%s: STATUS %s — %s\n%s" % (hid, st, m["title"], result_excerpt(m)))
-                notify("Orchestra: %s — %s (%s)" % (hid, st, m["title"]))
-                return 0 if st == "DONE" else 2
+            print("%s: STATUS %s — %s\n%s" % (m["id"], st, m["title"], result_excerpt(m)))
+            notify("Orchestra: %s — %s (%s)" % (m["id"], st, m["title"]))
+            return 0 if st == "DONE" else 2
+        if not watch:
+            print("No manual tasks to wait for.")
+            return 0
+        if event:
+            print(event)
+            notify("Orchestra: manual pool check — nothing taken for a while")
+            return 3
         if deadline and time.time() >= deadline:
             print("TIMEOUT: not finished: %s. Check orch handoff list; reassign if needed." % ", ".join(watch))
             return EXIT_TIMEOUT
@@ -2619,6 +2907,7 @@ def cmd_handoff_show(a):
     return 0
 
 
+@locked("project")
 def cmd_handoff_done(a):
     m = load_meta(a.id.upper())
     st = a.status.upper()
@@ -2647,13 +2936,14 @@ def cmd_handoff_done(a):
 
 
 def cmd_handoff_close(a):
-    m = load_meta(a.id.upper())
+    with state_lock(state_dir() / ".state.lock"):
+        m = load_meta(a.id.upper())
+        m["archived"] = iso(now())
+        save_meta(m)
     if a.remove_worktree and m.get("branch"):
         r = git(["worktree", "remove", "--force", m["workdir"]], project_dir()) if a.force else \
             git(["worktree", "remove", m["workdir"]], project_dir())
         print("worktree removed" if r and r.returncode == 0 else "worktree remove failed: %s" % (r.stderr.strip() if r else "git?"))
-    m["archived"] = iso(now())
-    save_meta(m)
     print("%s closed." % m["id"])
     return 0
 
@@ -3348,7 +3638,17 @@ def main(argv=None):
         a.prompt = (a.prompt or []) + extra      # argparse < 3.13 leaves `run … --opt v "text"` text unparsed
     elif extra:
         p.error("unrecognized arguments: %s" % " ".join(extra))
-    return a.fn(a) or 0
+    global _quiet_state
+    _quiet_state = a.cmd in ("hook", "statusline")
+    if a.cmd == "handoff":
+        refuse_in_worker()
+    try:
+        return a.fn(a) or 0
+    except StateError as ex:
+        if _quiet_state:
+            return 0
+        print("orch: %s" % ex, file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -26,7 +26,9 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 - Never ask for or record the API key itself: the profile holds the variable name; the operator puts the value as a
   line `NAME=sk-…` into `~/.orchestra/secrets.env`.
 - `orch` strictly enforces `off`, models, `effort ≤` (lowers it with a note), the write ban and `max_open`;
-  `only for`, `prefer for` and `rules` are yours to honour when choosing an executor.
+  `only for`, `prefer for` and `rules` are yours to honour when choosing an executor. A manual profile's
+  `max_open` is a hard cap for both `handoff new` and `take`: `--force` cannot bypass it (or `off`), but can
+  bypass the operator's open-task limit and availability blocks.
 - Precedence: `--profile` on the run (only at the operator's request) → session-wide choices (`ORCH_PROFILES`, set
   by `orch launch --no-claude` / `--use`) → the binding of the project or of the nearest directory above it → the
   provider's default → the built-in `default`.

@@ -70,7 +70,8 @@ def launch_env(key):
     model = os.environ.get("ORCH_MODEL") or DEFAULT_MODEL
     env = model_env(model)
     env["ANTHROPIC_AUTH_TOKEN"] = key           # a bearer token: no "use this API key?" prompt, no OAuth sent
-    print(json.dumps({"set": env, "unset": sorted(k for k in os.environ if k.startswith("ANTHROPIC_")),
+    print(json.dumps({"set": env, "unset": sorted(k for k in os.environ if k.startswith("ANTHROPIC_")
+                                                or k == "CLAUDE_CODE_OAUTH_TOKEN"),
                       "args": ["--model", model], "model": model, "fast_model": FAST_MODEL, "endpoint": BASE_URL}))
     return 0
 

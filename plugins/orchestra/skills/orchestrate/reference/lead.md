@@ -12,11 +12,11 @@ orch launch deepseek --dry-run      # print the command and the environment (key
 Claude Code starts with your usual config and plugins, but every model request goes to DeepSeek's
 Anthropic-compatible API: the main thread runs on M (default `deepseek-v4-pro`), background calls on the profile's
 fast model, every subagent on M. The DeepSeek key comes from the profile (`orch profile … deepseek`) or
-`~/.orchestra/secrets.env`; your `ANTHROPIC_*` variables are dropped for the session, so no Anthropic credential is
-sent to DeepSeek. The session spends the DeepSeek balance (402 → top up, then `orch quota clear deepseek[@P]`).
+`~/.orchestra/secrets.env`; your `ANTHROPIC_*` variables and `CLAUDE_CODE_OAUTH_TOKEN` are dropped for the session. The session spends the DeepSeek balance (402 → top up, then `orch quota clear deepseek[@P]`).
 
 `--no-claude` and `--use` are session-wide profile choices (`ORCH_PROFILES=claude=off,codex=work`): they win over
-directory bindings and defaults; only `--profile` of a single `orch run` is stronger.
+directory bindings and defaults, including the lead itself and the Claude lane. `--profile` on `launch` or a
+single `run` is stronger. `--use deepseek=off` refuses to launch; an unknown profile is an error.
 
 ## Orchestrating as a non-Claude lead
 
@@ -35,6 +35,9 @@ directory bindings and defaults; only `--profile` of a single `orch run` is stro
 - Cross-review: the lead's own code is DeepSeek-family code, so it is reviewed by Codex or the Claude lane.
 
 ## Limits of the mode
+
+The lead runs with the operator's config directory and its tools can read what the operator's account can,
+so dropping credentials from its environment is credential hygiene, not a sandbox.
 
 - Claude Code features that rely on Anthropic-only API capabilities (web search, image input, some server tools)
   may fail on the DeepSeek endpoint; do such steps through Codex or the Claude lane.

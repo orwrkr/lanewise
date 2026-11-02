@@ -15,8 +15,16 @@ Routing follows a model registry (difficulty, cost, strengths, cross-review betw
 limits and balance, your availability and per-project **executor profiles** (which key or account, which models,
 which rules — or `off`). Every session gets a **usage log**: which model did what and how many tokens it spent.
 A **budget mode** watches the Claude subscription's 5-hour window: when it would expire largely unused, Claude takes
-the work that would otherwise cost money on API keys.
+the work that would otherwise cost money on API keys. Projections use each measurement's time; numbers older
+than 20 minutes cannot enable SURPLUS, and a weekly overrun raises TIGHT even without five-hour numbers.
 **DeepSeek can lead instead of Claude** (`orch launch deepseek`), with Claude models switched off entirely if you want.
+Session `--use` choices govern the lead too; only `--profile` overrides them.
+
+Shared state uses atomic writes and bounded OS locks, so parallel sessions preserve tasks and usage. Manual
+profile capacity is enforced even with `--force`; `wait --any` returns an existing unreported result once.
+Executor reports beginning `STATUS: BLOCKED` or `PARTIAL` keep that outcome in the header and usage log (exit 0).
+A Codex model at capacity exits 75 and blocks only that model for about 10 minutes. Native Windows sandbox
+setup for tests using temporary repositories is described in the Codex [registry notes](plugins/orchestra/registry/providers.yaml).
 
 Works with Claude Code in WSL/Linux and natively on Windows. Python ≥ 3.8 (standard library only) and git.
 

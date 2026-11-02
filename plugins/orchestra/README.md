@@ -80,6 +80,10 @@ Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex logi
 
 Multiple keys (personal, work) and per-project key selection are handled by [profiles](#executor-profiles-keys-accounts-rules-projects). A second Codex account is a profile too.
 
+Codex model capacity failures return exit 75 and block only the selected model for about ten minutes.
+On native Windows, write workers may need a scratch directory with readable parents and explicit `--add-dir`
+permission for tests using temp repositories; see the Codex [registry notes](registry/providers.yaml).
+
 ## How CLI executors work
 
 A Claude subagent (Agent tool) is an agent loop inside the same Claude Code session: the session itself executes its tool calls. You can't plug a foreign model in there, since subagents call the same API as the session. Claude Code doesn't drive an external process; to Claude Code it is just a command: start it in the background, get notified when it finishes, read the output. So the executor needs an agent loop of **its own**:
@@ -88,6 +92,9 @@ A Claude subagent (Agent tool) is an agent loop inside the same Claude Code sess
 - **DeepSeek** has none — over the API it only answers with text. The loop comes from headless Claude Code (`claude -p`) pointed at DeepSeek's Anthropic-compatible API (`https://api.deepseek.com/anthropic`). The DeepSeek model gets Read/Grep/Glob/Edit/Write/Bash and works like a Sonnet subagent. You pay from your DeepSeek balance; subscription limits are not consumed.
 
 To the orchestrator both look the same: `orch run <provider> … ` in the background → a `STATUS: DONE | PARTIAL | BLOCKED` report with the sections "Done / Changed files / Verification / Blockers", plus the paths to `output.md` and `log.txt`. `orch` adds the executor role to the task itself: who the executor is, that another Claude Code instance is directing it, the rules and the report format. For DeepSeek the role goes into the system prompt, for Codex at the top of the prompt.
+
+Reports beginning `STATUS: BLOCKED` or `PARTIAL` keep that outcome in the run header and usage ledger even
+when the adapter exits 0; the orchestrator reads and handles the report.
 
 ### Why the nested Claude Code doesn't conflict with yours
 
@@ -137,8 +144,9 @@ window and 10% of the week by default) is kept for your other sessions and as a 
   Until the reset, the orchestrator gives Claude subagents the subtasks it would otherwise give to API-billed
   executors. Codex and the manual pool keep their tasks. When several orchestrator sessions are active, each one
   gets its share of the surplus, so they don't all pile onto Claude at once.
-- **tight** — at the current pace the window reaches the reserve before the reset. The orchestrator treats Claude as
-  low and offloads to Codex and DeepSeek.
+- **tight** — the five-hour window reaches its reserve, or weekly usage reaches its reserve, or the weekly
+  projection reaches it after the first 24 hours. Weekly TIGHT works without current five-hour numbers. The
+  orchestrator treats Claude as low and offloads to Codex and DeepSeek.
 
 The mode appears in `orch status` and at session start, and the orchestrator gets an event when it changes. The
 numbers come from Claude Code itself, which passes them to the status line command (`rate_limits`). Set Orchestra's
@@ -177,10 +185,17 @@ follows [`reference/lead.md`](skills/orchestrate/reference/lead.md):
 - Claude is reached only through the Claude executor (`orch run claude`, on your Claude login and its limits);
 - `--no-claude` (or `orch profile use claude off`) turns that off too: `orch run claude` answers `PROFILE_OFF`, and
   cross-review goes Codex ↔ DeepSeek;
-- `--use PROVIDER=PROFILE` picks profiles for the whole session, the same way.
+- `--use PROVIDER=PROFILE` picks profiles for the whole session, including the lead itself; only an explicit
+  `--profile` overrides it. Disabled or unknown lead profiles refuse to launch.
 
 Limits of the mode: Claude Code features that rely on Anthropic-only API capabilities (web search, image input) may
 not work on the DeepSeek endpoint, and Claude Code's cost estimate in `orch usage` assumes Claude prices.
+The launch environment drops `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN`; the lead still uses the operator's config
+directory and tools, so this is credential hygiene, not a sandbox.
+
+Parallel sessions serialize shared state through bounded OS locks and atomic JSON writes; busy hooks and the
+status line skip their update silently. Manual `new` and `take` obey the profile's hard `max_open` even with
+`--force`. `handoff wait --any` returns an existing unreported final result once.
 
 ## Executor profiles: keys, accounts, rules, projects
 
@@ -342,4 +357,11 @@ You can install both: maestro commands also run inside Claude Code, and this ski
 
 ## Testing
 
-`bash tests/run_tests.sh` runs 294 checks against a temporary repository with fake `codex` and `claude`: limits, detection of exhausted quotas and balance, timeouts and process-tree termination, DeepSeek and Claude executor isolation (environment, permissions, role, CLAUDE.md), the DeepSeek lead (`orch launch`: endpoint, token, models, no Anthropic credentials, `--no-claude`), profiles (keys and accounts, project and directory bindings, `off`, models, effort, write ban, separate per-key balance blocks), project rules for each executor (CLAUDE.md with imports, AGENTS.md), the usage log (transcript parsing, Codex/DeepSeek tokens, SessionEnd snapshot), the manual task pool (offer → take → result, the Antigravity rule, the pool clock and its checks, one-at-a-time reclaims), the Claude budget mode (status line snapshot, surplus / tight projection, reserves, the recent pace of all sessions, active consumers and the shared surplus, profile thresholds), the ban on nested delegation, worktrees, reminders, hooks, guide and footprint. The tests run both in WSL/Linux and in Git Bash on Windows — run them in both.
+`bash tests/run_tests.sh` runs regression checks against a temporary repository with fake `codex` and `claude`: limits, detection of exhausted quotas and balance, timeouts and process-tree termination, DeepSeek and Claude executor isolation (environment, permissions, role, CLAUDE.md), the DeepSeek lead (`orch launch`: endpoint, token, models, no Anthropic credentials, `--no-claude`), profiles (keys and accounts, project and directory bindings, `off`, models, effort, write ban, separate per-key balance blocks), project rules for each executor (CLAUDE.md with imports, AGENTS.md), the usage log (transcript parsing, Codex/DeepSeek tokens, SessionEnd snapshot), the manual task pool (offer → take → result, the Antigravity rule, the pool clock and its checks, one-at-a-time reclaims), the Claude budget mode (status line snapshot, surplus / tight projection, reserves, the recent pace of all sessions, active consumers and the shared surplus, profile thresholds), the ban on nested delegation, worktrees, reminders, hooks, guide and footprint. The tests run both in WSL/Linux and in Git Bash on Windows — run them in both.
+
+The suite aborts on setup failures and supports `ORCH_TEST_TIMING=1` for per-check timings. Regression checks
+include real parallel offers, take/reclaim races and status-line updates; shared-state I/O failures and rollback;
+launch profile precedence; every worker handoff guard; measurement freshness and weekly TIGHT without five-hour
+numbers; hard manual capacity; existing wait results; inferred activity warnings; OAuth hygiene; and run outcomes.
+Claude budget projections use independent window measurement times: five-hour samples older than 20 minutes
+show their age and cannot enable SURPLUS, while weekly pressure can still raise TIGHT.

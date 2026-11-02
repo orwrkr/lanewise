@@ -3,7 +3,8 @@
 # Runs in WSL/Linux/macOS and on Windows in Git Bash (native Windows Python).
 # Usage: bash tests/run_tests.sh
 set -uo pipefail
-PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
+die() { echo "Self-test setup failed: $*" >&2; exit 1; }
+PLUGIN="$(cd "$(dirname "$0")/.." && pwd)" || die "cannot locate plugin"
 PY=""
 for p in python3 python py; do
   if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
@@ -14,20 +15,34 @@ done
 # path as Python sees it: Git Bash /c/… → C:/…, unchanged elsewhere
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 ORCH="$PY $PLUGIN/bin/orch"
-T="$(mktemp -d)"
+T="$(mktemp -d)" || die "cannot create temporary directory"
+[[ -n "$T" && -d "$T" ]] || die "invalid temporary directory"
 export ORCH_HOME; ORCH_HOME="$(native "$T/home")"
 export PATH="$T/fakebin:$PATH"
 unset CLAUDE_PROJECT_DIR ORCH_PROJECT_DIR ORCH_WORKER ORCH_CODEX_BIN ORCH_CLAUDE_BIN DEEPSEEK_API_KEY ORCH_NOTIFY_CMD
 pass=0; fail=0
-ok()   { echo "  ✔ $1"; pass=$((pass+1)); }
-bad()  { echo "  ✘ $1"; fail=$((fail+1)); }
+last_check=$SECONDS
+timing() { if [[ ${ORCH_TEST_TIMING:-0} == 1 ]]; then printf "  [timing %ss] %s\n" "$((SECONDS-last_check))" "$1"; fi; last_check=$SECONDS; }
+ok()   { timing "$1"; echo "  ✔ $1"; pass=$((pass+1)); }
+bad()  { timing "$1"; echo "  ✘ $1"; fail=$((fail+1)); }
 expect_rc() { local want=$1 got=$2 name=$3; [[ "$got" == "$want" ]] && ok "$name (rc=$got)" || bad "$name: rc=$got, want $want"; }
 # output is compared with Windows backslashes turned into slashes
-contains() { local text="${1//\\//}"; grep -q -- "$2" <<<"$text" && ok "$3" || { bad "$3"; echo "----- output -----"; echo "$1"; echo "------------------"; }; }
+contains() {
+  local text="${1//\\//}" pattern=$2 matched=1
+  # Literal patterns need no grep process. Keep grep's BRE semantics for regexes.
+  if [[ "$pattern" != *"."* && "$pattern" != *"["* && "$pattern" != *"*"* &&
+        "$pattern" != *"^"* && "$pattern" != *"$"* && "$pattern" != *\\* &&
+        "$pattern" != *$'\n'* ]]; then
+    [[ "$text" == *"$pattern"* ]] && matched=0
+  else
+    grep -q -- "$pattern" <<<"$text" && matched=0
+  fi
+  [[ $matched -eq 0 ]] && ok "$3" || { bad "$3"; echo "----- output -----"; echo "$1"; echo "------------------"; }
+}
 
 # fake codex (`codex exec --json` event stream): behaviour selected by FAKE_CODEX env
-mkdir -p "$T/fakebin" "$T/home"
-cat > "$T/fakebin/fake_codex.py" <<'EOF'
+mkdir -p "$T/fakebin" "$T/home" || die "cannot create fake and home directories"
+cat > "$T/fakebin/fake_codex.py" <<'EOF' || die "cannot write fake codex"
 import json, os, sys, time
 args = sys.argv[1:]
 with open(os.environ["FAKE_ENV_LOG"], "w") as f:
@@ -48,6 +63,18 @@ if mode == "ok":
     emit({"type": "item.completed", "item": {"id": "i2", "type": "agent_message", "text": "working..."}})
     open(out, "w", encoding="utf-8").write("Done. Prompt was: " + prompt)
     emit({"type": "turn.completed", "usage": {"input_tokens": 1200, "cached_input_tokens": 1000, "output_tokens": 30}})
+elif mode in ("blocked", "partial"):
+    open(out, "w", encoding="utf-8").write("STATUS: " + mode.upper() + "\nNo complete result.\n")
+    emit({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 1}})
+elif mode == "preamble":
+    open(out, "w", encoding="utf-8").write("Analysis complete.\nSTATUS: BLOCKED\n")
+    emit({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 1}})
+elif mode == "first_done":
+    open(out, "w", encoding="utf-8").write("Analysis complete.\nSTATUS: DONE\nSTATUS: BLOCKED\n")
+    emit({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 1}})
+elif mode == "capacity":
+    emit({"type": "turn.failed", "error": {"message": "Selected model is at capacity. Please try a different model."}})
+    sys.exit(1)
 elif mode == "limit":
     emit({"type": "error", "message": "You've hit your usage limit. Try again in 2 hours."})
     emit({"type": "turn.failed", "error": {"message": "You've hit your usage limit. Try again in 2 hours."}})
@@ -70,7 +97,7 @@ FAKE_LOG="$(native "$T/fake.log")"; FAKE_ENV_LOG="$(native "$T/fake_env.log")"; 
 export CLAUDE_CONFIG_DIR; CLAUDE_CONFIG_DIR="$(native "$T/claude-cfg")"          # fake transcripts for orch usage
 
 # fake claude for the DeepSeek worker: records argv/env/system prompt, answers in stream-json
-cat > "$T/fakebin/fake_claude.py" <<'EOF'
+cat > "$T/fakebin/fake_claude.py" <<'EOF' || die "cannot write fake claude"
 import json, os, sys
 args = sys.argv[1:]
 opt = lambda n: args[args.index(n) + 1] if n in args else None
@@ -83,7 +110,7 @@ rec = {"args": args, "allowed": args[args.index("--allowedTools") + 1:] if "--al
        "env": {k: os.environ.get(k) for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "ORCH_WORKER", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDECODE",
                "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-               "ORCH_LEAD", "ORCH_LEAD_ENV", "ORCH_PROFILES")}}
+               "ORCH_LEAD", "ORCH_LEAD_ENV", "ORCH_PROFILES", "CLAUDE_CODE_OAUTH_TOKEN")}}
 sf = os.path.join(os.environ.get("ORCH_HOME", ""), "sessions.json")
 rec["sessions"] = json.load(open(sf, encoding="utf-8")) if os.path.isfile(sf) else {}   # consumers during the run
 json.dump(rec, open(os.environ["FAKE_CLAUDE_LOG"], "w", encoding="utf-8"), ensure_ascii=False)
@@ -121,9 +148,24 @@ sys.exit(0 if eval(sys.argv[2]) else 1)' "$FAKE_CLAUDE_LOG" "$1" && ok "$2" || {
 }
 
 # temp git repo
-REPO="$T/proj"; mkdir -p "$REPO"; cd "$REPO"
-git init -q && git config user.email t@t && git config user.name t
-echo "hello" > app.txt && git add . && git commit -qm init
+REPO="$T/proj"
+mkdir -p "$REPO" || die "cannot create test repository"
+cd "$REPO" || die "cannot enter test repository"
+T_ABS="$(cd "$T" && pwd -P)" || die "cannot resolve temporary directory"
+HERE="$(pwd -P)" || die "cannot resolve test repository"
+case "$HERE/" in "$T_ABS/"*) ;; *) die "test repository is outside temporary directory" ;; esac
+# Refuse to initialize inside an existing repository outside the temporary directory.
+TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || TOP=""
+if [[ -n "$TOP" ]]; then
+  TOP="$(cd "$TOP" && pwd -P)" || die "cannot resolve existing repository"
+  case "$TOP/" in "$T_ABS/"*) ;; *) die "existing repository is outside temporary directory" ;; esac
+fi
+git init -q || die "git init failed"
+TOP="$(git rev-parse --show-toplevel)" || die "cannot find test repository root"
+TOP="$(cd "$TOP" && pwd -P)" || die "cannot resolve test repository root"
+case "$TOP/" in "$T_ABS/"*) ;; *) die "git repository is outside temporary directory" ;; esac
+git config user.email t@t && git config user.name t || die "cannot configure test repository"
+echo "hello" > app.txt && git add . && git commit -qm init || die "cannot initialize test commit"
 
 echo "── quota"
 out=$($ORCH quota show); contains "$out" "all executors available\|All executors available" "empty availability"
@@ -174,7 +216,7 @@ FAKE_CODEX=slow $ORCH run codex --timeout 1s "x" >/dev/null; rc=$?
 expect_rc 124 $rc "timeout"
 sleep 4; [[ -f "$FAKE_LATE" ]] && bad "timeout left the worker tree running" || ok "timeout stops the whole worker tree"
 # the helper would hold stdout for 60 s: the run must end with codex itself, and the helper must not survive it
-SECONDS=0; FAKE_CODEX=linger $ORCH run codex "x" >/dev/null; rc=$?; took=$SECONDS
+start=$SECONDS; FAKE_CODEX=linger $ORCH run codex "x" >/dev/null; rc=$?; took=$((SECONDS-start))
 [[ $rc -eq 0 && $took -lt 45 ]] && ok "codex exit ends the run although a helper keeps stdout open (${took}s)" || bad "linger: rc=$rc ${took}s"
 sleep 1
 $PY - "$FAKE_LATE.pid" <<'EOF' && ok "processes left by the worker are reaped" || bad "leftover worker process kept running"
@@ -448,7 +490,8 @@ grep -q 'Project rules.*`CLAUDE.md`' "$TW/.orchestra/handoffs/$PID/TASK.md" && o
 grep -q "AGENT:" "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "protocol asks the agent to name itself" || bad "AGENT line missing"
 grep -q "trigger: always_on" "$TW/.agents/rules/orchestra-task.md" 2>/dev/null && ok "Antigravity workspace rule in the task worktree" || bad "rule file missing"
 [[ -z "$(git -C "$TW" status --porcelain)" ]] && ok "rule and task files stay out of git status" || bad "git status: $(git -C "$TW" status --porcelain)"
-out=$($ORCH handoff take "$PID"); contains "$out" "already handed out" "second take shows the existing card"
+out=$($ORCH handoff take "$PID"); expect_rc 1 $? "second take refuses an already assigned task"
+contains "$out" "not available in the pool" "second take explains that ownership is already claimed"
 printf 'STATUS: DONE\nAGENT: Antigravity · Gemini 4 Argon\n## Summary\nok\n' > "$TW/.orchestra/handoffs/$PID/RESULT.md"
 out=$($ORCH handoff check); contains "$out" "$PID finished: STATUS DONE — UI form check (Antigravity · Gemini 4 Argon)" "completion names the agent"
 $PY - "$ORCH_HOME/usage.jsonl" "$PID" <<'EOF' && ok "manual task in the usage ledger (agent, model, session)" || bad "handoff ledger"
@@ -523,7 +566,7 @@ out=$(echo '{}' | $ORCH hook post-tool); [[ -z "$out" ]] && ok "post-tool thrott
 rm -f "$REPO/.orchestra/.last_hook_check"
 out=$(echo '{}' | $ORCH hook post-tool); contains "$out" "additionalContext" "post-tool injects context after throttle"
 $PY -c "import json,sys; json.loads(sys.argv[1])" "$out" && ok "post-tool output is valid JSON" || bad "invalid JSON"
-out=$(cd /; echo "{\"cwd\": \"$(native "$REPO")\"}" | $ORCH hook user-prompt); rc=$?
+out=$(cd / || die "cannot enter root directory"; echo "{\"cwd\": \"$(native "$REPO")\"}" | $ORCH hook user-prompt); rc=$?
 expect_rc 0 $rc "user-prompt hook resolves project from hook cwd"
 out=$(echo 'not json' | $ORCH hook stop); expect_rc 0 $? "hook survives garbage input"
 out=$(echo '{}' | sh "$PLUGIN/hooks/run.sh" session-start); contains "$out" "executor registry" "hooks/run.sh launcher finds python"
@@ -644,10 +687,12 @@ out=$($ORCH status); contains "$out" "SURPLUS: at the current pace (window avera
 out=$(echo '{}' | $ORCH hook session-start); contains "$out" "Claude subscription: 5-hour window 10% used" "session-start shows the budget"
 out=$(echo '{}' | $ORCH hook user-prompt); grep -q "Claude subscription" <<<"$out" && bad "budget re-announced" || ok "the mode shown at session start is not repeated"
 sl 80 $((now + 7200)) >/dev/null
-out=$(echo '{}' | $ORCH hook user-prompt); contains "$out" "💡 Claude subscription: 5-hour window 80% used.*TIGHT" "a mode change → event (tight)"
+out=$(echo '{}' | $ORCH hook user-prompt); contains "$out" "💡 Claude subscription:" "budget mode event marker"
+contains "$out" "5-hour window 80% used.*TIGHT" "a mode change → event (tight)"
 out=$(echo '{}' | $ORCH hook user-prompt); grep -q "Claude subscription" <<<"$out" && bad "event repeated" || ok "a mode change is announced once"
 sl 10 $((now + 7200)) "$(week 95)" >/dev/null
 out=$($ORCH budget); contains "$out" "weekly limit is tight" "no surplus while the weekly limit is tight"
+$ORCH budget clear >/dev/null
 sl 10 $((now + 17400)) >/dev/null
 out=$($ORCH budget); grep -q "SURPLUS\|TIGHT" <<<"$out" && bad "projected too early: $out" || ok "no projection in the window's first 30 minutes"
 sl 10 $((now - 60)) >/dev/null
@@ -702,6 +747,447 @@ check 'any(v.get("kind") == "executor" for v in r["sessions"].values())' "a runn
 grep -q '"executor"' "$ORCH_HOME/sessions.json" && bad "finished run still listed" || ok "the run leaves the consumer list when it ends"
 rm -f "$ORCH_HOME/sessions.json"
 $ORCH budget clear >/dev/null
+
+echo "── review regressions (isolated processes and deterministic snapshots)"
+review=$($PY -B - "$(native "$PLUGIN/bin/orch")" "$(native "$T/review")" <<'EOF'
+import argparse
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import traceback
+from unittest import mock
+
+orch, root = str(Path(sys.argv[1]).resolve()), Path(sys.argv[2])
+root.mkdir()
+home, proj = root / "home", root / "proj"
+home.mkdir(); proj.mkdir()
+env = dict(os.environ, ORCH_HOME=str(home), ORCH_PROJECT_DIR=str(proj), ORCH_NOTIFY_CMD="",
+           PYTHONIOENCODING="utf-8", PYTHONUTF8="1", DUMMY_A="aaaaaaaaaaaa", DUMMY_B="bbbbbbbbbbbb")
+for key in ("ORCH_WORKER", "ORCH_PROFILES", "CLAUDE_PROJECT_DIR", "ORCH_LEAD", "ORCH_LEAD_ENV", "CLAUDECODE"):
+    env.pop(key, None)
+for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"], ["config", "user.name", "t"]):
+    subprocess.run(["git"] + args, cwd=str(proj), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+(proj / "app.txt").write_text("initial\n", encoding="utf-8")
+subprocess.run(["git", "add", "."], cwd=str(proj), check=True)
+subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "init"], cwd=str(proj), check=True)
+os.environ.update(env)
+loader = importlib.machinery.SourceFileLoader("review_orch", orch)
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("review_orch", loader)); loader.exec_module(m)
+
+def run(args, data="task\n", extra=None):
+    r = subprocess.run([sys.executable, orch] + args, input=data, text=True, encoding="utf-8",
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(proj),
+                       env=dict(env, **(extra or {})), timeout=30)
+    return r.returncode, r.stdout + r.stderr
+
+def good(args, data="task\n", extra=None):
+    rc, out = run(args, data, extra)
+    assert rc == 0, (args, rc, out)
+    return out
+
+def start(args, data="task\n"):
+    p = subprocess.Popen([sys.executable, orch] + args, env=env, cwd=str(proj), stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p.stdin.write(data.encode("utf-8")); p.stdin.close(); p.stdin = None
+    return p
+
+def finish(p):
+    out, err = p.communicate(timeout=30)
+    return p.returncode, (out + err).decode("utf-8", "replace")
+
+def offered(**kw):
+    args = ["handoff", "offer", "--title", "review", "--max-offers", "50"]
+    for k, v in kw.items():
+        args += ["--" + k.replace("_", "-")] + ([] if v is True else [str(v)])
+    return re.search(r"AG-\d+", good(args)).group()
+
+def meta(hid):
+    return m.read_json(m.handoffs_root() / hid / "meta.json", {})
+
+def clear_tasks():
+    for task in m.all_metas():
+        if not task.get("archived"):
+            good(["handoff", "cancel", task["id"]]); good(["handoff", "close", task["id"]])
+
+def parallel_state():
+    results = [finish(p) for p in [start(["handoff", "offer", "--title", "parallel-%d" % i,
+                                         "--max-offers", "50"]) for i in range(4)]]
+    assert all(rc == 0 and "Traceback" not in out for rc, out in results), results
+    ids = [re.search(r"AG-\d+", out).group() for _, out in results]
+    assert len(set(ids)) == 4
+    assert {meta(h)["title"] for h in ids} == {"parallel-%d" % i for i in range(4)}
+    for _ in range(2):
+        hid = offered(worktree=True)
+        take = start(["handoff", "take", hid]); reclaim = start(["handoff", "reclaim", hid])
+        results = [finish(take), finish(reclaim)]
+        assert sorted(rc for rc, _ in results) == [0, 1], results
+        task = meta(hid)
+        assert bool(task.get("taken")) != bool(task.get("reclaim")), task
+        good(["handoff", "cancel", hid])
+    ps = [start(["statusline"], json.dumps({"session_id": "parallel-%d" % i,
+          "workspace": {"current_dir": str(proj)}, "rate_limits": {
+              "five_hour": {"used_percentage": 10, "resets_at": 4102444800}}})) for i in range(8)]
+    assert all(rc == 0 and "Traceback" not in out for rc, out in map(finish, ps))
+    sessions = m.read_json(home / "sessions.json", {})
+    assert all("parallel-%d" % i in sessions for i in range(8)), sessions
+    assert not list(home.glob("*.tmp"))
+    counter = m.handoffs_root() / "counter.json"
+    high = max(int(x["id"].split("-")[1]) for x in m.all_metas())
+    for corrupt in (True, False):
+        if corrupt:
+            counter.write_text("{broken", encoding="utf-8")
+        else:
+            counter.unlink()
+        assert int(offered().split("-")[1]) > high
+        high += 1
+    clear_tasks()
+    results = [finish(p) for p in [start(["handoff", "offer", "--title", "cap", "--max-offers", "1"])
+                                    for _ in range(3)]]
+    assert sorted(rc for rc, _ in results) == [0, 75, 75], results
+    clear_tasks()
+
+def state_failures():
+    path = home / "io.json"
+    m.write_json(path, {"preserved": True})
+    original_replace = m.os.replace
+    calls = []
+    def sharing(src, dst):
+        calls.append(src)
+        if len(calls) < 3:
+            raise PermissionError("sharing violation")
+        return original_replace(src, dst)
+    with mock.patch.object(m.os, "replace", sharing):
+        m.write_json(path, {"preserved": "updated"})
+    assert len(calls) == 3 and m.read_json(path, {})["preserved"] == "updated"
+    with mock.patch.object(m.os, "replace", side_effect=PermissionError("busy")), mock.patch.object(m.time, "sleep"):
+        try:
+            m.write_json(path, {})
+            raise AssertionError("replace failure ignored")
+        except m.StateError:
+            pass
+    assert not list(home.glob("*.tmp")) and m.read_json(path, {})["preserved"] == "updated"
+    with mock.patch.object(m.Path, "read_text", side_effect=PermissionError("busy")), mock.patch.object(m.time, "sleep"):
+        try:
+            m.read_json(path, {})
+            raise AssertionError("unreadable state treated as empty")
+        except m.StateError:
+            pass
+    hid = offered(worktree=True, base="missing-review-ref")
+    rc, out = run(["handoff", "take", hid])
+    assert rc != 0 and m.result_status(meta(hid)) == "OFFERED", (rc, out, meta(hid))
+    clear_tasks()
+    # Both notification and assignment write meta: force their interleaving around external work.
+    hid = offered()
+    with m.state_lock(m.state_dir() / ".state.lock"):
+        task = m.load_meta(hid); m.claim_handoff(task, m.resolve_profile("antigravity", proj))
+    original_assign = m.assign_handoff
+    def assign(claim, prof):
+        good(["handoff", "check"])
+        return original_assign(claim, prof)
+    with mock.patch.object(m, "assign_handoff", assign):
+        m.materialize_handoff(task, m.resolve_profile("antigravity", proj))
+    assert meta(hid)["taken"] and not meta(hid).get("assigning")
+    ps = [start(["handoff", "check"]), start(["handoff", "done", hid])]
+    assert all(rc == 0 for rc, _ in map(finish, ps))
+    assert meta(hid)["manual_status"] == "DONE" and meta(hid)["taken"]
+    # A mode notification must preserve usage changed after its first budget read.
+    m.save_usage({"five_hour": {"used": 10, "resets_at": m.iso(m.now() + dt.timedelta(hours=2))}}, "test")
+    original_budget = m.claude_budget
+    def new_usage():
+        mode, line = original_budget()
+        m.save_usage({"five_hour": {"used": 27, "resets_at": m.iso(m.now() + dt.timedelta(hours=2))}}, "test")
+        return mode, line
+    with mock.patch.object(m, "claude_budget", new_usage):
+        m.budget_event("review-update")
+    assert m.read_json(m.USAGE_SNAPSHOT, {})["five_hour"]["used"] == 27
+    clear_tasks()
+    # Real holder, bounded waiter, silent hook/statusline, and OS release on process death.
+    holder_code = "import importlib.machinery,importlib.util,sys,time; l=importlib.machinery.SourceFileLoader('o',sys.argv[1]); m=importlib.util.module_from_spec(importlib.util.spec_from_loader('o',l)); l.exec_module(m); c=m.state_lock(m.ORCH_HOME/'.state.lock'); c.__enter__(); print('ready',flush=True); time.sleep(30)"
+    holder = subprocess.Popen([sys.executable, "-B", "-c", holder_code, orch], env=env, cwd=str(proj),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert holder.stdout.readline().strip() == b"ready"
+        with mock.patch.object(m, "LOCK_WAIT", 0.05):
+            try:
+                m.heartbeat("busy")
+                raise AssertionError("lock not enforced")
+            except m.StateError as ex:
+                assert "timed out" in str(ex)
+        assert run(["hook", "user-prompt"], '{"session_id":"busy"}') == (0, "")
+        rc, out = run(["statusline"], '{"session_id":"busy"}')
+        assert rc == 0 and "Traceback" not in out and "busy" not in m.read_json(home / "sessions.json", {})
+    finally:
+        holder.kill(); holder.communicate(timeout=10)
+    m.heartbeat("after-crash")
+    assert "after-crash" in m.read_json(home / "sessions.json", {})
+
+def launch_profiles():
+    good(["profile", "set", "deepseek", "personal", "--key", "DUMMY_A", "--default"])
+    good(["profile", "set", "deepseek", "work", "--key", "DUMMY_B"])
+    out = good(["launch", "deepseek", "--dry-run", "--use", "deepseek=work"])
+    assert "Lead: deepseek@work" in out and "bbbb" in out, out
+    for name, message in (("off", "PROFILE_OFF"), ("missing", "PROFILE_ERROR")):
+        rc, out = run(["launch", "deepseek", "--dry-run", "--use", "deepseek=" + name])
+        assert rc != 0 and message in out, out
+    out = good(["launch", "deepseek", "--dry-run", "--use", "deepseek=off", "--profile", "work"])
+    assert "Lead: deepseek@work" in out
+    good(["profile", "use", "claude", "off"])
+    assert "Claude: only as an executor" in good(["launch", "deepseek", "--dry-run", "--use", "claude=default"])
+    assert "Claude: off" in good(["launch", "deepseek", "--dry-run", "--use", "claude=default", "--no-claude"])
+    assert "Lead: deepseek@work" in good(["launch", "deepseek", "--dry-run"], extra={"ORCH_PROFILES":"deepseek=work"})
+    good(["profile", "use", "claude", "inherit"])
+
+def worker_guard():
+    hid = offered()
+    before = meta(hid)
+    for args in (["list"], ["show", hid], ["check"], ["wait", "--any"], ["done", hid], ["cancel", hid],
+                 ["close", hid], ["take", hid], ["reclaim", hid], ["new", "--title", "x"], ["offer", "--title", "x"]):
+        rc, out = run(["handoff"] + args, extra={"ORCH_WORKER":"review-worker"})
+        assert rc != 0 and "only the orchestrator may use orch handoff" in out, (args, rc, out)
+    assert meta(hid) == before
+    assert run(["hook", "user-prompt"], extra={"ORCH_WORKER":"review-worker"}) == (0, "")
+    clear_tasks()
+
+fixed = m.now().replace(microsecond=0)
+def snapshot(five=None, week=None, age=0):
+    data = {"updated": m.iso(fixed - dt.timedelta(seconds=age)), "source":"operator"}
+    if five is not None: data["five_hour"] = five
+    if week is not None: data["seven_day"] = week
+    m.write_json(m.USAGE_SNAPSHOT, data)
+def window(used, hours, age=0):
+    return {"used":used, "resets_at":m.iso(fixed + dt.timedelta(hours=hours)),
+            "updated":m.iso(fixed - dt.timedelta(seconds=age))}
+
+def stale_budget():
+    snapshot(window(40, 4))
+    with mock.patch.object(m, "now", return_value=fixed):
+        snap = m.read_json(m.USAGE_SNAPSHOT, {})
+        rate, _ = m.window_pace(snap, 40, m.parse_iso(snap["five_hour"]["resets_at"]), 5)
+        assert m.claude_budget()[0] == "tight"
+    with mock.patch.object(m, "now", return_value=fixed + dt.timedelta(hours=3)):
+        assert m.window_pace(snap, 40, m.parse_iso(snap["five_hour"]["resets_at"]), 5)[0] == rate
+        mode, line = m.claude_budget()
+        assert mode == "tight" and "3h ago" in line and "stale" in line and "≈" not in line, line
+    snapshot({"used":10, "resets_at":m.iso(fixed + dt.timedelta(hours=2))}, age=3600)
+    assert m.claude_budget()[0] != "surplus"
+    out = good(["statusline"], '{}')
+    assert "stale:" in out and "surplus:" not in out
+    snapshot(window(10, 2), {"used":40, "resets_at":m.iso(fixed + dt.timedelta(days=4))}, age=3600)
+    old = m.read_json(m.USAGE_SNAPSHOT, {})["updated"]
+    good(["budget", "set", "--used", "15", "--resets", "+2h"])
+    assert m.read_json(m.USAGE_SNAPSHOT, {})["seven_day"]["updated"] == old
+
+def weekly_budget():
+    for five in (None, window(10, -1), window(10, 2)):
+        snapshot(five, window(82, 24 * 1.7))
+        mode, line = m.claude_budget()
+        assert mode == "tight" and "weekly limit" in line and "108% projected" in line, line
+    assert "tight: weekly limit (108% projected); conserve Claude" in good(["statusline"], '{}')
+    snapshot(None, {"used":95})
+    assert m.claude_budget()[0] == "tight"
+    snapshot(window(10, 2), window(15, 167))
+    assert m.claude_budget()[0] == "normal"    # early noisy projection blocks surplus, not TIGHT
+    snapshot(window(10, 2), window(95, 167))
+    assert m.claude_budget()[0] == "tight"     # used share is sufficient even on day one
+
+def hard_cap():
+    good(["profile", "set", "antigravity", "zero", "--max-open", "0", "--default"])
+    rc, out = run(["handoff", "new", "--title", "cap", "--force"])
+    assert rc == 75 and "profile limit 0" in out and "--force" not in out, out
+    hid = offered()
+    rc, out = run(["handoff", "take", hid, "--force"])
+    assert rc == 75 and "--force" not in out and m.result_status(meta(hid)) == "OFFERED", out
+    good(["profile", "use", "antigravity", "inherit", "--default"])
+    good(["handoff", "take", hid, "--max-open", "0", "--force"])
+    clear_tasks()
+
+def existing_result():
+    hid = re.search(r"AG-\d+", good(["handoff", "new", "--title", "ready"])).group()
+    Path(meta(hid)["result_path"]).write_text("STATUS: DONE\nfinished\n", encoding="utf-8")
+    assert "STATUS DONE" in good(["handoff", "wait", "--any", "--timeout", "1s"])
+    assert "No manual tasks" in good(["handoff", "wait", "--any", "--timeout", "1s"])
+    clear_tasks()
+
+def overdue_activity():
+    hid = re.search(r"AG-\d+", good(["handoff", "new", "--title", "activity"])).group()
+    task = meta(hid)
+    task.update(created=m.iso(fixed - dt.timedelta(hours=8)), taken=m.iso(fixed - dt.timedelta(hours=8)))
+    task.pop("activity_baseline", None)
+    m.save_meta(task)
+    (proj / "app.txt").write_text("activity\n", encoding="utf-8")
+    with mock.patch.object(m, "scan_latest_mtime", side_effect=AssertionError("fast check scanned workdir")):
+        assert not m.check_events(fast=True)
+    with mock.patch.object(m, "last_activity", wraps=m.last_activity) as activity:
+        events = m.check_events()
+        assert activity.call_count == 1
+    assert any("in progress" in e and hid in e for e in events), events
+    assert not m.check_events()
+    clear_tasks()
+
+def token_hygiene():
+    out = good(["launch", "deepseek", "--dry-run"], extra={"CLAUDE_CODE_OAUTH_TOKEN":"sensitive"})
+    assert any("CLAUDE_CODE_OAUTH_TOKEN" in l for l in out.splitlines() if l.startswith("Dropped")), out
+    good(["run", "claude", "--model", "haiku", "review"], extra={"FAKE_CLAUDE":"ok", "ORCH_LEAD":"deepseek",
+         "ORCH_LEAD_ENV":"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN":"lead-secret", "CLAUDE_CODE_OAUTH_TOKEN":"sensitive"})
+    record = json.loads(Path(env["FAKE_CLAUDE_LOG"]).read_text(encoding="utf-8"))
+    assert not record["env"].get("CLAUDE_CODE_OAUTH_TOKEN") and not record["env"].get("ANTHROPIC_AUTH_TOKEN")
+
+def run_outcomes():
+    for status in ("BLOCKED", "PARTIAL"):
+        out = good(["run", "codex", "--model", "review-model", "review"], extra={"FAKE_CODEX":status.lower()})
+        assert "[" + status + "]" in out, out
+        entries = [x for x in m.ledger_read() if x.get("kind") == "run"]
+        assert entries[-1]["status"] == status
+        assert status in good(["usage"])
+    rc, out = run(["run", "codex", "--model", "capacity-model", "review"], extra={"FAKE_CODEX":"capacity"})
+    assert rc == 75 and "QUOTA_EXHAUSTED" in out, out
+    entries = m.read_json(m.AVAIL_FILE, {})["entries"]
+    assert set(entries) == {"codex/capacity-model"}, entries
+    until = m.parse_iso(entries["codex/capacity-model"]["until"])
+    assert 9 * 60 < (until - m.now()).total_seconds() <= 10 * 60
+    assert run(["quota", "check", "codex/sibling"])[0] == 0
+    assert run(["run", "codex", "--model", "sibling", "review"], extra={"FAKE_CODEX":"fail"})[0] == 3
+    notes = (Path(orch).parent.parent / "registry/providers.yaml").read_text(encoding="utf-8")
+    assert "ORCH_CODEX_EXTRA_ARGS" in notes and "TMPDIR" in notes and "C:/Users/Public/" in notes
+
+def corruption_recovery():
+    hid = offered()
+    broken = m.handoffs_root() / "BAD" / "meta.json"
+    broken.parent.mkdir(exist_ok=True)
+    for raw in ("{", "[1]"):
+        broken.write_text(raw, encoding="utf-8")
+        for args in (["status"], ["handoff", "list"], ["handoff", "offer", "--title", "other"]):
+            rc, out = run(args)
+            assert rc == 0 and "meta.json" in out and "Traceback" not in out, out
+        assert run(["handoff", "take", "BAD"])[0] == 1
+    broken.unlink()
+    for path, args in ((m.USAGE_SNAPSHOT, ["budget"]), (m.SESSIONS_FILE, ["budget"]),
+                       (m.handoffs_root() / ".pool.json", ["status"]),
+                       (m.handoffs_root() / "counter.json", ["handoff", "offer", "--title", "counter"])):
+        if path == m.SESSIONS_FILE:
+            m.write_json(m.USAGE_SNAPSHOT, {"five_hour": {"used": 10, "resets_at": m.iso(m.now() + dt.timedelta(hours=1))}})
+        path.write_text("[1]", encoding="utf-8")
+        rc, out = run(args)
+        assert rc == 0 and str(path) in out and Path(str(path) + ".corrupt").exists(), out
+    m.AVAIL_FILE.write_text("{", encoding="utf-8")
+    assert run(["status"])[0] == 0 and run(["handoff", "offer", "--title", "available"])[0] == 0
+    for args in (["quota", "set", "codex", "exhausted"], ["quota", "clear", "codex"]):
+        rc, out = run(args)
+        assert rc == 1 and "availability.json" in out and m.AVAIL_FILE.read_text() == "{", out
+    m.AVAIL_FILE.unlink()
+    saved_profiles = m.PROFILES_FILE.read_bytes() if m.PROFILES_FILE.exists() else None
+    m.PROFILES_FILE.write_text("[1]", encoding="utf-8")
+    for args in (["status"], ["budget"]):
+        rc, out = run(args)
+        assert rc == 0 and "profiles.json" in out and "Traceback" not in out, out
+    assert run(["handoff", "offer", "--title", "refused"])[0] == 1
+    if saved_profiles is None: m.PROFILES_FILE.unlink()
+    else: m.PROFILES_FILE.write_bytes(saved_profiles)
+    original = m.USAGE_SNAPSHOT.read_bytes()
+    with mock.patch.object(m.Path, "read_text", side_effect=PermissionError("busy")), mock.patch.object(m.time, "sleep"):
+        try:
+            m.read_json(m.USAGE_SNAPSHOT, {}, recover_corrupt=True)
+            raise AssertionError("permission error treated as corruption")
+        except m.StateError:
+            pass
+    assert m.USAGE_SNAPSHOT.read_bytes() == original
+    clear_tasks()
+
+def assignment_recovery():
+    hid = offered(worktree=True)
+    task = meta(hid)
+    task.update(taken=m.iso(m.now() - dt.timedelta(minutes=11)), assigning="old-token")
+    m.save_meta(task)
+    old = dict(task)
+    assert not any(hid in e for e in m.check_events(fast=True))
+    events = m.check_events()
+    assert sum(hid in e and "returned to the pool" in e for e in events) == 1, events
+    assert m.result_status(meta(hid)) == "OFFERED" and not meta(hid).get("assigning")
+    with mock.patch.object(m, "assign_handoff", return_value=old):
+        try:
+            m.materialize_handoff(old, None)
+            raise AssertionError("late finisher accepted")
+        except SystemExit:
+            pass
+    branch = "ag/" + hid.lower()
+    subprocess.run(["git", "branch", branch], cwd=str(proj), check=True)
+    good(["handoff", "take", hid])
+    assert meta(hid)["branch"] == branch
+    clear_tasks()
+    hid = offered()
+    task = meta(hid); task.update(offered=None, taken=m.iso(m.now()), assigning="failure")
+    m.save_meta(task)
+    with mock.patch.object(m, "assign_handoff", side_effect=RuntimeError("test failure")):
+        try:
+            m.materialize_handoff(task, None)
+            raise AssertionError("failure swallowed")
+        except RuntimeError:
+            pass
+    task = meta(hid)
+    assert task["manual_status"] == "CANCELLED" and task["archived"] and "test failure" in task["manual_note"]
+    hid = offered(); task = meta(hid)
+    task.update(offered=None, taken=m.iso(m.now() - dt.timedelta(minutes=11)), assigning="stale")
+    m.save_meta(task); assert any(hid in e and "cancelled" in e for e in m.check_events())
+    assert meta(hid)["manual_status"] == "CANCELLED" and meta(hid)["archived"]
+    hid = offered(); task = meta(hid); task.update(taken=m.iso(m.now()), assigning="failure")
+    m.save_meta(task)
+    with mock.patch.object(m, "assign_handoff", side_effect=RuntimeError("test")):
+        try: m.materialize_handoff(task, None)
+        except RuntimeError: pass
+    assert m.result_status(meta(hid)) == "OFFERED"
+    clear_tasks()
+
+def report_reclaimed():
+    for mode, expected in (("preamble", "BLOCKED"), ("first_done", "OK"), ("partial", "PARTIAL")):
+        hid = offered()
+        good(["handoff", "reclaim", hid, "--next"])
+        out = good(["run", "codex", "--handoff", hid, "review"], extra={"FAKE_CODEX":mode})
+        assert "[" + expected + "]" in out, out
+        if expected != "OK":
+            assert "slot stays busy" in out and not meta(hid)["reclaim"]["finished"], out
+            good(["handoff", "done", hid])
+        assert meta(hid)["reclaim"]["finished"]
+    clear_tasks()
+
+failed = 0
+for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", parallel_state),
+                   ("1 atomic I/O failures, rollback, nested lock and crash release", state_failures),
+                   ("2 launch session profile precedence and errors", launch_profiles),
+                   ("3 central worker guard for every handoff command", worker_guard),
+                   ("4 stale measurement pace and independent window timestamps", stale_budget),
+                   ("5 weekly TIGHT without current five-hour numbers", weekly_budget),
+                   ("6 force cannot bypass manual profile capacity", hard_cap),
+                   ("7 wait any reports an existing result exactly once", existing_result),
+                   ("8 inferred activity gets one overdue warning; fast check never scans", overdue_activity),
+                   ("9 lead drops OAuth token; Claude executor works without it", token_hygiene),
+                   ("10 blocked/partial ledger and model-only capacity fallback", run_outcomes),
+                   ("review corrupt state recovery and operator protection", corruption_recovery),
+                   ("review stale claims, late finishers and assignment failures", assignment_recovery),
+                   ("review report first status and reclaimed slot", report_reclaimed)]:
+    try:
+        test()
+        print("PASS " + name)
+    except Exception:
+        failed += 1
+        print("FAIL " + name)
+        traceback.print_exc()
+sys.exit(bool(failed))
+EOF
+); review_rc=$?
+while IFS= read -r line; do
+  case "$line" in
+    "PASS "*) ok "${line#PASS }" ;;
+    "FAIL "*) bad "${line#FAIL }" ;;
+    *) [[ -z "$line" ]] || echo "$line" ;;
+  esac
+done <<<"$review"
+[[ $review_rc -eq 0 ]] || bad "review regression process failed (rc=$review_rc)"
 
 echo "── registry & doctor"
 out=$($ORCH registry path); contains "$out" "registry/providers.yaml" "default registry path"

@@ -22,4 +22,4 @@ No reset time given — don't make one up: set it without `--until` and say the 
 - Restrictions with `--until` are lifted automatically when the time comes. `orch run` catches the Codex limit and
   the DeepSeek balance itself (exit 75) and records them on the profile's key.
 - After any change, move unstarted subtasks off unavailable slots to their fallback.
-- Stored in `~/.orchestra/availability.json`, shared by all projects.
+- Stored in `~/.orchestra/availability.json`, shared by all projects. If unreadable, reads warn and assume no restrictions; quota changes refuse until the file is fixed.

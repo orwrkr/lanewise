@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0
+
+- **Recovery**: corrupt rebuildable state is preserved before reset; damaged task records are skipped in reports,
+  and unreadable availability is ignored for reads but protected from writes. Stale assignment claims return
+  offered tasks to the pool; failed or stale direct assignments are cancelled and archived.
+- **Reclaimed tasks**: the first status line determines the outcome even after a preamble; PARTIAL and BLOCKED
+  keep the slot busy until explicitly marked done.
+- **Shared state**: unique atomic-write temp files with Windows sharing-violation retries; reentrant OS locks,
+  bounded CLI waits and quiet short hook/status-line waits. Manual IDs, capacity, transitions, notifications,
+  pool checks, sessions, budget snapshots, quota and profile updates are serialized. Take claims ownership
+  before worktree creation outside the lock and rolls back on failure; lost/corrupt counters cannot reuse IDs.
+- **Lead and worker rules**: launch session choices govern the lead and Claude lane; explicit profiles still
+  win. Every handoff subcommand refuses inside a worker. Non-Claude leads drop the OAuth token too; the lead
+  documentation clarifies that credential hygiene does not sandbox the operator's tools or config directory.
+- **Claude budget**: independent measurement times anchor average/recent pace and projections. Five-hour numbers
+  older than 20 minutes cannot enable SURPLUS and show their age. Weekly usage or a projection after day one
+  raises TIGHT, including without five-hour numbers; obsolete reserve clock times are suppressed.
+- **Manual lane**: profile capacity cannot be bypassed with force; wait-any reports an existing unreported final
+  result once. Inferred STARTED? activity gets the overdue warning; fast checks still avoid workdir scans.
+- **Run outcomes**: BLOCKED/PARTIAL reports retain their status in headers and usage (exit 0); Codex model
+  capacity produces exit 75 and a model-only ten-minute block. Registry notes explain native Windows sandbox
+  temp-directory access and the scratch-directory remedy.
+- **Self-test**: fail-safe setup aborts before running checks in the wrong directory; optional ORCH_TEST_TIMING
+  reports per-check time; literal patterns match without grep. Added real process races and regression checks
+  for state failure/rollback, profile precedence, worker guards, budget freshness, weekly limits and run outcomes.
+
 ## 0.6.0
 
 - **Budget reserve**: a share of the Claude window (default 10%) and of the week (10%) is kept for other sessions

@@ -66,6 +66,8 @@ Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry
   `# orch-profile-env: field=VARIABLE`. Session-wide choices: `ORCH_PROFILES=provider=profile,…`.
 - Usage log `~/.orchestra/usage.jsonl`: runs (`usage.json` from the adapter), manual tasks, session snapshots
   (SessionEnd). Writing to the log never breaks a run.
+- Read-modify-write of shared state must hold its interprocess lock, re-read and validate under the lock, and
+  release it before slow external work; hooks and the status line use a short wait and skip busy updates silently.
 - Hooks (`orch hook …`) never crash and never make noise: any error → a silent `exit 0`; output — only on an event.
 - Adapters follow the contract from `adapters/_template.example` (env `ORCH_*`, exit 75 = limit, `usage.json`).
 - **No programmatic interaction with Antigravity** (or other manual agents): don't launch `agy`, don't use

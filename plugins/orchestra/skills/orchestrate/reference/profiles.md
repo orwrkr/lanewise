@@ -13,7 +13,7 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 | "DeepSeek here — with the work key" | `orch profile use deepseek work` |
 | "put it back to the default" | `orch profile use deepseek inherit` |
 | "leave Codex alone by default" | `orch profile use codex off --default` |
-| "for all projects in /path/to/work — the work key" | `orch profile use deepseek work --path "/path/to/work"` |
+| "for all projects in this folder — the work key" | `orch profile use deepseek work --path "/path/to/folder"` |
 | "don't offer Antigravity in this project" | `orch profile use antigravity off` |
 | "no Claude in this project" (no orch-* subagents, no `orch run claude`) | `orch profile use claude off` |
 | "keep a quarter of the Claude window for my other sessions" | `orch profile set claude main --opt reserve=25` and `orch profile use claude main --default` |

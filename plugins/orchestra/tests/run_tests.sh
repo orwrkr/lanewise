@@ -168,6 +168,47 @@ case "$TOP/" in "$T_ABS/"*) ;; *) die "git repository is outside temporary direc
 git config user.email t@t && git config user.name t || die "cannot configure test repository"
 echo "hello" > app.txt && git add . && git commit -qm init || die "cannot initialize test commit"
 
+echo "── portability guard (no machine-specific content)"
+GUARD="$(native "$PLUGIN/tests/check_portable.py")"
+ROOT_REPO="$(cd "$PLUGIN/../.." && pwd)"
+out=$($PY "$GUARD" --root "$(native "$ROOT_REPO")" 2>&1); rc=$?
+[[ $rc -eq 0 ]] && ok "the repository itself is clean" || { bad "machine-specific content in the repository"; echo "$out"; }
+GT="$T/guard"; mkdir -p "$GT" || die "cannot create guard repository"
+git -C "$GT" init -q && git -C "$GT" config user.email t@t.invalid && git -C "$GT" config user.name t || die "guard repository"
+guard_on() { printf '%s\n' "$1" > "$GT/f.txt"; $PY "$GUARD" --root "$(native "$GT")" >/dev/null 2>&1; }
+u=someone     # the paths are assembled here, so this file stays clean for the guard
+for text in "C:/Users/$u/x" 'C:\Users\'"$u"'\x' "C:\\\\Users\\\\$u\\\\x" "/c/Users/$u/x" "/mnt/c/Users/$u/x" "/home/$u/x" "/Users/$u/x" \
+            "D:/$u/x" "/mnt/d/$u/x"; do
+  guard_on "see $text here" && bad "guard missed: $text" || ok "guard flags: $text"
+done
+for text in "C:/Users/me/x" "/home/you/x" "/path/to/x" 'C:\path\to\x' "https://github.com/x/home/y" '$T/home/z' '~/.orchestra' \
+            'STATUS:\s*' "C:/Users/Public/x" 'C:\Program Files\Git' '$HOME/.local' '"C:\\"'; do
+  guard_on "see $text here" && ok "guard allows: $text" || bad "guard false alarm: $text"
+done
+guard_on "see C:\Program Files\Git here" && ok "guard allows a system path with a space" || bad "guard false alarm on a system path"
+GW="$T/guard-nogit"; mkdir -p "$GW/sub" || die "cannot create guard directory"; printf 'gitdir: /nowhere\n' > "$GW/.git"
+printf 'x /home/%s/y\n' "$u" > "$GW/sub/f.txt"
+$PY "$GUARD" --root "$(native "$GW")" >/dev/null 2>&1 && bad "guard passed a tree git can't read" || ok "guard still scans a worktree git can't read"
+printf 'a zzguardname b\n' > "$GT/f.txt"
+USER=zzguardname USERNAME=zzguardname LOGNAME=zzguardname $PY "$GUARD" --root "$(native "$GT")" >/dev/null 2>&1 \
+  && bad "guard missed this machine's user name" || ok "guard flags this machine's user name"
+$PY "$GUARD" --root "$(native "$GT")" >/dev/null 2>&1 && ok "another name is no finding" || bad "guard flagged a name that isn't this machine's"
+printf 'x /home/%s/y\n' "$u" > "$GT/f.txt"; git -C "$GT" add f.txt; printf 'clean\n' > "$GT/f.txt"
+( cd "$GT" && $PY "$GUARD" --staged >/dev/null 2>&1 ) && bad "guard --staged missed the index" || ok "guard --staged reads the index, not the file"
+printf 'clean\n' > "$GT/f.txt"; git -C "$GT" add f.txt
+printf 'subject\n\n/home/%s/y\n' "$u" > "$GT/msg"
+$PY "$GUARD" --message "$(native "$GT/msg")" >/dev/null 2>&1 && bad "guard missed a commit message" || ok "guard flags a commit message"
+printf 'subject\n# /home/%s/y\n' "$u" > "$GT/msg"
+$PY "$GUARD" --message "$(native "$GT/msg")" >/dev/null 2>&1 && ok "guard skips comment lines in a message" || bad "guard flagged a message comment"
+HOOKS="$(native "$ROOT_REPO/.githooks")"
+printf 'x /home/%s/y\n' "$u" > "$GT/f.txt"; git -C "$GT" add f.txt
+git -C "$GT" -c core.hooksPath="$HOOKS" commit -qm bad >/dev/null 2>&1 && bad "pre-commit let a home path through" || ok "pre-commit stops a home path"
+printf 'clean\n' > "$GT/f.txt"; git -C "$GT" add f.txt
+# through a file: Git Bash rewrites a `-m /home/…` argument before git ever sees it
+printf 'subject /home/%s/y\n' "$u" > "$GT/msg"
+git -C "$GT" -c core.hooksPath="$HOOKS" commit -q -F "$(native "$GT/msg")" >/dev/null 2>&1 && bad "commit-msg let a home path through" || ok "commit-msg stops a home path"
+git -C "$GT" -c core.hooksPath="$HOOKS" commit -qm "fine" >/dev/null 2>&1 && ok "a clean commit passes both hooks" || bad "hooks stopped a clean commit"
+
 echo "── quota"
 out=$($ORCH quota show); contains "$out" "all executors available\|All executors available" "empty availability"
 $ORCH quota set codex/gpt-5.6-sol exhausted --until "+2h" --note "test" >/dev/null

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.13.0
+
+- **A broken `spend_limits.json` now refuses runs instead of letting them through**: a corrupt limits file made a
+  manual scope look like it had spent nothing (its baseline was lost, so `current_spend` returned $0 and the run
+  proceeded). `orch run`, `orch launch` and `orch key` now name the broken file and refuse when they cannot check
+  the limit — fail-closed, like a broken `profiles.json`. Reads (`orch spend`) still show the defaults.
+- **Interrupted and failed runs are logged, not dropped**: a run killed by a signal or `Ctrl-C` no longer exits
+  without a ledger line — its partial usage is recorded (and its cost counted against the limit). The token usage of
+  every run now prefers the adapter's `usage.json` and falls back to `usage_live.json`, so a failed run keeps the
+  tokens it reported before failing instead of logging $0.
+- **One spend count per lead session**: a `SessionEnd` snapshot is cumulative, and the same session could be logged
+  more than once, so a lead's tokens were summed twice. The spend cache now keys session records by session id and
+  keeps only the last snapshot (cache format 3, which also clears any previously double-counted totals).
+- **A mid-run spend poll can no longer crash the run**: a half-written `usage_live.json` or an unreadable Codex
+  rollout used to raise out of the poll loop, killing `orch run` without a ledger line. The poll now skips one round
+  on a read error, the adapter writes `usage_live.json` atomically, and the process tree is reaped in a `finally`.
+- **The operator's API key no longer leaks into workers**: `worker_env` now strips `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, `CODEX_API_KEY` and `OPENAI_API_KEY`, so a login-profile worker can't silently switch to
+  API billing on the operator's key. A profile's own key still reaches the worker through its declared secret.
+- **`orch spend` scope handling**: scopes are lowercased (`orch spend limit DEEPSEEK 5` now means `deepseek`);
+  `orch spend limit <provider>@<profile>` refuses a profile that doesn't exist; and `orch spend reset … --project`
+  refuses a project that has no limit of its own instead of writing a baseline that would never be read.
+- **`--profile` is honoured by every part of a run**: `orch run codex --profile work` now reads mid-run spend and
+  refreshes the account limits from `work`'s `--home`, and the Claude consumer / API-billing checks use the resolved
+  profile instead of re-resolving the default.
+- **Limits reject `nan`/`inf`** instead of accepting a non-finite dollar amount.
+- **The spend cache persists its byte offset** even when new ledger bytes contain no API-billed records, so it no
+  longer re-reads them on every check.
+- **Model names display correctly**: `deepseek-v4-pro[1m]` now shows as *DeepSeek V4 Pro*, and an unknown model
+  version such as `claude-opus-6-0` stays as-is instead of collapsing to *Claude*.
+- **Headless workers don't read secret files by accident**: the DeepSeek and Claude adapters deny `.env` and `.env.*`
+  (`.env.example` too, since a deny outranks an allow; a tracked one reads with `git show HEAD:.env.example`) and
+  Bash searches that print ignored files (`grep`, `rg`, `git grep --no-index`), and forward the target project's
+  `permissions.deny` Read and Bash rules, which `--setting-sources user` would otherwise skip. Checked against the
+  real CLI. It stops accidents, not intent: `cat .en*` still gets through, and Codex has no such rule.
+- **Codex 401 wording matches the profile**: a 401 on a `codex login` account now says "log in again" instead of
+  blaming an API key, and the auth detector no longer matches a bare `401` in unrelated output.
+
 ## 0.12.0
 
 - **Manual tasks survive a moved project folder and a Windows↔WSL switch**: `meta.json` no longer stores

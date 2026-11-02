@@ -27,6 +27,7 @@ Stdlib only, Python 3.8+.
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import platform
 import random
@@ -142,8 +143,8 @@ NAMES.update(MODEL_NAMES)
 
 
 def display_name(name):
-    """id → display name. Unknown ids are shown as-is; a dated/suffixed variant resolves only when exactly one
-    known name is its longest prefix (followed by a separator)."""
+    """id → display name. Unknown ids are shown as-is; a dated/suffixed model resolves only when exactly one
+    known model name is its longest prefix (followed by a separator); a trailing [bracket] variant is stripped."""
     if name is None:
         return None
     s = str(name).strip()
@@ -152,7 +153,11 @@ def display_name(name):
     key = s.lower()
     if key in NAMES:
         return NAMES[key]
-    hits = [(k, v) for k, v in NAMES.items() if key.startswith(k) and len(key) > len(k) and key[len(k)] in "-_."]
+    key = re.sub(r"\[[^\]]*\]$", "", key)          # deepseek-v4-pro[1m] → deepseek-v4-pro
+    if key in NAMES:
+        return NAMES[key]
+    # only model names may extend (claude-opus-5-5-…), never provider names — an unknown version stays as-is
+    hits = [(k, v) for k, v in MODEL_NAMES.items() if key.startswith(k) and len(key) > len(k) and key[len(k)] in "-_."]
     if not hits:
         return s
     longest = max(len(k) for k, _ in hits)
@@ -965,13 +970,14 @@ CODEX_REFRESH_SECONDS = 60
 CODEX_WINDOWS = ((300, "five_hour"), (10080, "seven_day"))
 
 
-def codex_home(where=None):
-    """Effective CODEX_HOME: the profile's --home (account) or the environment / the default ~/.codex."""
+def codex_home(where=None, prof=None):
+    """Effective CODEX_HOME: the profile's --home (account) or the environment / the default ~/.codex.
+    A resolved `prof` (the run's own profile) is used when given, so `--profile` is honoured."""
     home = os.environ.get("CODEX_HOME")
     try:
-        prof = resolve_profile("codex", where or project_dir())
-        if prof.name != "off" and prof.data.get("home"):
-            home = local_path(str(prof.data["home"]))
+        p = prof if prof is not None else resolve_profile("codex", where or project_dir())
+        if p.name != "off" and p.data.get("home"):
+            home = local_path(str(p.data["home"]))
     except ProfileError:
         pass
     return str(Path(home).expanduser()) if home else str(Path.home() / ".codex")
@@ -1104,9 +1110,9 @@ def codex_windows(measured, windows, plan_type):
 
 
 @locked("home")
-def refresh_codex(where=None, force=False):
+def refresh_codex(where=None, force=False, prof=None):
     """Update the cached Codex windows; at most once a minute (unless forced). Returns the (possibly empty) entry."""
-    home = codex_home(where)
+    home = codex_home(where, prof)
     snap = read_json(CODEX_USAGE_FILE, {}, recover_corrupt=True)
     if not isinstance(snap, dict):
         snap = {}
@@ -2583,11 +2589,23 @@ def known_providers():
 
 
 def valid_scope(scope):
-    """True when a scope names a known provider or a known provider@profile."""
-    scope = (scope or "").strip()
+    """True when a scope names a known provider, or a known provider@profile that exists."""
+    scope = (scope or "").strip().lower()
     if not scope:
         return False
-    return scope.split("@")[0].lower() in known_providers()
+    provider, _, name = scope.partition("@")
+    if provider not in known_providers():
+        return False
+    if not name:
+        return True
+    try:
+        data, err = load_profiles()
+    except Exception:
+        return True
+    if err:
+        return True                          # a broken profiles file cannot answer; the provider part already passed
+    _, profs = provider_section(data, provider)
+    return name in {p.lower() for p in profs} or name == "default"
 
 
 def scope_has_key(scope, where=None):
@@ -2777,7 +2795,8 @@ def _session_cost(rec):
 
 
 def record_spend(rec):
-    """(label, project, cost, ts) of a ledger record, or None when it does not count toward spend."""
+    """(label, project, cost, ts, sid) of a ledger record, or None when it does not count toward spend.
+    `sid` is the session id for session records (None for runs) — snapshots of one session are deduplicated."""
     if not isinstance(rec, dict):
         return None
     ts = parse_iso(str(rec.get("ts") or "")) or now()
@@ -2785,28 +2804,30 @@ def record_spend(rec):
         if not _api_billed_record(rec):
             return None
         label = str(rec.get("label") or rec.get("provider") or "?")
-        return label, rec.get("project"), _run_cost(rec), ts
+        return label, rec.get("project"), _run_cost(rec), ts, None
     if rec.get("kind") == "session":
         lead = str(rec.get("lead") or "")
         if not lead:
             return None
-        return lead, rec.get("project"), _session_cost(rec), ts
+        sid = rec.get("session")
+        return lead, rec.get("project"), _session_cost(rec), ts, str(sid) if sid else None
     return None
 
 
 @locked("home")
 def spend_cache_update():
-    """Update the spend cache from the usage ledger. → (records, changed). Records: {label, project, cost, ts}.
+    """Update the spend cache from the usage ledger. → (records, changed). Records: {label, project, cost, ts, sid}.
     Restarts on a shrunken ledger (byte offset, like session_tokens); a reset (baseline/month) is applied at read
-    time, so it takes effect at once without re-reading the ledger."""
+    time, so it takes effect at once without re-reading the ledger. Session records are deduplicated by session id:
+    each SessionEnd snapshot is cumulative, so only the last one per session counts."""
     cache = read_json(SPEND_CACHE_FILE, {}, recover_corrupt=True)
     if not isinstance(cache, dict):
         cache = {}
     records = cache.get("records") if isinstance(cache.get("records"), list) else []
     offset = cache.get("offset") if isinstance(cache.get("offset"), int) else 0
     changed = False
-    if cache.get("format") != 2:                          # migrate: the old cache cleared per month and had no ts
-        cache = {"format": 2, "offset": 0}
+    if cache.get("format") != 3:                          # migrate: v2 summed repeated session snapshots
+        cache = {"format": 3, "offset": 0}
         records, offset, changed = [], 0, True
     try:
         size = USAGE_FILE.stat().st_size
@@ -2831,13 +2852,25 @@ def spend_cache_update():
                 continue
             r = record_spend(rec)
             if r is not None:
-                new.append({"label": r[0], "project": r[1], "cost": r[2], "ts": r[3].isoformat()})
+                new.append({"label": r[0], "project": r[1], "cost": r[2], "ts": r[3].isoformat(), "sid": r[4]})
         if new:
             records = records + new
+        if consumed:                                      # persist the offset even when nothing counted
             changed = True
         offset += consumed
     if changed:
-        write_json(SPEND_CACHE_FILE, {"format": 2, "offset": offset, "records": records})
+        seen, deduped = {}, []                            # keep only the last snapshot per session
+        for r in records:
+            sid = r.get("sid")
+            if sid is None:
+                deduped.append(r)
+            elif sid in seen:
+                deduped[seen[sid]] = r
+            else:
+                seen[sid] = len(deduped)
+                deduped.append(r)
+        records = deduped
+        write_json(SPEND_CACHE_FILE, {"format": 3, "offset": offset, "records": records})
     return records, changed
 
 
@@ -2924,9 +2957,11 @@ def _spend_warn(scope, spent, eff, kind, config=None, where=None):
 
 def spend_start(scope, where):
     """Pre-start check of an executor run. → (allowed, line). Refuses at the limit under stop/evaluate; --force
-    does not bypass it."""
+    does not bypass it; a broken limits file refuses (fail-closed, like profiles)."""
+    config, err = load_spend_limits()
+    if err:
+        return False, ("SPEND_LIMIT %s — %s; fix or remove it, then retry" % (scope_name(scope), err))
     ensure_baseline(scope, where)
-    config = load_spend_limits()[0]
     eff = resolve_spend(config, scope, where)
     spent = current_spend(scope, where)
     limit = _limit_number(eff)
@@ -2941,8 +2976,10 @@ def spend_start(scope, where):
 
 def spend_lead_start(scope, where):
     """Pre-start check of a lead session (orch launch). → (allowed, line)."""
+    config, err = load_spend_limits()
+    if err:
+        return False, ("SPEND_LIMIT %s — %s; fix or remove it, then retry" % (scope_name(scope), err))
     ensure_baseline(scope, where)
-    config = load_spend_limits()[0]
     eff = resolve_spend(config, scope, where)
     spent = current_spend(scope, where)
     limit = _limit_number(eff)
@@ -2958,7 +2995,9 @@ def spend_lead_start(scope, where):
 def spend_lead_key(scope, where):
     """orch key refusal: a Claude lead's requests fail past the threshold (stop at 100%, evaluate past the
     overrun). → (allowed, line)."""
-    config = load_spend_limits()[0]
+    config, err = load_spend_limits()
+    if err:
+        return False, ("SPEND_LIMIT %s — %s; fix or remove it, then retry" % (scope_name(scope), err))
     eff = resolve_spend(config, scope, where)
     spent = current_spend(scope, where)
     kill = spend_kill_at(eff, "lead_mode")
@@ -2969,15 +3008,15 @@ def spend_lead_key(scope, where):
     return True, None
 
 
-def live_usage(run_dir, provider, where=None):
+def live_usage(run_dir, provider, where=None, prof=None):
     """The executor's token usage so far during a run (headless adapters write usage_live.json; codex reads its
     rollout's token_count)."""
     if provider == "codex":
-        return codex_live_usage(run_dir, where)
+        return codex_live_usage(run_dir, where, prof)
     return read_json(Path(run_dir) / "usage_live.json", None)
 
 
-def codex_live_usage(run_dir, where=None):
+def codex_live_usage(run_dir, where=None, prof=None):
     """Codex reports usage at the end of a turn: read token_count.info.total_token_usage from the run's rollout
     (thread_id). Best-effort — if the rollout is unreadable, codex gets no mid-run stop (pre/post checks remain)."""
     try:
@@ -2986,7 +3025,7 @@ def codex_live_usage(run_dir, where=None):
         return None
     if not tid:
         return None
-    sessions = Path(codex_home(where)) / "sessions"
+    sessions = Path(codex_home(where, prof)) / "sessions"
     if not sessions.is_dir():
         return None
     files = [p for p in sessions.rglob("rollout-*.jsonl") if tid in p.name]
@@ -3007,12 +3046,16 @@ def codex_live_usage(run_dir, where=None):
         u = info.get("total_token_usage") if isinstance(info, dict) else None
         if not isinstance(u, dict):
             continue
+        try:
+            inp = int(u.get("input_tokens") or 0)
+            cache = int(u.get("cached_input_tokens") or 0)
+            out = int(u.get("output_tokens") or 0)
+        except (TypeError, ValueError):
+            continue                                    # a malformed usage line must not crash the run
         found = True
-        inp = int(u.get("input_tokens") or 0)
-        cache = int(u.get("cached_input_tokens") or 0)
         usage["input_tokens"] = max(inp - cache, 0)      # codex counts cache reads inside input
         usage["cached_input_tokens"] = cache
-        usage["output_tokens"] = int(u.get("output_tokens") or 0)
+        usage["output_tokens"] = out
     return usage if found else None
 
 
@@ -3086,15 +3129,15 @@ def spend_event(announce=True):
 
 
 def parse_limit(value):
-    """USD amount (float) or None for 'off'; exits on a bad value."""
+    """USD amount (float) or None for 'off'; exits on a bad value (negative, NaN or infinity)."""
     if value == "off":
         return None
     try:
         v = float(value)
-        if v < 0:
+        if not math.isfinite(v) or v < 0:
             raise ValueError
         return v
-    except ValueError:
+    except (TypeError, ValueError):
         raise SystemExit("orch: limit is a USD amount or 'off', got %r" % value)
 
 
@@ -3143,7 +3186,7 @@ def cmd_spend(a):
         return 0
     if err:
         raise SystemExit("orch: %s — fix or remove it before changing limits" % err)
-    scope = (a.scope or "").strip()
+    scope = (a.scope or "").strip().lower()
     if scope != "default" and not valid_scope(scope):
         raise SystemExit("orch: scope is 'default', a provider, or <provider>@<profile>, got %r" % scope)
     proj_arg = getattr(a, "project", None)
@@ -3178,6 +3221,9 @@ def cmd_spend(a):
         print("%s %s %s: %s" % (scope_name(scope), where_, "lead mode" if field == "lead_mode" else "executor mode", a.value))
     elif action == "reset":
         canon = spend_where(where)
+        if project and counter_key(data, scope, canon)[0] != canon and getattr(a, "limit", None) is None:
+            raise SystemExit("orch: %s has no %s limit of its own — set one first: orch spend limit %s N --project"
+                             % (where_, scope_name(scope), scope))
         owner = canon if project else counter_key(data, scope, canon)[0]
         spent = current_spend(scope, where)
         old_limit = _limit_number(resolve_spend(data, scope, where))
@@ -3289,6 +3335,9 @@ def load_secrets():
 # Variables of the orchestrating Claude Code session (messaging socket and token, session id, effort, …) must not
 # reach a worker: a nested `claude` would attach to our session, and for any other CLI they are just leaked secrets.
 KEEP_CLAUDE_VARS = ("CLAUDE_CODE_GIT_BASH_PATH", "CLAUDE_CONFIG_DIR")
+# The operator's own API credentials must not leak into a worker either: a login-profile worker would silently
+# switch to API billing on the operator's key. A profile's own key re-enters via `extra` (its declared secret name).
+WORKER_LEAK_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY")
 
 
 def lead_vars():
@@ -3298,7 +3347,7 @@ def lead_vars():
 
 def worker_env(extra, secrets=()):
     lead = lead_vars()          # a DeepSeek lead's endpoint and token are not the worker's business
-    env = {k: v for k, v in os.environ.items() if k not in lead and
+    env = {k: v for k, v in os.environ.items() if k not in lead and k not in WORKER_LEAK_VARS and
            (k in KEEP_CLAUDE_VARS or not (k == "CLAUDECODE" or k.startswith("CLAUDE_")))}
     stored = load_secrets() if secrets else {}
     for name in secrets:          # only the keys the adapter declares (# orch-secrets: …), real environment wins
@@ -3431,6 +3480,7 @@ def cmd_run(a):
     except ProfileError as ex:
         print("PROFILE_ERROR %s — %s" % (provider, ex))
         return 1
+    key_var = prof.data.get("key") if prof.explicit else None    # the run's own API key variable (--profile honoured)
     key = prof.label + ("/" + model if model else "")
     ok, e, k = availability(key)
     if not ok and not a.force:
@@ -3497,13 +3547,14 @@ def cmd_run(a):
     # on timeout or stop the whole tree goes, not just the adapter
     detach = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | 0x4} if IS_WINDOWS   # | CREATE_SUSPENDED
               else {"start_new_session": True})
-    consumer = "run:" + run_id if provider == "claude" and not profile_key("claude", cwd) else None
+    consumer = "run:" + run_id if provider == "claude" and not key_var else None
     if consumer:
         try:
             heartbeat(consumer, cwd, kind="executor")
         except Exception:
             consumer = None
     t0 = time.time()
+    state = {"interrupted": None}       # SIGTERM/SIGHUP signum, or "keyboard"
     with log_file.open("w", encoding="utf-8") as log:
         try:
             proc = subprocess.Popen(command, env=env, cwd=str(cwd), stdout=log, stderr=subprocess.STDOUT,
@@ -3514,38 +3565,49 @@ def cmd_run(a):
 
         def stop(signum, frame):
             kill_tree(proc, job)
-            sys.exit(128 + signum)
+            state["interrupted"] = signum
         for name in ("SIGTERM", "SIGHUP"):
             if hasattr(signal, name):
                 signal.signal(getattr(signal, name), stop)
         deadline = (time.time() + timeout) if timeout else None
         spend_killed = False
-        while True:
-            wait = SPEND_POLL_SECONDS
-            if deadline:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    kill_tree(proc, job)
-                    rc = EXIT_TIMEOUT
-                    log.write("\n[orch] killed after timeout %ss\n" % timeout)
-                    break
-                wait = min(wait, remaining)
-            try:
-                rc = proc.wait(timeout=wait)
-                kill_tree(proc, job)      # reap what the worker left behind (e.g. codex's Windows sandbox helper)
-                break
-            except subprocess.TimeoutExpired:
-                if scope and spend_kill is not None:
-                    live = live_usage(run_dir, provider, cwd)
-                    if live and spend_base + usage_cost(live, provider, model) >= spend_kill:
+        try:
+            while True:
+                wait = SPEND_POLL_SECONDS
+                if deadline:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
                         kill_tree(proc, job)
-                        rc = EXIT_QUOTA
-                        spend_killed = True
-                        log.write("\n[orch] killed: spend limit reached (%s)\n" % scope)
+                        rc = EXIT_TIMEOUT
+                        log.write("\n[orch] killed after timeout %ss\n" % timeout)
                         break
-            except KeyboardInterrupt:
-                kill_tree(proc, job)
-                raise
+                    wait = min(wait, remaining)
+                try:
+                    rc = proc.wait(timeout=wait)
+                    kill_tree(proc, job)   # reap what the worker left behind (e.g. codex's Windows sandbox helper)
+                    break
+                except subprocess.TimeoutExpired:
+                    if scope and spend_kill is not None:
+                        try:
+                            live = live_usage(run_dir, provider, cwd, prof)
+                        except Exception:
+                            continue      # a half-written usage_live.json / unreadable rollout skips one poll
+                        if live and spend_base + usage_cost(live, provider, model) >= spend_kill:
+                            kill_tree(proc, job)
+                            rc = EXIT_QUOTA
+                            spend_killed = True
+                            log.write("\n[orch] killed: spend limit reached (%s)\n" % scope)
+                            break
+                except KeyboardInterrupt:
+                    kill_tree(proc, job)
+                    state["interrupted"] = "keyboard"
+                    break
+        finally:
+            kill_tree(proc, job)         # an orphaned agent keeps spending; kill it whatever happened
+    if state["interrupted"] == "keyboard":
+        rc = 130
+    elif isinstance(state["interrupted"], int):
+        rc = 128 + state["interrupted"]
     elapsed = int(time.time() - t0)
     if consumer:
         try:
@@ -3592,7 +3654,7 @@ def cmd_run(a):
     if rc == EXIT_TIMEOUT:
         status = "TIMEOUT"
 
-    usage = live_usage(run_dir, provider, cwd) or read_usage(run_dir) if spend_killed else read_usage(run_dir)
+    usage = read_usage(run_dir) or live_usage(run_dir, provider, cwd, prof)
     # the cost is frozen at run time (peak/off-peak and dated prices as of now); later price changes don't rewrite it
     run_cost = usage_cost(usage, provider, (usage or {}).get("model") or model) if usage else 0.0
     run_cost_as_of = price_as_of(provider)
@@ -3631,9 +3693,9 @@ def cmd_run(a):
         body = body[:a.max_chars] + "\n…[truncated, full text: %s]" % (out_file if output.strip() else log_file)
     print(body.rstrip())
     print("\n-- files: %s (output) · %s (log)" % (out_file, log_file))
-    if provider == "codex" and not profile_key("codex", cwd):
+    if provider == "codex" and not key_var:
         try:
-            refresh_codex(cwd, force=True)      # the run just spent the Codex limits: read the freshest numbers
+            refresh_codex(cwd, force=True, prof=prof)   # the run just spent the Codex limits: read the freshest numbers
         except Exception:
             pass
     return rc

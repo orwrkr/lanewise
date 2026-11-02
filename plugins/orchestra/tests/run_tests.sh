@@ -108,6 +108,8 @@ sp = opt("--append-system-prompt-file")
 system = open(sp, encoding="utf-8").read() if sp else ""
 prompt = sys.stdin.read()
 rec = {"args": args, "allowed": args[args.index("--allowedTools") + 1:] if "--allowedTools" in args else [],
+       "disallowed": args[args.index("--disallowedTools") + 1:args.index("--allowedTools")]
+       if "--disallowedTools" in args and "--allowedTools" in args else [],
        "role": "Orchestra executor" in system, "claude_md": "PROJECT-RULES-MARKER" in system,
        "agents_n": system.count("AGENTS-MARKER"), "claude_n": system.count("CLAUDE-MARKER"),
        "env": {k: os.environ.get(k) for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
@@ -149,6 +151,18 @@ elif mode == "stream":          # reports a large usage mid-run, then keeps work
     time.sleep(int(os.environ.get("FAKE_STREAM_SLEEP", "60")))
     emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 2, "duration_ms": 1,
           "result": "STATUS: DONE\nstreamed", "usage": {"input_tokens": 100, "cache_creation_input_tokens": 50,
+          "cache_read_input_tokens": 400, "output_tokens": 25}})
+elif mode == "fail_stream":     # reports partial usage, then fails without a final usage block
+    emit({"type": "assistant", "message": {"id": "fs-1", "model": opt("--model") or "deepseek-v4-pro",
+          "usage": {"input_tokens": 150, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0}}})
+    emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "boom"})
+    sys.exit(1)
+elif mode == "bad_live":        # leaves a half-written usage_live.json behind, then succeeds (poll must skip it)
+    import time
+    open(os.path.join(os.environ["ORCH_RUN_DIR"], "usage_live.json"), "w", encoding="utf-8").write("{half-written")
+    time.sleep(int(os.environ.get("FAKE_STREAM_SLEEP", "20")))
+    emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 2, "duration_ms": 1,
+          "result": "STATUS: DONE\nbad_live", "usage": {"input_tokens": 100, "cache_creation_input_tokens": 50,
           "cache_read_input_tokens": 400, "output_tokens": 25}})
 EOF
 export FAKE_CLAUDE_LOG; FAKE_CLAUDE_LOG="$(native "$T/claude.json")"
@@ -328,6 +342,9 @@ check 'a[a.index("--permission-mode") + 1] == "dontAsk"' "dontAsk: only allowed 
 check '"Edit" in a[a.index("--tools") + 1] and {"Edit(/**)", "Write(/**)", "Bash(npm test:*)", "Bash(git diff:*)"} <= set(r["allowed"]) and not any("./" in x for x in r["allowed"])' "write: edits anchored at the working directory, not at a later cd + --allow rules"
 check 'a[a.index("--effort") + 1] == "high"' "effort passed"
 check 'r["role"] and r["claude_md"]' "role + project CLAUDE.md in system prompt"
+check '{"Read(**/.env)", "Read(**/.env.*)"} <= set(r["disallowed"])' "worker is denied .env reads"
+check '{"Bash(grep *)", "Bash(rg *)", "Bash(git grep *--no-index*)", "Bash(git grep *--untracked*)"} <= set(r["disallowed"])' "worker is denied Bash searches that read ignored files"
+check 'not any(".env" in x for x in r["allowed"])' "no allow rule pretends to reopen a .env file (a deny outranks it)"
 FAKE_CLAUDE=ok DEEPSEEK_API_KEY=sk-env $ORCH run deepseek --model deepseek-flash --effort none "review" >/dev/null; rc=$?
 expect_rc 0 $rc "deepseek analysis run"
 check 'e["ANTHROPIC_API_KEY"] == "sk-env"' "real environment wins over secrets.env"
@@ -1121,6 +1138,11 @@ expect_rc 1 $rc "codex rejected key → exit 1, not the 75 limit"
 contains "$out" "rejected the API key" "codex 401 names the key"
 contains "$out" "check the key of codex@keyed" "codex 401 names the profile"
 $ORCH quota check codex >/dev/null; expect_rc 0 $? "codex 401 does not block the provider"
+out=$(FAKE_CODEX=auth $ORCH run codex "x"); rc=$?
+expect_rc 1 $rc "codex 401 on a login account → exit 1"
+contains "$out" "rejected the credentials" "a login codex 401 says to log in again, not that the API key was rejected"
+contains "$out" "log in again" "the login codex 401 points at codex login"
+grep -q "rejected the API key" <<<"$out" && bad "login codex 401 blames an API key: $out" || ok "login codex 401 does not blame an API key"
 
 # a key profile is API-billed: no Codex subscription line even with rollout data present
 rm -rf "$T/cxkey"; mkdir -p "$T/cxkey/sessions/2026/11/02"
@@ -1305,6 +1327,25 @@ expect_rc 75 $rc "evaluate: a run crossing the overrun mid-run is killed"
 contains "$out" "SPEND_LIMIT" "evaluate mid-run named SPEND_LIMIT"
 spend_reset
 
+# a half-written usage_live.json mid-run skips one poll instead of crashing the run
+spend_reset
+out=$(FAKE_CLAUDE=bad_live FAKE_STREAM_SLEEP=20 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH run deepseek --model deepseek-v4-pro "x"); rc=$?
+expect_rc 0 $rc "a half-written usage_live.json skips a poll instead of crashing"
+contains "$out" "DONE" "the run finished despite the malformed mid-run usage"
+spend_reset
+
+# a failed run still logs the tokens it reported before failing (usage_live.json falls back when usage.json is missing)
+spend_reset
+FAKE_CLAUDE=fail_stream ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH run deepseek --model deepseek-v4-pro "boom" >/dev/null; rc=$?
+expect_rc 1 $rc "a failed run still fails"
+$PY - "$SH/usage.jsonl" <<'EOF' && ok "a failed run logs the tokens it reported before failing" || bad "failed run logged \$0"
+import json, sys
+r = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if '"FAILED"' in l][-1]
+assert r["usage"]["input_tokens"] == 150, r["usage"]
+assert r["cost_usd"] > 0, r
+EOF
+spend_reset
+
 # continue: warn only, never refuses
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek continue >/dev/null
@@ -1354,6 +1395,35 @@ out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
 contains "$out" "defaults shown" "corrupt spend_limits.json: defaults shown"
 contains "$out" "10.00" "corrupt spend_limits.json: default \$10 kept"
 rm -f "$SDIR/spend_limits.json"
+
+# a corrupt spend_limits.json fails closed: a run refuses instead of counting $0 (SPEND_LIMIT names the file)
+printf '{broken' > "$SDIR/spend_limits.json"
+out=$(spend_run "$SA" "blocked"); expect_rc 75 $? "corrupt spend_limits.json: a run refuses instead of counting \$0"
+contains "$out" "SPEND_LIMIT" "corrupt spend_limits.json: the run refusal is a SPEND_LIMIT"
+contains "$out" "unreadable" "corrupt spend_limits.json: the run refusal names the broken file"
+rm -f "$SDIR/spend_limits.json"
+
+# limits reject nan / inf instead of accepting a non-finite amount
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek nan 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "spend limit nan refused" || bad "spend limit nan accepted"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek inf 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "spend limit inf refused" || bad "spend limit inf accepted"
+
+# scopes are lowercased; an unknown profile is refused; reset --project needs its own limit
+spend_reset
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit DEEPSEEK 5 2>&1); rc=$?
+expect_rc 0 $rc "a scope is lowercased (DEEPSEEK sets deepseek)"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
+contains "$out" "5.00" "the lowercased scope carries the limit"
+grep -q '"deepseek"' "$SDIR/spend_limits.json" && ok "the scope is stored lowercased" || bad "the scope was not lowercased"
+spend_reset
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek@nope 5 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "an unknown profile scope is refused" || bad "unknown profile scope accepted"
+spend_reset
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend reset deepseek --project 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "reset --project without a project limit is refused" || bad "reset --project no-op accepted"
+contains "$out" "limit" "reset --project refusal says to set a limit first"
+spend_reset
 
 # surfaces at ≥ 80%: status, the status line, and a once-per-baseline 💡 event
 spend_ledger() { $PY - "$SH/usage.jsonl" "$1" <<'EOF'
@@ -2069,7 +2139,7 @@ def spend_limits():
         records, _ = m.spend_cache_update()
         assert abs(m.current_spend("codex", proj, records) - 1.0) < 1e-9
         cache = m.read_json(home / "spend_cache.json", {})
-        assert cache["format"] == 2 and cache["offset"] > 0 and len(cache["records"]) == 1
+        assert cache["format"] == 3 and cache["offset"] > 0 and len(cache["records"]) == 1
     with open(ledger, "a", encoding="utf-8") as f:          # appending reads only the new bytes
         f.write(led("codex", 500_000, fixed2) + "\n")
     with mock.patch.object(m, "now", return_value=fixed2):
@@ -2079,6 +2149,89 @@ def spend_limits():
     with mock.patch.object(m, "now", return_value=fixed2):  # a shrunken ledger recomputes from zero
         records, _ = m.spend_cache_update()
         assert abs(m.current_spend("codex", proj, records) - 0.25) < 1e-9
+
+    # a corrupt limits file fails closed: spend_start refuses with a line naming the file
+    for p in (home / "spend_limits.json", home / "spend_cache.json", home / "spend_events.json", home / "usage.jsonl"):
+        if p.exists(): p.unlink()
+    (home / "spend_limits.json").write_text("{broken", encoding="utf-8")
+    allowed, line = m.spend_start("deepseek", proj)
+    assert allowed is False and "unreadable" in line, line
+    (home / "spend_limits.json").unlink()
+
+    # limits reject nan / inf / negative amounts (parse_limit)
+    for bad_value in ("nan", "inf", "-inf", "-1"):
+        try:
+            m.parse_limit(bad_value)
+            raise AssertionError("parse_limit accepted %r" % bad_value)
+        except SystemExit:
+            pass
+    assert m.parse_limit("off") is None and m.parse_limit("5") == 5.0
+
+    # display_name: a trailing [bracket] variant is stripped; an unknown model version stays as-is
+    assert m.display_name("deepseek-v4-pro[1m]") == "DeepSeek V4 Pro"
+    assert m.display_name("claude-opus-5-5-2026") == "Claude Opus 5.5"
+    assert m.display_name("gpt-6.1-terra-something") == "GPT-6.1 Terra"
+    assert m.display_name("claude-opus-6-0") == "claude-opus-6-0"
+    assert m.display_name("deepseek-v4-pro") == "DeepSeek V4 Pro"
+
+    # valid_scope: lowercased, and provider@profile must name a real profile
+    good(["profile", "set", "deepseek", "work", "--key", "DUMMY_A"])
+    assert m.valid_scope("DEEPSEEK") is True and m.valid_scope("deepseek") is True
+    assert m.valid_scope("deepseek@work") is True and m.valid_scope("deepseek@default") is True
+    assert m.valid_scope("deepseek@nope") is False and m.valid_scope("nosuch@work") is False
+    (home / "profiles.json").unlink()
+
+    # session snapshots are deduplicated: two snapshots of one session count only the last
+    for p in (home / "spend_cache.json", home / "spend_limits.json", home / "spend_events.json", home / "usage.jsonl"):
+        if p.exists(): p.unlink()
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["deepseek"] = {"limit": 10}
+    m.save_spend_limits(cfg)
+    with mock.patch.object(m, "now", return_value=t0):
+        m.ensure_baseline("deepseek", proj)
+    def sess(sid, usd, ts):
+        return json.dumps({"kind": "session", "lead": "deepseek", "project": canon,
+                           "spend_usd": usd, "session": sid, "ts": m.iso(ts)}, separators=(",", ":"))
+    ledger = home / "usage.jsonl"
+    ledger.write_text(sess("s1", 1.0, t0 + dt.timedelta(hours=1)) + "\n" +
+                      sess("s1", 4.0, t0 + dt.timedelta(hours=2)) + "\n", encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=t0 + dt.timedelta(hours=3)):
+        records, _ = m.spend_cache_update()
+        assert abs(m.current_spend("deepseek", proj, records) - 4.0) < 1e-9   # only the last snapshot counts
+
+    # the cache persists its byte offset even when the new bytes contain no API-billed record
+    for p in (home / "spend_cache.json", home / "spend_limits.json", home / "spend_events.json", home / "usage.jsonl"):
+        if p.exists(): p.unlink()
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["codex"] = {"limit": 10}
+    m.save_spend_limits(cfg)
+    ledger = home / "usage.jsonl"
+    ledger.write_text(json.dumps({"kind": "probe", "ts": m.iso(fixed2)}) + "\n", encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=fixed2):
+        m.spend_cache_update()
+        cache = m.read_json(home / "spend_cache.json", {})
+        assert cache["offset"] == ledger.stat().st_size and cache["records"] == []
+
+def worker_env_leak():
+    with mock.patch.dict(os.environ, {
+            "ANTHROPIC_API_KEY": "sk-leak", "ANTHROPIC_AUTH_TOKEN": "tok-leak",
+            "CODEX_API_KEY": "cx-leak", "OPENAI_API_KEY": "oai-leak",
+            "DEEPSEEK_API_KEY": "ds-keep", "CLAUDE_CONFIG_DIR": "/cfg-keep",
+            "CLAUDECODE": "1"}, clear=True):
+        env = m.worker_env({})
+        assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "CODEX_API_KEY" not in env and "OPENAI_API_KEY" not in env
+        assert env.get("DEEPSEEK_API_KEY") == "ds-keep"          # not a leak var, kept
+        assert env.get("CLAUDE_CONFIG_DIR") == "/cfg-keep"       # KEEP_CLAUDE_VARS
+        assert "CLAUDECODE" not in env
+        env = m.worker_env({"ANTHROPIC_API_KEY": "sk-profile"})  # a profile's own key re-enters via extra
+        assert env.get("ANTHROPIC_API_KEY") == "sk-profile"
+
+def codex_home_profile():
+    prof = m.Profile("codex", "work", {"home": str(home / "cx-work")}, "test", True)
+    with mock.patch.dict(os.environ, {"CODEX_HOME": str(home / "no-codex")}):
+        assert m.codex_home(proj, prof) == str(Path(str(home / "cx-work")).expanduser())
+        assert m.codex_home(proj) == str(Path(str(home / "no-codex")).expanduser())
 
 failed = 0
 for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", parallel_state),
@@ -2096,7 +2249,9 @@ for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", pa
                    ("review stale claims, late finishers and assignment failures", assignment_recovery),
                    ("review report first status and reclaimed slot", report_reclaimed),
                    ("review handoff path storage and old metas", meta_paths),
-                   ("review monthly spend: prices, counters, cache restart", spend_limits)]:
+                   ("review monthly spend: prices, counters, cache restart", spend_limits),
+                   ("review worker env strips login/API keys", worker_env_leak),
+                   ("review --profile honoured by codex account lookups", codex_home_profile)]:
     try:
         test()
         print("PASS " + name)

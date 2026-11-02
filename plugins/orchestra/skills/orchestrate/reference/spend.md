@@ -68,15 +68,18 @@ orch spend mode deepseek continue --lead  # lead mode: warn only
 orch spend mode default evaluate --overrun 20
 orch spend reset deepseek               # topped up: count from zero from now
 orch spend reset deepseek --limit 40    # the same, with a new limit
-orch spend reset deepseek --project     # a project's own counter
+orch spend reset deepseek --project     # a project's own counter (needs its own limit first)
 ```
 
 `orch spend reset` on a `month` scope also moves its baseline for the rest of that month — the next month starts
 clean anyway. It prints what was spent, the old and new limits, and the kind.
 
 The config lives in `~/.orchestra/spend_limits.json` (baselines for manual counters live there too); a corrupt file
-refuses writes and keeps the defaults (never fail-open). The counters are cached incrementally in
-`~/.orchestra/spend_cache.json`; a reset takes effect at once.
+refuses writes **and refuses runs** — `orch run` / `orch launch` / `orch key` cannot check the limit without it, so
+they fail closed (like a broken `profiles.json`) rather than silently count $0. `orch spend` still shows the
+defaults. Scopes are case-insensitive (`DEEPSEEK` → `deepseek`), must name a real provider or `<provider>@<profile>`,
+and `orch spend reset … --project` refuses a project that has no limit of its own. The counters are cached
+incrementally in `~/.orchestra/spend_cache.json`; a reset takes effect at once.
 
 ## Prices
 

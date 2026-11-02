@@ -43,4 +43,10 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 - Precedence: `--profile` on the run (only at the operator's request) → session-wide choices (`ORCH_PROFILES`, set
   by `orch launch --no-claude` / `--use`) → the binding of the project or of the nearest directory above it → the
   provider's default → the built-in `default`.
+- The DeepSeek and Claude headless executors deny reading `.env` and `.env.*`, including `.env.example` (a tracked
+  one: `git show HEAD:.env.example`), deny Bash searches that would print ignored files (`grep`, `rg`, `git grep
+  --no-index`; the Grep tool skips them), and forward the target project's `permissions.deny` Read and Bash rules.
+  This stops accidents, not intent: checked against the real CLI, `cat .en*` still gets through. **Codex has no such
+  rule:** its sandbox limits writes, not reads, so a Codex run can read `.env` in either mode. What an executor reads
+  goes to its provider, so keep real secrets out of the working tree when that matters.
 - After a profile change, replan unstarted subtasks; tell the operator briefly what changed.

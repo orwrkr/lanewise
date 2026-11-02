@@ -36,7 +36,7 @@ CAPACITY_RE = re.compile(r"selected model is at capacity", re.I)
 IN_RE = re.compile(r"(?:try again|retry|resets?|available again)\s+in\s+(?:about\s+)?(\d+)\s*"
                    r"(second|sec|minute|min|hour|hr|day|h|m|d)s?", re.I)
 AT_RE = re.compile(r"(?:try again|retry|resets?|available again)\s+(?:at|after)\s+(\d{1,2}):(\d{2})\s*(am|pm)?", re.I)
-AUTH_RE = re.compile(r"incorrect api key|invalid api key|unauthorized|authentication (?:failed|error)|\b401\b", re.I)
+AUTH_RE = re.compile(r"incorrect api key|invalid api key|unauthori[sz]ed|authentication (?:failed|error)|401\s+unauthori[sz]ed", re.I)
 
 
 def say(msg):
@@ -247,8 +247,11 @@ def main():
             say("ChatGPT/Codex subscription limit: %s" % one_line(text, 300))
             return EXIT_QUOTA
         if AUTH_RE.search(text):
-            label = "codex" + ("@" + os.environ["ORCH_PROFILE"] if os.environ.get("ORCH_PROFILE") else "")
-            say("Codex rejected the API key (401) — check the key of %s (orch profile show)" % label)
+            if os.environ.get("CODEX_API_KEY"):
+                label = "codex" + ("@" + os.environ["ORCH_PROFILE"] if os.environ.get("ORCH_PROFILE") else "")
+                say("Codex rejected the API key (401) — check the key of %s (orch profile show)" % label)
+            else:
+                say("Codex rejected the credentials (401) — log in again: codex login (orch profile show)")
             return 1
         say("codex exited with code %s" % rc)
         return rc

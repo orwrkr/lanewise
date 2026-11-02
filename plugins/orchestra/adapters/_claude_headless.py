@@ -12,6 +12,14 @@ from pathlib import Path
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 GIT_READ = ["Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git blame:*)"]
+# Never let a worker read secret files; whatever it reads goes to its provider. A deny outranks an allow, so `.env.*`
+# covers `.env.example` too: a tracked one stays readable with `git show HEAD:.env.example`. Claude Code applies Read
+# rules to a Bash command that names the file (`cat .env`), but a search that walks the tree prints what it finds in
+# ignored files, and it auto-approves such commands as read-only. So those are denied: the Grep tool does the same job
+# and skips ignored and hidden files.
+SECRET_DENY = ["Read(**/.env)", "Read(**/.env.*)",
+               "Bash(grep *)", "Bash(egrep *)", "Bash(fgrep *)", "Bash(rg *)", "Bash(ag *)", "Bash(ack *)",
+               "Bash(git grep *--no-index*)", "Bash(git grep *--untracked*)"]
 EXIT_QUOTA = 75
 KEEP_CLAUDE_VARS = ("CLAUDE_CODE_GIT_BASH_PATH",)
 
@@ -77,6 +85,36 @@ def tool_policy():
     return "Read,Grep,Glob,Bash", allowed
 
 
+def settings_deny():
+    """The target project's permissions.deny Read/Bash rules. `--setting-sources user` skips the project's
+    settings, so orch forwards the deny rules the worker would otherwise lose."""
+    deny = []
+    d = Path(os.environ.get("ORCH_CWD") or ".").resolve()
+    for _ in range(8):
+        for name in ("settings.json", "settings.local.json"):
+            p = d / ".claude" / name
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            perms = data.get("permissions") if isinstance(data, dict) else None
+            rules = perms.get("deny") if isinstance(perms, dict) else None
+            if isinstance(rules, list):
+                for rule in rules:
+                    if isinstance(rule, str) and rule.split("(", 1)[0] in ("Read", "Bash"):
+                        deny.append(rule)
+        if (d / ".git").exists() or (d / ".orchestra").exists():
+            break
+        if d.parent == d:
+            break
+        d = d.parent
+    return list(dict.fromkeys(deny))
+
+
+def disallowed_tools():
+    return SECRET_DENY + settings_deny()
+
+
 def command(claude, model, run_dir, isolation, extra_args, say):
     """`claude -p` in stream-json with the executor's tools, role and project rules."""
     tools, allowed = tool_policy()
@@ -89,9 +127,11 @@ def command(claude, model, run_dir, isolation, extra_args, say):
         cmd += ["--effort", effort]
     elif effort:
         say("effort %r is not supported (%s) — keeping the default" % (effort, "|".join(EFFORTS)))
+    disallowed = disallowed_tools()
     cmd += shlex.split(extra_args or "")
-    cmd += ["--allowedTools"] + allowed          # variadic option: keep it last
-    say("model=%s mode=%s tools=%s allow=%s" % (model, os.environ.get("ORCH_MODE"), tools, " ".join(allowed)))
+    cmd += ["--disallowedTools"] + disallowed + ["--allowedTools"] + allowed    # variadic options: allowed last
+    say("model=%s mode=%s tools=%s allow=%s deny=%s" % (model, os.environ.get("ORCH_MODE"), tools,
+                                                        " ".join(allowed), " ".join(disallowed)))
     return cmd
 
 
@@ -117,8 +157,11 @@ def write_live(run_dir, live):
         total["model"] = max(per_model, key=lambda m: per_model[m]["output_tokens"])
         if len(per_model) > 1:
             total["models"] = per_model
+    path = Path(run_dir) / "usage_live.json"
+    tmp = path.with_name(path.name + ".tmp")
     try:
-        (Path(run_dir) / "usage_live.json").write_text(json.dumps(total), encoding="utf-8")
+        tmp.write_text(json.dumps(total), encoding="utf-8")
+        os.replace(tmp, path)                 # atomic: orch never reads a half-written total
     except OSError:
         pass
 

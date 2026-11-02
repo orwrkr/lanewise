@@ -7,7 +7,7 @@
 task down and decides who does each subtask, and at what effort:
 
 - **Claude subagents** — Haiku, Sonnet, Opus, Fable at the right effort level;
-- **Codex CLI** — on your ChatGPT subscription, in the background;
+- **Codex CLI** — on your ChatGPT subscription or an API key, in the background;
 - **DeepSeek** — on an API key, as a full agent (headless Claude Code on DeepSeek's Anthropic-compatible API);
 - **a pool of manual tasks** for Antigravity, Cursor and similar agents: you pick a task and paste one line.
 
@@ -46,6 +46,7 @@ Then just give Claude Code a multi-step task — the `orchestrate` skill takes o
 ```bash
 npm i -g @openai/codex && codex login     # Codex
 # DeepSeek: add the line DEEPSEEK_API_KEY=sk-… to ~/.orchestra/secrets.env (never to a repository)
+# Codex / Claude on an API key: orch profile set codex work --key CODEX_API_KEY_WORK && orch profile use codex work
 orch doctor                               # what is available
 ```
 

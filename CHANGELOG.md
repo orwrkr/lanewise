@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.0
+
+- **Codex on an API key**: `orch profile set codex <name> --key VAR` now works like DeepSeek — the profile's key is
+  supplied to `codex exec` as `CODEX_API_KEY`. Only an explicit profile `key` turns the key on: a stray
+  `CODEX_API_KEY=` line in `secrets.env` never switches a login profile to API billing (`# orch-secrets-explicit`).
+  A key profile is API-billed: `orch status` shows no `Codex subscription:` line, no TIGHT, no `💡` event, and the
+  status line shows no Codex limits, whatever the session logs hold. A rejected key (401) names the profile and
+  exits 1 (no quota block); an exhausted balance still exits 75 via the existing limit detection.
+- **Claude executor on an API key**: `orch run claude` on a key profile (and its `--key`) now treats the key as
+  explicit-only, shows it as API-billed, and a 401 names the profile's key. Claude worker runs on a key project no
+  longer count as subscription consumers.
+- **The session itself on an API key**: `orch profile use claude <profile>` with a key profile writes Claude Code's
+  `apiKeyHelper` into the project's `.claude/settings.local.json` (`--default` → user `settings.json` under
+  `CLAUDE_CONFIG_DIR`), so the session and its subagents bill to that key. The helper runs the hidden
+  `orch key claude@<profile>` (prints only the key; refuses inside a worker or a non-Claude lead). Switching to a
+  login profile / `inherit` / `off` removes the helper only when orch wrote it; a broken settings file is refused;
+  writes are atomic and locked. `--path` binds the profile for `orch run claude` only and says so.
+- **Budget on a key**: a project whose Claude profile has a key bills to it, not the subscription — no SURPLUS/TIGHT,
+  `orch status` says it bills to the key, the status line shows no subscription percentages from the shared snapshot,
+  and the session does not write its numbers into that snapshot.
+
 ## 0.8.0
 
 - **Codex limits in routing**: `orch status` reads the Codex account's rate limits from its session logs

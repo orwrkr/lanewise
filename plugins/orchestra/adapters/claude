@@ -16,6 +16,7 @@
 # Models: aliases haiku | sonnet | opus | fable or full model ids; registry slot claude/<alias>-<effort>.
 #
 # orch-secrets: ANTHROPIC_API_KEY
+# orch-secrets-explicit: ANTHROPIC_API_KEY
 # orch-limit-detect: exit-code
 # orch-profile-env: home=CLAUDE_CONFIG_DIR
 # Contract: adapters/_template.example. Exit 75 = usage limit (reset time → $ORCH_RUN_DIR/quota_until).
@@ -92,7 +93,11 @@ def main():
             say("Claude usage limit: %s" % H.one_line(text, 300))
             return H.EXIT_QUOTA
         if status == 401 or "/login" in text:
-            say("Claude rejected the credentials: log in with `claude` (or check the profile's config dir / key)")
+            if os.environ.get("ANTHROPIC_API_KEY"):
+                label = "claude" + ("@" + os.environ["ORCH_PROFILE"] if os.environ.get("ORCH_PROFILE") else "")
+                say("Claude rejected the API key (401) — check the key of %s (orch profile show)" % label)
+            else:
+                say("Claude rejected the credentials: log in with `claude` (or check the profile's config dir)")
         return rc or 1
     H.write_output(result)
     say("done: %s turns, %.0f s" % (result.get("num_turns"), (result.get("duration_ms") or 0) / 1000.0))

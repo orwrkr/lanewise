@@ -11,6 +11,8 @@
 # over the codex.cmd shim) → the CLI bundled with the Codex desktop app.
 # Profiles (orch profile set codex <name> --home DIR --codex-profile P): the account is CODEX_HOME (auth.json),
 # P layers $CODEX_HOME/P.config.toml (codex --profile).
+# orch-secrets: CODEX_API_KEY
+# orch-secrets-explicit: CODEX_API_KEY
 # orch-limit-detect: exit-code
 # orch-context-native: AGENTS.md
 # orch-profile-env: home=CODEX_HOME codex_profile=ORCH_CODEX_PROFILE
@@ -34,6 +36,7 @@ CAPACITY_RE = re.compile(r"selected model is at capacity", re.I)
 IN_RE = re.compile(r"(?:try again|retry|resets?|available again)\s+in\s+(?:about\s+)?(\d+)\s*"
                    r"(second|sec|minute|min|hour|hr|day|h|m|d)s?", re.I)
 AT_RE = re.compile(r"(?:try again|retry|resets?|available again)\s+(?:at|after)\s+(\d{1,2}):(\d{2})\s*(am|pm)?", re.I)
+AUTH_RE = re.compile(r"incorrect api key|invalid api key|unauthorized|authentication (?:failed|error)|\b401\b", re.I)
 
 
 def say(msg):
@@ -236,6 +239,10 @@ def main():
                 (run_dir / "quota_until").write_text(hint + "\n", encoding="utf-8")
             say("ChatGPT/Codex subscription limit: %s" % one_line(text, 300))
             return EXIT_QUOTA
+        if AUTH_RE.search(text):
+            label = "codex" + ("@" + os.environ["ORCH_PROFILE"] if os.environ.get("ORCH_PROFILE") else "")
+            say("Codex rejected the API key (401) — check the key of %s (orch profile show)" % label)
+            return 1
         say("codex exited with code %s" % rc)
         return rc
     say("done: %d turns, input %d (+cache %d), output %d" % (turns, usage["input_tokens"], usage["cached_input_tokens"],

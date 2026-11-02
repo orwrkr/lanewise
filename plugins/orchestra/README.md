@@ -3,7 +3,7 @@
 Claude Code stays in charge: it breaks the task down and decides on its own who gets each subtask and at what effort:
 
 - **Claude subagents** — Haiku, Sonnet, Opus, Fable at different effort levels;
-- **Codex CLI** — on a ChatGPT subscription, automatically, in the background;
+- **Codex CLI** — on a ChatGPT subscription or an API key, automatically, in the background;
 - **DeepSeek** — with an API key (paid from your balance), automatically, in the background, with the same tools Claude has;
 - **the manual task pool** — you pick a task yourself and hand it to Antigravity (or Cursor, etc.) with a single pasted line.
 
@@ -162,6 +162,8 @@ numbers in plain words ("Claude: 40% of the session used, resets at 18:00") → 
 sessions with the plugin seen in the last 15 minutes and running `orch run claude` executors; a session led by
 DeepSeek doesn't count. The thresholds live in the `claude` profile: `--opt reserve=25` (keep more for other
 sessions), `week_reserve=15`, `surplus=50`, or `surplus=off` to switch the mode off.
+A project whose Claude or Codex profile has an API `key` is API-billed instead: no subscription line, no mode, and the
+session doesn't write its numbers into the shared snapshot.
 
 Codex's limits are read the same way from its own session logs (`$CODEX_HOME/sessions/…`, an undocumented format
 parsed defensively) and shown as a `Codex subscription: …` line next to the Claude one, with `TIGHT: treat Codex
@@ -238,7 +240,7 @@ Resolution order: `--profile` on a specific run (only when you ask for it) → s
 
 | Field | Meaning | Enforced by |
 |---|---|---|
-| `key` | name of the variable holding the API key (from the environment or `secrets.env`); the adapter receives its value as `DEEPSEEK_API_KEY` (`ANTHROPIC_API_KEY` for `claude`) | `orch` |
+| `key` | name of the variable holding the API key (from the environment or `secrets.env`); the adapter receives its value as `DEEPSEEK_API_KEY` (`ANTHROPIC_API_KEY` for `claude`, `CODEX_API_KEY` for `codex`) | `orch` |
 | `home`, `codex_profile` | Codex account (`CODEX_HOME`) and the `codex --profile` settings layer; for `claude`, its config directory (`CLAUDE_CONFIG_DIR`) | `orch` |
 | `fast_model`, `base_url` | DeepSeek: model for light background calls, endpoint | `orch` |
 | `off` (instead of a profile) | the executor is not started: `orch run` / `orch handoff new` → `PROFILE_OFF`, exit 75 (`--force` doesn't help) | `orch` |
@@ -253,6 +255,18 @@ What a project binding gives you:
 - **Its own balance and its own limit.** If the `work` key runs out of money, only `deepseek@work` is blocked. Projects on other keys keep working. "Topped up DeepSeek" lifts the blocks on all keys.
 - **Keys stay out of the repository.** Everything is stored in `~/.orchestra/profiles.json`, with the project path recorded in a normalized form (`c:/users/…`). If `ORCH_HOME` is shared, the bindings match between Windows and WSL.
 - **A corrupted file doesn't re-enable what you turned off.** If `profiles.json` can't be read, CLI executors and manual tasks are not started, and `orch status` warns about it.
+
+A profile with an API `key` is **API-billed** (per token), not a subscription: `orch status` shows it bills to the key,
+there is no `Claude subscription:` / `Codex subscription:` line and no SURPLUS/TIGHT, and routing treats it as the
+offload lane. The key is *explicit-only* — only the profile's `key` supplies it, so a stray `CODEX_API_KEY=` line in
+`secrets.env` never switches a login profile to API billing. A rejected key (401) names the profile and is an ordinary
+error; an exhausted balance still reports the limit as usual.
+
+For Claude, `orch profile use claude <profile>` with a key profile also writes Claude Code's `apiKeyHelper` into the
+project's `.claude/settings.local.json` (git-excluded), so **the session itself and its subagents** bill to that key;
+`--default` writes it to your user settings instead. It takes effect after a restart, and `/status` shows the active
+credential. Switching back to a login profile (or `inherit` / `off`) removes the helper when orch wrote it. `--path`
+binds a profile for `orch run claude` only and says so.
 
 ## Manual channel: a task pool for Antigravity and other agents
 

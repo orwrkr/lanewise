@@ -31,6 +31,9 @@
 # Directives in the header comments (first 40 lines):
 #   # orch-secrets: NAME1 NAME2      — take these keys from ~/.orchestra/secrets.env (if not in the environment);
 #                                      the profile field `key: VAR` supplies the value of VAR under the name NAME1
+#   # orch-secrets-explicit: NAME1   — NAME1 is supplied only by an explicit profile `key`, never from secrets.env:
+#                                      for an adapter whose default is a login (codex, claude), a stray NAME1= line in
+#                                      secrets.env must not switch it to API billing
 #   # orch-limit-detect: exit-code   — do not scan the log for limits, trust only the exit code
 #   # orch-context-native: AGENTS.md — rule files the agent reads itself: they are left out of ORCH_CONTEXT_FILE
 #   # orch-profile-env: home=SOME_HOME region=SOME_REGION

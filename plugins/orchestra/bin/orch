@@ -29,6 +29,7 @@ import os
 import platform
 import random
 import re
+import shlex
 import shutil
 import signal
 import string
@@ -697,6 +698,10 @@ def claude_consumers():
 
 def claude_budget(where=None):
     """(mode, line): projections stay anchored to measurements; either limit can make Claude tight."""
+    kvar = profile_key("claude", where)
+    if kvar:
+        return "api", ("Claude: bills to the profile key (%s) instead of the subscription — no budget mode "
+                       "(SURPLUS/TIGHT off)" % kvar)
     snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
     five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
     cfg = budget_settings(where)
@@ -760,7 +765,7 @@ def budget_event(session, announce=True):
     """A hook event when this session's budget mode changes (surplus / tight / normal), once per change.
     announce=False only records the mode (SessionStart already prints it in the status)."""
     mode, line = claude_budget()
-    if mode == "unknown":
+    if mode in ("unknown", "api"):
         return None
     snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
     seen = snap.get("announced") if isinstance(snap.get("announced"), dict) else {}
@@ -794,6 +799,9 @@ def cmd_budget(a):
     if mode == "unknown":
         print("No current Claude subscription numbers. Add `orch statusline` as the Claude Code status line "
               "(orch guide budget), or report them: orch budget set --used 40 --resets 18:00")
+        return 0
+    if mode == "api":
+        print(line)
         return 0
     print(line)
     users = claude_consumers()
@@ -977,6 +985,8 @@ def codex_reserve(where=None):
         return out
     if prof.name == "off":
         return None
+    if prof.explicit and prof.data.get("key"):
+        return None          # API-billed: no subscription limits to show
     for k in out:
         v = str(prof.data.get(k, out[k])).lower()
         out[k] = 0 if v in ("off", "no", "false") else int(v) if v.isdigit() else out[k]
@@ -1297,26 +1307,28 @@ def cmd_statusline(a):
             w = rl.get(name)
             if isinstance(w, dict) and w.get("used_percentage") is not None and epoch_iso(w.get("resets_at")):
                 windows[name] = {"used": round(float(w["used_percentage"]), 1), "resets_at": epoch_iso(w["resets_at"])}
-        if windows:
+        cwd = (data.get("workspace") or {}).get("current_dir") if isinstance(data.get("workspace"), dict) else None
+        api_billed = bool(cwd) and profile_key("claude", Path(cwd)) is not None
+        if windows and not api_billed:
             save_usage(windows, "statusline")
         model = (data.get("model") or {}).get("display_name") if isinstance(data.get("model"), dict) else None
         if model:
             parts.append(model)
-        cwd = (data.get("workspace") or {}).get("current_dir") if isinstance(data.get("workspace"), dict) else None
-        if data.get("session_id"):
+        if data.get("session_id") and not api_billed:
             heartbeat(str(data["session_id"]), cwd)          # this session counts among the Claude consumers
-        snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
-        five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
-        if five and five[1]:
-            parts.append("5h %d%% → %s" % (pct(five[0]), five[1].astimezone().strftime("%H:%M")))
-            measured = measured_at(snap, "five_hour")
-            if not measured or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS:
-                parts.append("stale: %s" % (human_delta(measured) if measured else "age unknown"))
-        if week:
-            parts.append("week %d%%" % pct(week[0]))
-        n = sum(1 for v in claude_consumers().values() if v.get("kind") != "executor")
-        if n > 1:
-            parts.append("%d sessions" % n)
+        if not api_billed:
+            snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
+            five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
+            if five and five[1]:
+                parts.append("5h %d%% → %s" % (pct(five[0]), five[1].astimezone().strftime("%H:%M")))
+                measured = measured_at(snap, "five_hour")
+                if not measured or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS:
+                    parts.append("stale: %s" % (human_delta(measured) if measured else "age unknown"))
+            if week:
+                parts.append("week %d%%" % pct(week[0]))
+            n = sum(1 for v in claude_consumers().values() if v.get("kind") != "executor")
+            if n > 1:
+                parts.append("%d sessions" % n)
         mode, budget_line = claude_budget(Path(cwd) if cwd else None)
         if mode in ("surplus", "tight"):
             weekly = re.search(r"weekly limit is tight \((\d+)% projected", budget_line or "")
@@ -1581,6 +1593,23 @@ def profile_secret(prof, names):
     return {names[0]: val}, names[1:]
 
 
+def profile_key(provider, where=None):
+    """Variable name of the active profile's API key, or None when the provider runs on its login (not API-billed)."""
+    try:
+        prof = resolve_profile(provider, where or project_dir())
+    except ProfileError:
+        return None
+    return prof.data.get("key") if prof.explicit else None
+
+
+def fallback_secret_names(directives, remaining):
+    """Of the declared secrets still to load, those a login/default profile may fill from secrets.env. A name marked
+    `# orch-secrets-explicit:` is supplied only by an explicit profile `key`, never from secrets.env — so a stray
+    `CODEX_API_KEY=` line cannot silently switch a login profile to API billing."""
+    explicit = set(directives.get("secrets-explicit", "").split())
+    return [n for n in remaining if n not in explicit]
+
+
 def profile_env_map(directives):
     """'# orch-profile-env: home=CODEX_HOME codex_profile=ORCH_CODEX_PROFILE' → {field: VAR}."""
     out = {}
@@ -1710,6 +1739,137 @@ def login_hint(home):
     return hint
 
 
+# ───────────────────────── Claude apiKeyHelper (the session itself on an API key) ─────────────────────────
+#
+# The session's own credential comes from Claude Code's `apiKeyHelper` setting (it ranks above the /login
+# subscription, below ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN). `orch profile use claude <profile>` with a key
+# profile writes it into the project's .claude/settings.local.json (or, with --default, the user settings), so the
+# session and its subagents bill to that key. The helper runs `orch key claude@<profile>` — a hidden command that
+# prints only the key; it refuses inside a worker or a non-Claude lead.
+
+def claude_config_dir():
+    """CLAUDE_CONFIG_DIR or the default ~/.claude (the user settings for `--default`)."""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def settings_target(default=False, where=None):
+    """The settings file apiKeyHelper is written to: user settings (--default) or the project's settings.local.json."""
+    if default:
+        return claude_config_dir() / "settings.json"
+    return project_root(Path(where) if where else project_dir()) / ".claude" / "settings.local.json"
+
+
+def key_helper_command(profile):
+    """The apiKeyHelper shell command: `<python> <orch> key claude@<profile>`, shell-quoted for the host OS."""
+    parts = [sys.executable, str(Path(__file__).resolve()), "key", "claude@" + profile]
+    if IS_WINDOWS:
+        return subprocess.list2cmdline(parts)
+    return " ".join(shlex.quote(p) for p in parts)
+
+
+def is_own_helper(value):
+    """True when apiKeyHelper is the command orch wrote (`… <orch> key claude[@profile]`), not the operator's own."""
+    if not isinstance(value, str):
+        return False
+    return str(Path(__file__).resolve()) in value and re.search(r"\bkey\s+claude(@[A-Za-z0-9_.-]+)?\b", value)
+
+
+def read_settings(path):
+    """(data, err) of a Claude Code settings JSON file; a broken file is an error, never "empty"."""
+    path = Path(path)
+    if not path.exists():
+        return {}, None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as ex:
+        return None, "%s is not valid JSON: %s" % (path, ex)
+    if not isinstance(data, dict):
+        return None, "%s: expected a JSON object" % path
+    return data, None
+
+
+def manage_claude_helper(name, data, default, path):
+    """After `orch profile use claude <name>`, put the session itself on the profile's key (apiKeyHelper), or remove
+    the helper orch wrote when switching to a login profile / inherit / off. `--path` cannot reach child projects."""
+    if path:
+        print("note: --path covers `orch run claude` only; native Claude Code sessions need "
+              "`orch profile use claude <profile>` in each project")
+        return
+    target = settings_target(default=bool(default))
+    if name in ("off", "inherit"):
+        _remove_helper(target)
+        return
+    _, profs = provider_section(data, "claude")
+    d = profs.get(name) if name in profs else None
+    key_var = d.get("key") if isinstance(d, dict) else None
+    if not key_var:
+        _remove_helper(target)
+        return
+    with state_lock(ORCH_HOME / ".settings.lock"):
+        settings, err = read_settings(target)
+        if err is not None:
+            print("orch: " + err, file=sys.stderr)
+            return
+        settings["apiKeyHelper"] = key_helper_command(name)
+        try:
+            write_json(target, settings)
+        except StateError as ex:
+            print("orch: " + str(ex), file=sys.stderr)
+            return
+    if default:
+        print("Every Claude Code session on this account now bills to the key of %s (apiKeyHelper in %s)."
+              % (name, target))
+    else:
+        ensure_git_exclude(project_root(project_dir()), (".claude/settings.local.json",))
+    print("A running session picks this up after a restart; /status shows the active credential.")
+
+
+def _remove_helper(target):
+    """Drop apiKeyHelper from a settings file only when orch wrote it; leave the operator's own helper and say so."""
+    with state_lock(ORCH_HOME / ".settings.lock"):
+        settings, err = read_settings(target)
+        if err is not None:
+            print("orch: " + err, file=sys.stderr)
+            return
+        cur = settings.get("apiKeyHelper")
+        if cur is None:
+            return
+        if not is_own_helper(cur):
+            print("Left apiKeyHelper in %s as it is (not written by orch)." % target)
+            return
+        del settings["apiKeyHelper"]
+        try:
+            write_json(target, settings)
+        except StateError as ex:
+            print("orch: " + str(ex), file=sys.stderr)
+
+
+def cmd_key(a):
+    """orch key claude[@profile]: print the key of a claude profile (internal — the apiKeyHelper runs this)."""
+    if os.environ.get("ORCH_WORKER"):
+        raise SystemExit("orch: an executor (ORCH_WORKER) may not read the Claude API key")
+    if os.environ.get("ORCH_LEAD"):
+        raise SystemExit("orch: a non-Claude lead may not read the Claude API key")
+    provider, _, name = a.profile.lower().partition("@")
+    if provider != "claude":
+        raise SystemExit("orch: `orch key` serves claude only")
+    try:
+        prof = resolve_profile("claude", project_dir(), override=name or None)
+    except ProfileError as ex:
+        print("orch: %s" % ex, file=sys.stderr)
+        return 1
+    var = prof.data.get("key") if prof.explicit else None
+    if not var:
+        print("orch: no API key on the active claude profile", file=sys.stderr)
+        return 1
+    val = os.environ.get(var) or load_secrets().get(var)
+    if not val:
+        print("orch: key %s is neither in the environment nor in %s" % (var, SECRETS_FILE), file=sys.stderr)
+        return 1
+    print(val)
+    return 0
+
+
 @locked("home")
 def cmd_profile(a):
     data, err = load_profiles()
@@ -1786,6 +1946,8 @@ def cmd_profile(a):
                 binding[provider] = name
             scope = "for %s" % k
         save_profiles(data)
+        if provider == "claude":
+            manage_claude_helper(name, data, a.default, a.path)
         print("%s: %s %s" % (provider, "inherits the setting" if name == "inherit" else name, scope))
         print("\n".join(profile_lines(project_dir(), data)))
         return 0
@@ -2203,7 +2365,9 @@ def cmd_run(a):
             print("PROFILE_DENIED %s — %s (%s)." % (prof.label, denied, prof.source))
             print("Pick a slot the profile allows (orch profile show) or another provider.")
             return EXIT_QUOTA
-        secret_env, secret_names = profile_secret(prof, directives.get("secrets", "").split())
+        declared = directives.get("secrets", "").split()
+        secret_env, remaining = profile_secret(prof, declared)
+        secret_names = fallback_secret_names(directives, remaining)
     except ProfileError as ex:
         print("PROFILE_ERROR %s — %s" % (provider, ex))
         return 1
@@ -2260,7 +2424,7 @@ def cmd_run(a):
     # on timeout or stop the whole tree goes, not just the adapter
     detach = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | 0x4} if IS_WINDOWS   # | CREATE_SUSPENDED
               else {"start_new_session": True})
-    consumer = "run:" + run_id if provider == "claude" else None      # spends the Claude subscription (budget)
+    consumer = "run:" + run_id if provider == "claude" and not profile_key("claude", cwd) else None
     if consumer:
         try:
             heartbeat(consumer, cwd, kind="executor")
@@ -2364,7 +2528,7 @@ def cmd_run(a):
         body = body[:a.max_chars] + "\n…[truncated, full text: %s]" % (out_file if output.strip() else log_file)
     print(body.rstrip())
     print("\n-- files: %s (output) · %s (log)" % (out_file, log_file))
-    if provider == "codex":
+    if provider == "codex" and not profile_key("codex", cwd):
         try:
             refresh_codex(cwd, force=True)      # the run just spent the Codex limits: read the freshest numbers
         except Exception:
@@ -2428,7 +2592,9 @@ def cmd_launch(a):
         model, _, notes, denied = profile_limits(prof, a.model, None, "write")
         if denied:
             raise SystemExit("orch: PROFILE_DENIED %s — %s (%s)" % (prof.label, denied, prof.source))
-        secret_env, secret_names = profile_secret(prof, directives.get("secrets", "").split())
+        declared = directives.get("secrets", "").split()
+        secret_env, remaining = profile_secret(prof, declared)
+        secret_names = fallback_secret_names(directives, remaining)
     except ProfileError as ex:
         raise SystemExit("orch: PROFILE_ERROR %s — %s" % (provider, ex))
     key = prof.label + ("/" + model if model else "")
@@ -3873,7 +4039,7 @@ def cmd_doctor(a):
                     src = secret_source(d["key"])
                     row("%s@%s key" % (provider, name), bool(src), ("%s set: %s" % (d["key"], src)) if src else
                         "missing — add a line %s=… to %s" % (d["key"], SECRETS_FILE), optional=True)
-                if provider == "codex" and d.get("home") and cx:
+                if provider == "codex" and d.get("home") and not d.get("key") and cx:
                     home = local_path(str(d["home"]))
                     try:
                         r = subprocess.run(exe_command(cx) + ["login", "status"], capture_output=True, text=True,
@@ -4133,6 +4299,10 @@ def main(argv=None):
 
     x = sub.add_parser("footprint", help="what Orchestra created outside Claude Code (cleanup list)")
     x.set_defaults(fn=cmd_footprint)
+
+    k = sub.add_parser("key", help=argparse.SUPPRESS)      # internal: the apiKeyHelper command, hidden from --help
+    k.add_argument("profile", help=argparse.SUPPRESS)
+    k.set_defaults(fn=cmd_key)
 
     k = sub.add_parser("hook", help="Claude Code hook entry point (internal)")
     k.add_argument("event", choices=("session-start", "user-prompt", "post-tool", "stop", "session-end"))

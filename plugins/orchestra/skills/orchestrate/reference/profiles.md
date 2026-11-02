@@ -20,11 +20,22 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 | "Claude executor on the second account" | `orch profile set claude alt --home ~/.claude-alt`; the operator logs in there once (`CLAUDE_CONFIG_DIR=… claude`) |
 | "add a DeepSeek profile work: key DEEPSEEK_API_KEY_WORK, flash only, no writing, tests and review only" | `orch profile set deepseek work --key DEEPSEEK_API_KEY_WORK --models deepseek-flash --write no --use-for tests,review` |
 | "a second Codex account" | `orch profile set codex alt --home ~/.codex-alt`; the operator runs the login command from the output (`CODEX_HOME=… codex login`) themselves — login is interactive |
+| "Codex here — on an API key" | `orch profile set codex work --key CODEX_API_KEY_WORK` and `orch profile use codex work` |
+| "Claude here — on an API key" | `orch profile set claude work --key ANTHROPIC_API_KEY_WORK` and `orch profile use claude work` |
+| "every session of mine — on that Claude key" | `orch profile use claude work --default` |
 | "in Antigravity — Argon only and no more than one task" | `orch profile set antigravity argon --models gemini-4-argon --max-open 1` and `orch profile use antigravity argon` |
 | "DeepSeek work — for open-source code only" | `orch profile set deepseek work --rules "open-source code only"` |
 
 - Never ask for or record the API key itself: the profile holds the variable name; the operator puts the value as a
   line `NAME=sk-…` into `~/.orchestra/secrets.env`.
+- A profile with an API `key` is **API-billed** (per token), not a subscription: no `Codex subscription:` /
+  `Claude subscription:` budget line, no SURPLUS/TIGHT, and routing treats it as the offload lane. The key is
+  *explicit-only* — only the profile's `key` supplies it; a `NAME=…` line in `secrets.env` alone never switches a
+  login profile to API billing.
+- `orch profile use claude <profile>` with a key profile also writes Claude Code's `apiKeyHelper` into the project's
+  `.claude/settings.local.json` (git-excluded), so the session and its subagents bill to that key; `--default`
+  writes it to the user settings. It takes effect after a restart (`/status` shows the active credential).
+  Switching to a login profile (or `inherit` / `off`) removes the helper only when orch wrote it.
 - `orch` strictly enforces `off`, models, `effort ≤` (lowers it with a note), the write ban and `max_open`;
   `only for`, `prefer for` and `rules` are yours to honour when choosing an executor. A manual profile's
   `max_open` is a hard cap for both `handoff new` and `take`: `--force` cannot bypass it (or `off`), but can

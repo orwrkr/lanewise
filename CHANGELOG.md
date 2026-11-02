@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.0
+
+- **The weekly TIGHT alarm no longer fires on a stale burst**: the weekly projection used to be the whole week's
+  linear average, so yesterday's heavy use counted as if it were still going on, and the reserve was a flat 10% of
+  the week right up to the reset. `orch` now keeps a `week_history` series (one sample per 15 minutes, kept 72 h)
+  for both Claude and Codex and projects the week from the recent pace — the earliest sample from the last 24 h with
+  the same reset and at least 6 h before the measurement — falling back to the window average while there is no such
+  sample. The weekly reserve also shrinks with the time left to the reset (`reserve × remaining / week`, floored at
+  1 point), so a nearly-finished week does not keep unused quota behind a now-pointless margin. The TIGHT line shows
+  which basis the projection used and the effective reserve in place of the flat one (`reserve 2% (10% at the start
+  of the week)`); the compact status line texts are unchanged. The five-hour window keeps its existing pace and flat
+  reserve.
+
 ## 0.13.0
 
 - **A broken `spend_limits.json` now refuses runs instead of letting them through**: a corrupt limits file made a

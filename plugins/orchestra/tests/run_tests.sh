@@ -1807,6 +1807,118 @@ def weekly_budget():
     snapshot(window(10, 2), window(95, 167))
     assert m.claude_budget()[0] == "tight"     # used share is sufficient even on day one
 
+def weekly_pace():
+    # The effective weekly reserve shrinks with the time left and floors at 1 (0 stays 0).
+    reset = fixed + dt.timedelta(days=7)
+    assert m.week_reserve(10, reset, reset - dt.timedelta(days=7)) == 10
+    assert abs(m.week_reserve(10, reset, reset - dt.timedelta(days=3.5)) - 5) < 1e-9
+    assert abs(m.week_reserve(10, reset, reset - dt.timedelta(hours=31)) - 1.85) < 0.01
+    assert m.week_reserve(10, reset, reset - dt.timedelta(hours=1)) == 1
+    assert m.week_reserve(0, reset, reset - dt.timedelta(days=7)) == 0
+    assert m.week_reserve_text(10, 10) == "10%"
+    assert m.week_reserve_text(10, 1.85) == "2% (10% at the start of the week)"
+
+    # week_history sampling: at most one per 15 min, capped at 300, malformed entries dropped.
+    t0 = fixed
+    hist = m.week_history_update([], {"used": 80.0, "resets_at": m.iso(reset)}, t0)
+    hist = m.week_history_update(hist, {"used": 81.0, "resets_at": m.iso(reset)}, t0 + dt.timedelta(minutes=5))
+    assert len(hist) == 1                    # a change within 15 min adds no second sample
+    hist = m.week_history_update(hist, {"used": 82.0, "resets_at": m.iso(reset)}, t0 + dt.timedelta(minutes=20))
+    assert len(hist) == 2                    # past the gap a change adds a sample
+    hist = m.week_history_update([["garbage", 80.0, m.iso(reset)]], {"used": 90.0, "resets_at": m.iso(reset)},
+                                 t0 + dt.timedelta(hours=1))
+    assert len(hist) == 1 and hist[0][1] == 90.0      # the malformed entry is skipped, never fatal
+    many = [[m.iso(t0 + dt.timedelta(minutes=5 * i)), 1.0, m.iso(reset)] for i in range(350)]
+    assert len(m.week_history_update(many, None, t0 + dt.timedelta(hours=72))) == 300
+
+    # The weekly base sample: earliest within 24 h, same reset (10 min), at least 6 h before the measurement.
+    hist8 = [[m.iso(fixed - dt.timedelta(hours=8)), 82.0, m.iso(reset)]]
+    assert m.week_base_sample(hist8, reset, fixed) == (fixed - dt.timedelta(hours=8), 82.0)
+    old = reset - dt.timedelta(days=7)                 # a sample from the previous week
+    assert m.week_base_sample([[m.iso(fixed - dt.timedelta(hours=8)), 50.0, m.iso(old)]], reset, fixed) is None
+    assert m.week_base_sample([[m.iso(fixed - dt.timedelta(hours=5)), 82.0, m.iso(reset)]], reset, fixed) is None
+
+    def week_snap(used, hours_left, hist=None):
+        r = fixed + dt.timedelta(hours=hours_left)
+        data = {"updated": m.iso(fixed), "source": "test",
+                "seven_day": {"used": used, "resets_at": m.iso(r), "updated": m.iso(fixed)}}
+        if hist is not None:
+            data["week_history"] = hist
+        m.write_json(m.USAGE_SNAPSHOT, data)
+
+    # Real case: 84% used, 31 h to the reset, 82% 8 h ago → the recent pace says ~91%, not TIGHT.
+    rr = fixed + dt.timedelta(hours=31)
+    real_hist = [[m.iso(fixed - dt.timedelta(hours=8)), 82.0, m.iso(rr)]]
+    week_snap(84, 31, real_hist)
+    rate, basis = m.week_rate(real_hist, 84, rr, fixed)
+    assert basis == "the last 8 h", basis
+    assert abs(m.projected_at_reset(84, rr, rate, fixed) - 91.75) < 0.01
+    assert m.claude_budget()[0] != "tight"
+    # No history: the same numbers fall back to the window average → 103% projected → TIGHT.
+    week_snap(84, 31)
+    mode, line = m.claude_budget()
+    assert mode == "tight" and "103% projected from the week's average" in line and "weekly limit is tight" in line, line
+    # A real burn stays TIGHT: 10 points in 8 h with 60 h left.
+    week_snap(30, 60, [[m.iso(fixed - dt.timedelta(hours=8)), 20.0, m.iso(fixed + dt.timedelta(hours=60))]])
+    mode, line = m.claude_budget()
+    assert mode == "tight" and "projected from the last 8 h" in line, line
+    # The reserve: 90% with 6 days left is TIGHT; 92% with 5 h left and no recent use isn't.
+    week_snap(90, 24 * 6)
+    assert m.claude_budget()[0] == "tight"
+    week_snap(92, 5)
+    assert m.claude_budget()[0] != "tight"
+    week_snap(99.5, 1)
+    assert m.claude_budget()[0] == "tight"           # the 1-point floor keeps the last hour guarded
+    # A week_reserve of 0 is TIGHT only at 100%.
+    with mock.patch.object(m, "budget_settings", return_value={"surplus": 30, "reserve": 10, "week_reserve": 0}):
+        week_snap(99, 1)
+        assert m.claude_budget()[0] != "tight"
+        week_snap(100, 1)
+        assert m.claude_budget()[0] == "tight"
+
+def codex_weekly():
+    cx = root / "cx-week"
+    d = cx / "sessions" / "2026" / "11" / "02"
+    d.mkdir(parents=True)
+    def ev(used5, r5h, used7, r7h, t):
+        return json.dumps({"timestamp": t.astimezone(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "type": "event_msg", "payload": {"type": "token_count", "rate_limits": {"limit_id": "codex",
+            "primary": {"used_percent": used5, "window_minutes": 300, "resets_at": int((t + dt.timedelta(hours=r5h)).timestamp())},
+            "secondary": {"used_percent": used7, "window_minutes": 10080, "resets_at": int((t + dt.timedelta(hours=r7h)).timestamp())},
+            "credits": {"has_credits": False}, "plan_type": "plus"}}})
+    f = d / "rollout-0001.jsonl"
+    f.write_text(ev(10, 2, 84, 31, fixed) + "\n", encoding="utf-8")
+    with mock.patch.dict(os.environ, {"CODEX_HOME": str(cx)}):
+        m.refresh_codex(force=True)
+        entry = m.read_json(m.CODEX_USAGE_FILE, {})[str(cx)]
+        assert len(entry.get("week_history") or []) == 1      # the series is in the cached entry
+        assert m.codex_short_mode({"reserve": 10, "week_reserve": 10}, entry) == "tight: week 103% projected"
+        m.refresh_codex(force=True)
+        entry = m.read_json(m.CODEX_USAGE_FILE, {})[str(cx)]
+        assert len(entry.get("week_history") or []) == 1      # an unchanged measurement adds no sample
+        # the same weekly cases as Claude, straight through the compact text
+        def ce(used, hours_left, hist=None):
+            r = fixed + dt.timedelta(hours=hours_left)
+            e = {"seven_day": {"used": used, "resets_at": m.iso(r), "measured": m.iso(fixed)}}
+            if hist is not None:
+                e["week_history"] = hist
+            return e
+        assert m.codex_short_mode({"reserve": 10, "week_reserve": 10},
+                                  ce(84, 31, [[m.iso(fixed - dt.timedelta(hours=8)), 82.0,
+                                               m.iso(fixed + dt.timedelta(hours=31))]])) is None
+        assert m.codex_short_mode({"reserve": 10, "week_reserve": 10}, ce(84, 31)) == "tight: week 103% projected"
+        assert m.codex_short_mode({"reserve": 10, "week_reserve": 10},
+                                  ce(30, 60, [[m.iso(fixed - dt.timedelta(hours=8)), 20.0,
+                                               m.iso(fixed + dt.timedelta(hours=60))]])) == "tight: week 105% projected"
+        assert m.codex_short_mode({"reserve": 10, "week_reserve": 10}, ce(92, 5)) is None
+        assert m.codex_short_mode({"reserve": 10, "week_reserve": 10}, ce(99.5, 1)) == "tight: week over reserve"
+        # a new weekly measurement adds a sample
+        f.write_text(ev(10, 2, 86, 30, fixed + dt.timedelta(hours=1)) + "\n", encoding="utf-8")
+        m.refresh_codex(force=True)
+        entry = m.read_json(m.CODEX_USAGE_FILE, {})[str(cx)]
+        assert len(entry.get("week_history") or []) == 2
+        assert m.codex_budget()[0] == "tight"
+
 def hard_cap():
     good(["profile", "set", "antigravity", "zero", "--max-open", "0", "--default"])
     rc, out = run(["handoff", "new", "--title", "cap", "--force"])
@@ -2240,6 +2352,8 @@ for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", pa
                    ("3 central worker guard for every handoff command", worker_guard),
                    ("4 stale measurement pace and independent window timestamps", stale_budget),
                    ("5 weekly TIGHT without current five-hour numbers", weekly_budget),
+                   ("5b weekly recent pace and shrinking reserve", weekly_pace),
+                   ("5c Codex weekly recent pace and reserve", codex_weekly),
                    ("6 force cannot bypass manual profile capacity", hard_cap),
                    ("7 wait any reports an existing result exactly once", existing_result),
                    ("8 inferred activity gets one overdue warning; fast check never scans", overdue_activity),

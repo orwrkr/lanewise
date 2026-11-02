@@ -687,6 +687,11 @@ PACE_MIN_ELAPSED = 30      # minutes into a window before its average pace is tr
 RECENT_PACE = (15, 60)     # the recent pace: the oldest sample 15–60 minutes back
 ACTIVE_MIN = 15            # a session seen within this many minutes is active
 HISTORY_KEEP_H = 6
+WEEK_HISTORY_KEEP_H = 72   # hours a weekly sample is kept
+WEEK_HISTORY_CAP = 300     # most weekly samples kept
+WEEK_HISTORY_MIN_GAP = 15  # minutes between weekly samples
+WEEK_PACE_MAX_AGE = 24     # hours back a weekly base sample may sit
+WEEK_PACE_MIN_GAP = 6      # hours a weekly base sample must be before the measurement
 
 
 def epoch_iso(v):
@@ -720,6 +725,7 @@ def save_usage(windows, source):
         if not hist or hist[-1][1:] != [five["used"], five["resets_at"]] or stale:
             hist.append([iso(t), five["used"], five["resets_at"]])
         snap["history"] = hist[-300:]
+    snap["week_history"] = week_history_update(snap.get("week_history"), windows.get("seven_day"), t)
     write_json(USAGE_SNAPSHOT, snap)
 
 
@@ -771,6 +777,98 @@ def window_pace(snap, used, reset, hours):
 
 def projected_at_reset(used, reset, rate, measured):
     return used + rate * (reset - measured).total_seconds() / 60
+
+
+def week_base_sample(history, reset, measured):
+    """The earliest week_history sample from the last 24 hours with the same reset (within 10 minutes) and at
+    least 6 hours before the measurement — the longest recent baseline; None without one. Malformed entries
+    are skipped, never fatal."""
+    if reset is None or measured is None:
+        return None
+    lo = measured - dt.timedelta(hours=WEEK_PACE_MAX_AGE)
+    best = None
+    for h in history or []:
+        if not (isinstance(h, list) and len(h) == 3):
+            continue
+        ts = parse_iso(str(h[0]))
+        r = parse_iso(str(h[2] or ""))
+        if not (ts and r) or abs((r - reset).total_seconds()) >= 600:
+            continue
+        if not (lo <= ts <= measured) or (measured - ts).total_seconds() < WEEK_PACE_MIN_GAP * 3600:
+            continue
+        try:
+            u0 = float(h[1])
+        except (TypeError, ValueError):
+            continue
+        if best is None or ts < best[0]:
+            best = (ts, u0)
+    return best
+
+
+def week_recent_basis(mins):
+    """'the last 8 h' / 'the last 6h 30m' from the minutes between the base sample and the measurement."""
+    total = int(round(mins))
+    h, m = divmod(total, 60)
+    if m == 0:
+        return "the last %d h" % h
+    if h:
+        return "the last %dh %dm" % (h, m)
+    return "the last %d min" % max(total, 1)
+
+
+def week_rate(history, used, reset, measured, window_minutes=10080):
+    """(%/min, basis) of the week: the recent pace from week_history when a base sample exists, else the
+    window average; (None, None) when neither is computable. The recent pace is used when it is available,
+    not the higher of the two — the weekly alarm must not stay on because of an old burst."""
+    base = week_base_sample(history, reset, measured)
+    if base is not None:
+        ts0, u0 = base
+        mins = (measured - ts0).total_seconds() / 60.0
+        if mins > 0:
+            return max(used - u0, 0) / mins, week_recent_basis(mins)
+    if reset is None or measured is None:
+        return None, None
+    elapsed = (measured - (reset - dt.timedelta(minutes=window_minutes))).total_seconds() / 60.0
+    if elapsed >= PACE_MIN_ELAPSED:
+        return used / elapsed, "the week's average"
+    return None, None
+
+
+def week_reserve(reserve, reset, measured, window_minutes=10080):
+    """The effective weekly reserve: reserve × (time left / window), floored at 1 point (0 stays 0). The
+    margin for what may still come shrinks as the window runs out; a reserve set to 0 stays 0."""
+    if reserve <= 0:
+        return 0.0
+    if reset is None or measured is None:
+        return float(reserve)
+    remaining = (reset - measured).total_seconds() / 60.0
+    if remaining <= 0 or window_minutes <= 0:
+        return float(reserve)
+    return float(min(reserve, max(1.0, reserve * remaining / window_minutes)))
+
+
+def week_reserve_text(reserve, effective):
+    """'10%' when the effective reserve rounds to the flat one, '2% (10% at the start of the week)' otherwise."""
+    if pct(effective) == pct(reserve):
+        return "%d%%" % pct(reserve)
+    return "%d%% (%d%% at the start of the week)" % (pct(effective), pct(reserve))
+
+
+def week_history_update(hist, week, t):
+    """Retained week_history ([ts, used, resets_at]), plus a sample when `week` is a new measurement (used or
+    reset changed) and at least WEEK_HISTORY_MIN_GAP minutes have passed. Malformed entries are dropped; the
+    series is kept for WEEK_HISTORY_KEEP_H hours and capped at WEEK_HISTORY_CAP entries."""
+    keep = t - dt.timedelta(hours=WEEK_HISTORY_KEEP_H)
+    out = [h for h in hist or [] if isinstance(h, list) and len(h) == 3
+           and (parse_iso(str(h[0])) or keep) > keep]
+    if week and week.get("resets_at"):
+        last = out[-1] if out else None
+        last_ts = parse_iso(str(last[0])) if last else None
+        changed = not last or last[1:] != [week["used"], week["resets_at"]]
+        gap_ok = not last_ts or (t - last_ts).total_seconds() >= WEEK_HISTORY_MIN_GAP * 60
+        if changed and gap_ok:
+            out.append([iso(t), week["used"], week["resets_at"]])
+    return out[-WEEK_HISTORY_CAP:]
 
 
 def budget_settings(where=None):
@@ -845,18 +943,21 @@ def claude_budget(where=None):
     cfg = budget_settings(where)
     weekly = None
     week_tight = False
+    week_reserve_txt = "%d%%" % cfg["week_reserve"]
     if week:
         wu, wr = week
         wm = measured_at(snap, "seven_day")
-        wrate, _ = window_pace(snap, wu, wr, 24 * 7)
-        weekly = max(wu, projected_at_reset(wu, wr, wrate, wm) if wrate is not None else wu)
-        projection = "%d%% projected" % pct(weekly) if wrate is not None else "projection unavailable"
+        wrate, wbasis = week_rate(snap.get("week_history"), wu, wr, wm)
+        weekly = max(wu, projected_at_reset(wu, wr, wrate, wm)) if wrate is not None else wu
+        projection = ("%d%% projected from %s" % (pct(weekly), wbasis)) if wrate is not None else "projection unavailable"
         elapsed = (wm - (wr - dt.timedelta(days=7))).total_seconds() if wm and wr else 0
-        week_tight = wu >= 100 - cfg["week_reserve"] or (
-            elapsed >= 86400 and weekly >= 100 - cfg["week_reserve"])
+        eff = week_reserve(cfg["week_reserve"], wr, wm)
+        week_reserve_txt = week_reserve_text(cfg["week_reserve"], eff)
+        week_tight = wu >= 100 - eff or (
+            elapsed >= 86400 and weekly >= 100 - eff)
     instruction = "treat Claude as low (conserve it; offload to Codex / DeepSeek)."
-    weekly_line = (" TIGHT: weekly limit is tight (%s, %d%% used, reserve %d%%) — %s"
-                   % (projection, pct(week[0]), cfg["week_reserve"], instruction)) if week_tight else ""
+    weekly_line = (" TIGHT: weekly limit is tight (%s, %d%% used, reserve %s) — %s"
+                   % (projection, pct(week[0]), week_reserve_txt, instruction)) if week_tight else ""
     if not five or five[1] is None:
         if week_tight:
             return "tight", "Claude subscription:" + weekly_line
@@ -1125,11 +1226,13 @@ def refresh_codex(where=None, force=False, prof=None):
         return entry
     measured, windows, plan_type, model = scanned
     old_model = entry.get("model")
+    old_week_history = entry.get("week_history")
     entry = codex_windows(measured, windows, plan_type)
     if model:
         entry["model"] = model
     elif old_model:
         entry["model"] = old_model       # a turn_context scrolled out of the tail: keep the last seen model
+    entry["week_history"] = week_history_update(old_week_history, entry.get("seven_day"), measured)
     entry["updated"] = iso(now())
     snap[home] = entry
     t = now()      # drop accounts untouched for over a day (but keep the 💡 announcement state)
@@ -1223,10 +1326,10 @@ def codex_budget(where=None):
     if week:
         used, reset, m = week
         measured = m or measured
-        cap = 100 - cfg["week_reserve"]
-        proj = codex_projected(used, reset, m, 10080)
+        cap = 100 - week_reserve(cfg["week_reserve"], reset, m)
+        rate, _ = week_rate(entry.get("week_history"), used, reset, m)
+        weekly = max(used, projected_at_reset(used, reset, rate, m)) if rate is not None else used
         elapsed = (m - (reset - dt.timedelta(minutes=10080))).total_seconds() if m and reset else 0
-        weekly = max(used, proj) if proj is not None else used
         if used >= cap or (elapsed >= 86400 and weekly >= cap):
             tight = True
         parts.append("week %d%%" % pct(used) + (", resets %s" % reset.astimezone().strftime("%b %d %H:%M")
@@ -1247,13 +1350,13 @@ def codex_short_mode(cfg, entry):
     week = codex_window(entry, "seven_day")
     if week:
         used, reset, m = week
-        cap = 100 - cfg["week_reserve"]
+        cap = 100 - week_reserve(cfg["week_reserve"], reset, m)
         if used >= cap:
             return "tight: week over reserve"
-        proj = codex_projected(used, reset, m, 10080)
-        weekly = max(used, proj) if proj is not None else used
+        rate, _ = week_rate(entry.get("week_history"), used, reset, m)
+        weekly = max(used, projected_at_reset(used, reset, rate, m)) if rate is not None else used
         elapsed = (m - (reset - dt.timedelta(minutes=10080))).total_seconds() if m and reset else 0
-        if elapsed >= 86400 and proj is not None and weekly >= cap:
+        if elapsed >= 86400 and rate is not None and weekly >= cap:
             return "tight: week %d%% projected" % pct(weekly)
     if five:
         used, reset, m = five

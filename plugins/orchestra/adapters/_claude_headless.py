@@ -71,7 +71,9 @@ def tool_policy():
     `orch run --allow RULE`."""
     allowed = GIT_READ + [r.strip() for r in os.environ.get("ORCH_ALLOW", "").splitlines() if r.strip()]
     if os.environ.get("ORCH_MODE") == "write":
-        return "Read,Grep,Glob,Edit,Write,Bash", ["Edit(./**)", "Write(./**)"] + allowed
+        # `/**` in a CLI rule anchors at the primary working directory; `./**` follows the worker's `cd`, which would
+        # silently shrink its write scope to wherever it last went.
+        return "Read,Grep,Glob,Edit,Write,Bash", ["Edit(/**)", "Write(/**)"] + allowed
     return "Read,Grep,Glob,Bash", allowed
 
 

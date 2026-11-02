@@ -272,7 +272,7 @@ check 'e["CLAUDE_CONFIG_DIR"].replace(chr(92), "/").startswith(os.environ["ORCH_
 check 'e["ORCH_WORKER"].startswith("dee-") and e["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"' "ORCH_WORKER set, auto-memory off"
 check '"-p" in a and "--strict-mcp-config" in a and a[a.index("--setting-sources") + 1] == "user"' "headless, no MCP, no project settings/hooks"
 check 'a[a.index("--permission-mode") + 1] == "dontAsk"' "dontAsk: only allowed actions run"
-check '"Edit" in a[a.index("--tools") + 1] and {"Edit(./**)", "Write(./**)", "Bash(npm test:*)", "Bash(git diff:*)"} <= set(r["allowed"])' "write: edits confined to cwd + --allow rules"
+check '"Edit" in a[a.index("--tools") + 1] and {"Edit(/**)", "Write(/**)", "Bash(npm test:*)", "Bash(git diff:*)"} <= set(r["allowed"]) and not any("./" in x for x in r["allowed"])' "write: edits anchored at the working directory, not at a later cd + --allow rules"
 check 'a[a.index("--effort") + 1] == "high"' "effort passed"
 check 'r["role"] and r["claude_md"]' "role + project CLAUDE.md in system prompt"
 FAKE_CLAUDE=ok DEEPSEEK_API_KEY=sk-env $ORCH run deepseek --model deepseek-flash --effort none "review" >/dev/null; rc=$?

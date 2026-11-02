@@ -79,3 +79,7 @@ Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry
   `~/.orchestra/`, not in the repository.
 - Bump the version in `plugins/orchestra/.claude-plugin/plugin.json` when behaviour changes: plugin installs from
   GitHub are cached by version.
+- A version that reaches `main` gets a signed tag `vX.Y.Z` on its last commit, at the merge. If CI then requires a
+  fix, move the tag to the fixed commit. Push tags only after CI is green on their commit, so moving one never needs
+  a force-push. Once a version has reached users, a behaviour fix needs a new version instead: installs are cached by
+  version and wouldn't pick up a moved tag.

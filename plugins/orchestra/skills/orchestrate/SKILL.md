@@ -49,11 +49,11 @@ steps wait on it), the **files** it changes, **dependencies**. With ≥ 3 subtas
 2. Drop slots that are unavailable, not allowed by the profile, or in `policy.never_auto` (without explicit
    permission), and the manual lane if the subtask fails its rules (section 5).
 3. Take the **cheapest slot that can handle the difficulty**; on a tie — the pool less loaded in this session
-   (alternate claude ↔ codex ↔ deepseek). DeepSeek spends balance, not subscription limits — it is the offload pool,
+   (alternate Claude ↔ Codex ↔ DeepSeek). DeepSeek spends balance, not subscription limits — it is the offload pool,
    except in a Claude SURPLUS, when Claude goes first.
 4. Effort — the minimum sufficient: 1 → low, 2 → low/medium, 3 → medium/high, 4 → high, 5 → xhigh/max or the main
    thread. Go higher only after a failure or when a mistake is costly (security, data, migrations).
-5. **Cross-review** significant code with a different family: claude · openai (codex) · deepseek (`review_of_*` in
+5. **Cross-review** significant code with a different family: Claude · OpenAI (Codex) · DeepSeek (`review_of_*` in
    the registry; a manual agent's result → Codex/Claude).
 6. Assign every subtask a **fallback** from a different provider up front.
 
@@ -113,7 +113,7 @@ that means a ban under Google's ToS). Files only: TASK.md → operator → agent
 
 ## 6. Limits and availability — `orch guide quota`
 
-The operator talks about limits in plain words ("codex is out until 18:00", "topped up DeepSeek", "I'm away until
+The operator talks about limits in plain words ("Codex is out until 18:00", "topped up DeepSeek", "I'm away until
 19:00") — translate that into `orch quota set|clear` using the table in `orch guide quota` (get the date/time with
 `date`), then move unstarted subtasks off unavailable slots.
 

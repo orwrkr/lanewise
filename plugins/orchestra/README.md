@@ -123,7 +123,7 @@ Usually there is nothing special to do: give it a task and the skill kicks in on
 |---|---|
 | `/orchestra:run <task>` | split → assign models and effort → execute |
 | `/orchestra:status` | who is unavailable, what is pending on the manual channel, what comes next |
-| `/orchestra:quota codex is out until 18:00` | report a limit (or "codex works again", "topped up DeepSeek") |
+| `/orchestra:quota codex is out until 18:00` | report a limit (or "Codex works again", "topped up DeepSeek") |
 | `/orchestra:profile deepseek work` | executor profiles: which key/account, models and rules, per project or by default (see below) |
 | `/orchestra:manual` · `AG-0004 to Antigravity` | the manual task pool: show it, take a task, mark it done or cancel it |
 | `/orchestra:done AG-0003` | a manual task is done (if the agent did not write RESULT.md) |
@@ -142,7 +142,7 @@ window and 10% of the week by default) is kept for your other sessions and as a 
 
 - **surplus** — at least 30% of the window would expire unused beyond the reserve, and the weekly limit has room.
   Until the reset, the orchestrator gives Claude subagents the subtasks it would otherwise give to API-billed
-  executors. Codex and the manual pool keep their tasks. When several orchestrator sessions are active, each one
+  executors. Codex and the manual pool keep their tasks. When several sessions are active, each one
   gets its share of the surplus, so they don't all pile onto Claude at once.
 - **tight** — the five-hour window reaches its reserve, or weekly usage reaches its reserve, or the weekly
   projection reaches it after the first 24 hours. Weekly TIGHT works without current five-hour numbers. The
@@ -158,8 +158,8 @@ command as your status line once, in `~/.claude/settings.json`:
 
 To keep your own status line, use `orch statusline --then "<your command>"`. Without the status line you can give the
 numbers in plain words ("Claude: 40% of the session used, resets at 18:00") → `orch budget set --used 40 --resets 18:00`.
-`orch budget` shows the current state and the active consumers Orchestra knows of. Those are the orchestrator
-sessions with the plugin seen in the last 15 minutes and running `orch run claude` executors; a session led by
+`orch budget` shows the current state and the active consumers Orchestra knows of. Those are the Claude Code
+sessions with this plugin active in the last 15 minutes and running `orch run claude` executors; a session led by
 DeepSeek doesn't count. The thresholds live in the `claude` profile: `--opt reserve=25` (keep more for other
 sessions), `week_reserve=15`, `surplus=50`, or `surplus=off` to switch the mode off.
 A project whose Claude or Codex profile has an API `key` is API-billed instead: no subscription line, no mode, and the
@@ -168,7 +168,7 @@ session doesn't write its numbers into the shared snapshot.
 Codex's limits are read the same way from its own session logs (`$CODEX_HOME/sessions/…`, an undocumented format
 parsed defensively) and shown as a `Codex subscription: …` line next to the Claude one, with `TIGHT: treat Codex
 as low` when a window or its projection reaches the reserve — see the `codex` profile's `reserve`/`week_reserve`.
-The status line gets two more lines: the Codex limits, and `session in/out: claude 370k/111k · codex 450k/84k`, the
+The status line gets two more lines: the Codex limits, and `Session in/out: Claude 370k/111k · Codex 450k/84k`, the
 current session's tokens per provider, without cache reads, which agrees with `orch usage`.
 
 ## DeepSeek as the lead
@@ -340,7 +340,7 @@ This way the rules don't drift apart, and each agent sees them exactly once.
 
 What it contains:
 - **slots** — provider × model × effort, each with a cost (`cost`: the load on the subscription limit; for DeepSeek, the relative token price), a difficulty ceiling (`max_difficulty`) and strengths (`good_for`);
-- **default routes** (`routing`) for each task type, including cross-review between the claude · openai · deepseek families;
+- **default routes** (`routing`) for each task type, including cross-review between the Claude · OpenAI · DeepSeek families;
 - **`policy.never_auto`** — slots that are used only with your permission (Codex ultra, Fable);
 - **manual channel parameters** (`operator`).
 
@@ -364,7 +364,7 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `~/.orchestra/claude_usage.json` | the Claude subscription's last known window usage and its recent history, for the budget mode (`orch budget`) |
 | `~/.orchestra/codex_usage.json` | the Codex account's last known limits, per `CODEX_HOME` (the `Codex subscription:` line) |
 | `~/.orchestra/session_tokens.json` | per-session byte offsets and running token totals, for the status line's session part |
-| `~/.orchestra/sessions.json` | active orchestrator sessions and Claude executor runs: the budget's consumer count |
+| `~/.orchestra/sessions.json` | active Claude Code sessions and Claude executor runs: the budget's consumer count |
 | `~/.orchestra/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
 | `<project>/.orchestra/runs/` | executor runs: prompt, role, project rules, response, log, tokens |
 | `<project>/.orchestra/handoffs/AG-…/` | manual tasks: meta, BODY.md, TASK.md, RESULT.md |

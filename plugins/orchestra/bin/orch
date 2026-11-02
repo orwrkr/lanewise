@@ -120,6 +120,112 @@ def human_delta(t):
     return ("in " + s) if future else (s + " ago")
 
 
+# ───────────────────────── official names ─────────────────────────
+# ids → display names for human-readable output. Ids stay exact wherever they are typed or parsed (commands,
+# --json, the ledger, profiles/cache, the registry); display names are for what a person reads.
+
+PROVIDER_NAMES = {
+    "claude": "Claude", "codex": "Codex", "deepseek": "DeepSeek", "gemini": "Gemini",
+    "antigravity": "Antigravity",
+}
+MODEL_NAMES = {
+    "claude-fable-5-1": "Claude Fable 5.1", "claude-opus-5-5": "Claude Opus 5.5",
+    "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-haiku-5-5": "Claude Haiku 5.5",
+    "gpt-6.1-sol": "GPT-6.1 Sol", "gpt-6.1-terra": "GPT-6.1 Terra", "gpt-6-sol": "GPT-6 Sol",
+    "gpt-6-luna": "GPT-6 Luna", "gpt-6-astra": "GPT-6 Astra", "gpt-5.6-sol": "GPT-5.6 Sol",
+    "gpt-5.6-terra": "GPT-5.6 Terra", "gpt-5.6-luna": "GPT-5.6 Luna",
+    "deepseek-v4-pro": "DeepSeek V4 Pro", "deepseek-flash": "DeepSeek V4.1 Flash",
+    "gemini-4-argon": "Gemini 4 Argon", "gemini-3.8-flash": "Gemini 3.8 Flash",
+}
+NAMES = dict(PROVIDER_NAMES)
+NAMES.update(MODEL_NAMES)
+
+
+def display_name(name):
+    """id → display name. Unknown ids are shown as-is; a dated/suffixed variant resolves only when exactly one
+    known name is its longest prefix (followed by a separator)."""
+    if name is None:
+        return None
+    s = str(name).strip()
+    if not s:
+        return name
+    key = s.lower()
+    if key in NAMES:
+        return NAMES[key]
+    hits = [(k, v) for k, v in NAMES.items() if key.startswith(k) and len(key) > len(k) and key[len(k)] in "-_."]
+    if not hits:
+        return s
+    longest = max(len(k) for k, _ in hits)
+    top = [v for k, v in hits if len(k) == longest]
+    return top[0] if len(top) == 1 else s
+
+
+def scope_name(scope):
+    """deepseek@work → DeepSeek@work; deepseek → DeepSeek; unknown scopes shown as-is."""
+    if not scope:
+        return scope
+    provider, _, name = str(scope).partition("@")
+    base = display_name(provider) or provider
+    return base + ("@" + name if name else "")
+
+
+def stale_part(measured):
+    """'stale: <age>' when the measurement is older than the freshness constant, else None."""
+    if measured is None:
+        return None
+    age = max((now() - measured).total_seconds(), 0)
+    if age > USAGE_FRESH_SECONDS:
+        return "stale: %s" % human_delta(measured)
+    return None
+
+
+def provider_line(name, five, week, mode_text=None, measured=None, sessions=None):
+    """One provider's status line part, built the same way for Claude and Codex:
+    name · 5h used% → reset · week used% · [N session(s)] · mode text · stale: age.
+    five/week are (used %, reset time) or None; any part without data is left out."""
+    parts = [name] if name else []
+    if five and five[0] is not None and five[1]:
+        parts.append("5h %d%% → %s" % (pct(five[0]), five[1].astimezone().strftime("%H:%M")))
+    if week and week[0] is not None:
+        parts.append("week %d%%" % pct(week[0]))
+    if sessions:
+        parts.append("%d session%s" % (sessions, "" if sessions == 1 else "s"))
+    if mode_text:
+        parts.append(mode_text)
+    stale = stale_part(measured)
+    if stale:
+        parts.append(stale)
+    return " · ".join(parts) if parts else None
+
+
+def claude_status_name(model):
+    """The Claude product and model for a status line: the status line's display_name, prefixed 'Claude ' unless
+    it already says Claude; in a session led by another provider the id goes through the names table with no prefix."""
+    if not model:
+        return "Claude"
+    m = str(model).strip()
+    if os.environ.get("ORCH_LEAD"):
+        return display_name(m) or m
+    if m.lower().startswith("claude"):
+        return display_name(m) or m
+    return "Claude " + m
+
+
+def short_mode(mode, budget_line):
+    """The compact mode text for the Claude status line: 'tight: week N% projected', 'tight: week over reserve',
+    'tight: 5h', or 'surplus: Claude first'."""
+    if mode == "surplus":
+        return "surplus: Claude first"
+    if mode != "tight":
+        return None
+    m = re.search(r"weekly limit is tight \((\d+)% projected", budget_line or "")
+    if m:
+        return "tight: week %s%% projected" % m.group(1)
+    if "weekly limit is tight" in (budget_line or ""):
+        return "tight: week over reserve"
+    return "tight: 5h"
+
+
 def parse_until(text):
     """Accepts: +90m +3h +2d +1w | HH:MM | YYYY-MM-DD | YYYY-MM-DD HH:MM | tomorrow HH:MM | none."""
     if text is None:
@@ -557,15 +663,15 @@ def cmd_quota(a):
 # adds them to a shared snapshot with a short history; the operator can report the same numbers (`orch budget set`).
 # The pace is the higher of the window average and the last 15–60 minutes, so the projection follows every instance
 # consuming right now. A reserve is kept for other sessions and safety (profile claude: reserve, week_reserve):
-# SURPLUS — the window would expire with a lot left beyond the reserve (shared between the active orchestrator
-# sessions); TIGHT — it would reach the reserve before the reset.
+# SURPLUS — the window would expire with a lot left beyond the reserve (shared between the active sessions);
+# TIGHT — it would reach the reserve before the reset.
 
 USAGE_SNAPSHOT = ORCH_HOME / "claude_usage.json"
 SESSIONS_FILE = ORCH_HOME / "sessions.json"
 BUDGET_DEFAULTS = {"surplus": 30, "reserve": 10, "week_reserve": 10}    # % — profile claude: --opt surplus=N|off, …
 PACE_MIN_ELAPSED = 30      # minutes into a window before its average pace is trusted
 RECENT_PACE = (15, 60)     # the recent pace: the oldest sample 15–60 minutes back
-ACTIVE_MIN = 15            # an orchestrator session seen within this many minutes is active
+ACTIVE_MIN = 15            # a session seen within this many minutes is active
 HISTORY_KEEP_H = 6
 
 
@@ -673,7 +779,7 @@ def budget_settings(where=None):
 
 @locked("home")
 def heartbeat(key, where=None, kind="session"):
-    """Mark an orchestrator session (or a running Claude executor) as a Claude consumer; at most once a minute."""
+    """Mark a session (or a running Claude executor) as a Claude consumer; at most once a minute."""
     if not key:
         return
     data = read_json(SESSIONS_FILE, {}, recover_corrupt=True)
@@ -700,7 +806,7 @@ def forget(key):
 
 
 def claude_consumers():
-    """Active Claude consumers orch knows of: Claude-led orchestrator sessions seen within ACTIVE_MIN minutes, and
+    """Active Claude consumers orch knows of: Claude-led sessions seen within ACTIVE_MIN minutes, and
     Claude executor runs in progress (a session led by another model does not spend Claude)."""
     data = read_json(SESSIONS_FILE, {}, recover_corrupt=True)
     t, out = now(), {}
@@ -749,7 +855,7 @@ def claude_budget(where=None):
     sessions = sum(1 for v in users.values() if v.get("kind") != "executor")
     runs = len(users) - sessions
     at = reset.astimezone().strftime("%H:%M")
-    active = ("; active: %d orchestrator session%s%s" % (sessions, "" if sessions == 1 else "s",
+    active = ("; active: %d session%s%s" % (sessions, "" if sessions == 1 else "s",
                                                         ", %d Claude executor run%s" % (runs, "" if runs == 1 else "s")
                                                         if runs else "")) if users else ""
     line = "Claude subscription: 5-hour window %d%% used, resets %s (%s)%s%s; reserve %d%%%s" % (
@@ -772,7 +878,7 @@ def claude_budget(where=None):
         return "normal", line + "."
     if weekly is not None and weekly >= 100 - cfg["week_reserve"]:
         return "normal", line + ". Weekly projection %d%%: no surplus mode yet." % pct(weekly)
-    each = " — ≈%d%% for each of the %d orchestrator sessions" % (pct(spare / sessions), sessions) if sessions > 1 else ""
+    each = " — ≈%d%% for each of the %d sessions" % (pct(spare / sessions), sessions) if sessions > 1 else ""
     return "surplus", line + (". SURPLUS: at the current pace (%s) about %d%% of the window would expire unused beyond "
                               "the reserve%s — until %s give subtasks to Claude subagents rather than to API-billed "
                               "executors (DeepSeek, API-key profiles); orch guide budget." % (basis, pct(spare), each, at))
@@ -938,16 +1044,40 @@ def codex_event_limits(line):
     return measured, windows, rl.get("plan_type")
 
 
+def codex_event_model(line):
+    """The model of a `turn_context` event (the last turn), or None."""
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(ev, dict) or ev.get("type") != "turn_context":
+        return None
+    payload = ev.get("payload")
+    if not isinstance(payload, dict) or not payload.get("model"):
+        return None
+    return str(payload["model"])
+
+
 def scan_codex_limits(home):
-    """The newest windows seen in the newest rollout tails, or None when nothing is readable."""
+    """The newest windows seen in the newest rollout tails, plus the last turn's model; or None when nothing is
+    readable. The model comes from the same file that gave the limits; only the tail of each file is read."""
     try:
         best = None
+        model = None
         for f in codex_rollouts(home):
+            file_model = None
             for line in tail_lines(f, CODEX_TAIL_BYTES):
+                m = codex_event_model(line)
+                if m:
+                    file_model = m
                 ev = codex_event_limits(line)
                 if ev and (best is None or ev[0] > best[0]):
-                    best = ev
-        return best
+                    best = (ev[0], ev[1], ev[2], f)
+            if best is not None and best[3] == f:
+                model = file_model
+        if best is None:
+            return None
+        return best[0], best[1], best[2], model
     except OSError:
         return None
 
@@ -978,8 +1108,13 @@ def refresh_codex(where=None, force=False):
     scanned = scan_codex_limits(home)
     if scanned is None:
         return entry
-    measured, windows, plan_type = scanned
+    measured, windows, plan_type, model = scanned
+    old_model = entry.get("model")
     entry = codex_windows(measured, windows, plan_type)
+    if model:
+        entry["model"] = model
+    elif old_model:
+        entry["model"] = old_model       # a turn_context scrolled out of the tail: keep the last seen model
     entry["updated"] = iso(now())
     snap[home] = entry
     t = now()      # drop accounts untouched for over a day (but keep the 💡 announcement state)
@@ -1090,19 +1225,48 @@ def codex_budget(where=None):
     return ("tight" if tight else "normal"), line
 
 
+def codex_short_mode(cfg, entry):
+    """The compact Codex mode text: 'tight: week N% projected', 'tight: week over reserve', 'tight: 5h', or None.
+    Mirrors codex_budget: a weekly cap is checked first, then the five-hour window."""
+    five = codex_window(entry, "five_hour")
+    week = codex_window(entry, "seven_day")
+    if week:
+        used, reset, m = week
+        cap = 100 - cfg["week_reserve"]
+        if used >= cap:
+            return "tight: week over reserve"
+        proj = codex_projected(used, reset, m, 10080)
+        weekly = max(used, proj) if proj is not None else used
+        elapsed = (m - (reset - dt.timedelta(minutes=10080))).total_seconds() if m and reset else 0
+        if elapsed >= 86400 and proj is not None and weekly >= cap:
+            return "tight: week %d%% projected" % pct(weekly)
+    if five:
+        used, reset, m = five
+        cap = 100 - cfg["reserve"]
+        proj = codex_projected(used, reset, m, 300)
+        if used >= cap or (proj is not None and proj >= cap):
+            return "tight: 5h"
+    return None
+
+
 def codex_status_part(where=None):
-    """Compact Codex limits part of the second status line ('codex 5h 81% → 18:28 · week 95%'), or None."""
+    """Compact Codex limits part of the second status line ('GPT-6.1 Terra · 5h 81% → 18:28 · week 95%'),
+    built by the same provider_line helper as Claude; or None with no data."""
     cfg, _, entry = codex_state(where)
     if cfg is None or not entry:
         return None
     five = codex_window(entry, "five_hour")
     week = codex_window(entry, "seven_day")
-    parts = []
-    if five:
-        parts.append("5h %d%% → %s" % (pct(five[0]), five[1].astimezone().strftime("%H:%M")))
-    if week:
-        parts.append("week %d%%" % pct(week[0]))
-    return ("codex " + " · ".join(parts)) if parts else None
+    measured = five[2] if five else (week[2] if week else None)
+    m = entry.get("model")
+    name = (display_name(m) if m else None) or m or "Codex"   # a known id → display name, an unknown id as-is, no model → Codex
+    return provider_line(
+        name,
+        (five[0], five[1]) if five else None,
+        (week[0], week[1]) if week else None,
+        codex_short_mode(cfg, entry),
+        measured,
+    )
 
 
 @locked("home")
@@ -1296,17 +1460,17 @@ def session_tokens(sid, transcript_path):
 
 
 def session_status_part(sid, transcript_path):
-    """'session in/out: claude 370k/111k · codex 450k/84k', or None with no tokens yet (or on any error)."""
+    """'Session in/out: Claude 370k/111k · Codex 450k/84k', or None with no tokens yet (or on any error)."""
     if not sid:
         return None
     try:
         totals = session_tokens(sid, transcript_path)
     except Exception:
         return None
-    parts = ["%s %s/%s" % (prov, fmt_tok(d["input"]), fmt_tok(d["output"]))
+    parts = ["%s %s/%s" % (display_name(prov), fmt_tok(d["input"]), fmt_tok(d["output"]))
              for prov, d in sorted(totals.items())
              if int(d.get("input") or 0) + int(d.get("output") or 0) > 0]
-    return ("session in/out: " + " · ".join(parts)) if parts else None
+    return ("Session in/out: " + " · ".join(parts)) if parts else None
 
 
 def cmd_statusline(a):
@@ -1330,32 +1494,25 @@ def cmd_statusline(a):
         if windows and not api_billed:
             save_usage(windows, "statusline")
         model = (data.get("model") or {}).get("display_name") if isinstance(data.get("model"), dict) else None
-        if model:
-            parts.append(model)
         if data.get("session_id") and not api_billed:
             heartbeat(str(data["session_id"]), cwd)          # this session counts among the Claude consumers
         if not api_billed:
             snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
             five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
-            if five and five[1]:
-                parts.append("5h %d%% → %s" % (pct(five[0]), five[1].astimezone().strftime("%H:%M")))
-                measured = measured_at(snap, "five_hour")
-                if not measured or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS:
-                    parts.append("stale: %s" % (human_delta(measured) if measured else "age unknown"))
-            if week:
-                parts.append("week %d%%" % pct(week[0]))
+            mode, budget_line = claude_budget(Path(cwd) if cwd else None)
             n = sum(1 for v in claude_consumers().values() if v.get("kind") != "executor")
-            if n > 1:
-                parts.append("%d sessions" % n)
-        mode, budget_line = claude_budget(Path(cwd) if cwd else None)
-        if mode in ("surplus", "tight"):
-            weekly = re.search(r"weekly limit is tight \((\d+)% projected", budget_line or "")
-            if weekly:
-                parts.append("tight: weekly limit (%s%% projected); conserve Claude" % weekly.group(1))
-            elif "weekly limit is tight" in (budget_line or ""):
-                parts.append("tight: weekly limit (%d%% used); conserve Claude" % pct(week[0]))
-            else:
-                parts.append({"surplus": "surplus: Claude first", "tight": "tight: conserve Claude"}[mode])
+            claude_line = provider_line(
+                claude_status_name(model),
+                (five[0], five[1]) if five and five[1] else None,
+                (week[0], week[1]) if week else None,
+                short_mode(mode, budget_line),
+                measured_at(snap, "five_hour") if (five and five[1]) else None,
+                sessions=n,
+            )
+            if claude_line:
+                parts.append(claude_line)
+        elif model:
+            parts.append(claude_status_name(model))
     except Exception:
         pass
     line = " · ".join(parts) or "Orchestra"
@@ -1711,9 +1868,9 @@ def profile_lines(where, data=None):
         try:
             prof = resolve_profile(provider, where, data=data)
         except ProfileError as ex:
-            lines.append("  %-12s ⚠ %s" % (provider, ex))
+            lines.append("  %-12s ⚠ %s" % (display_name(provider), ex))
             continue
-        lines.append("  %-12s %s" % (provider, describe_profile(prof)))
+        lines.append("  %-12s %s" % (display_name(provider), describe_profile(prof)))
         if prof.data.get("rules"):
             lines.append("  %-12s rules: %s" % ("", prof.data["rules"]))
     return lines
@@ -2753,7 +2910,7 @@ def _spend_warn(scope, spent, eff, kind, config=None, where=None):
     if where is None:
         where = project_dir()
     return "%s: $%.2f of $%.2f (%s, %.0f%%), %s mode %s — orch spend" % (
-        scope, spent, limit, counter_cover(config, scope, where), spent / limit * 100, kind, mode)
+        scope_name(scope), spent, limit, counter_cover(config, scope, where), spent / limit * 100, kind, mode)
 
 
 def spend_start(scope, where):
@@ -2768,7 +2925,7 @@ def spend_start(scope, where):
         return True, None
     if eff.get("mode") in ("stop", "evaluate") and spent >= limit:
         return False, ("SPEND_LIMIT %s — $%.2f already spent (%s; limit $%.2f, mode %s). %s." %
-                       (scope, spent, counter_cover(config, scope, where), limit, eff.get("mode"),
+                       (scope_name(scope), spent, counter_cover(config, scope, where), limit, eff.get("mode"),
                         _way_out(config, scope, where)))
     return True, _spend_warn(scope, spent, eff, "executor", config, where)
 
@@ -2784,7 +2941,7 @@ def spend_lead_start(scope, where):
         return True, None
     if eff.get("lead_mode") in ("stop", "evaluate") and spent >= limit:
         return False, ("SPEND_LIMIT %s — $%.2f already spent (%s; limit $%.2f, lead mode %s). %s." %
-                       (scope, spent, counter_cover(config, scope, where), limit, eff.get("lead_mode"),
+                       (scope_name(scope), spent, counter_cover(config, scope, where), limit, eff.get("lead_mode"),
                         _way_out(config, scope, where)))
     return True, _spend_warn(scope, spent, eff, "lead", config, where)
 
@@ -2798,7 +2955,7 @@ def spend_lead_key(scope, where):
     kill = spend_kill_at(eff, "lead_mode")
     if kill is not None and spent >= kill:
         return False, ("SPEND_LIMIT %s — $%.2f of the $%.2f limit spent (%s; lead mode %s). %s" %
-                       (scope, spent, _limit_number(eff), counter_cover(config, scope, where),
+                       (scope_name(scope), spent, _limit_number(eff), counter_cover(config, scope, where),
                         eff.get("lead_mode"), _way_out(config, scope, where)))
     return True, None
 
@@ -2870,14 +3027,14 @@ def spend_high_scopes(where):
 
 def spend_status_part(where):
     """A one-line 'API spend: …' summary for status, or None when nothing is at ≥ 80%."""
-    parts = ["%s $%.2f/$%.0f (%.0f%%)" % (s, spent, limit, ratio * 100)
+    parts = ["%s $%.2f/$%.0f (%.0f%%)" % (scope_name(s), spent, limit, ratio * 100)
              for s, spent, limit, ratio in spend_high_scopes(where)]
     return ("API spend: " + " · ".join(parts)) if parts else None
 
 
 def spend_status_fragment(where):
-    """'deepseek $8.10/$10' fragments at ≥ 80%, for the status line's session in/out part."""
-    return " · ".join("%s $%.2f/$%.0f" % (s, spent, limit)
+    """'DeepSeek $8.10/$10' fragments at ≥ 80%, for the status line's session in/out part."""
+    return " · ".join("%s $%.2f/$%.0f" % (scope_name(s), spent, limit)
                       for s, spent, limit, ratio in spend_high_scopes(where))
 
 
@@ -2906,13 +3063,13 @@ def spend_event(announce=True):
             announced[scope] = {"era": era, "level": "100"}
             changed = True
             events.append("💡 %s is at its spend limit ($%.2f/$%.2f, %s, mode %s) — %s" %
-                          (scope, spent, limit, counter_cover(config, scope, where), eff.get("mode"),
+                          (scope_name(scope), spent, limit, counter_cover(config, scope, where), eff.get("mode"),
                            _way_out(config, scope, where)))
         elif spent >= limit * 0.8 and level not in ("80", "100"):
             announced[scope] = {"era": era, "level": "80"}
             changed = True
             events.append("💡 %s reached 80%% of its spend limit ($%.2f/$%.2f, %s) — orch spend" %
-                          (scope, spent, limit, counter_cover(config, scope, where)))
+                          (scope_name(scope), spent, limit, counter_cover(config, scope, where)))
     if changed:                                          # this runs on every tool call: no write without news
         state["announced"] = announced
         write_json(SPEND_EVENTS_FILE, state)
@@ -2968,7 +3125,7 @@ def cmd_spend(a):
             shown_limit = "off" if limit is None else "%.2f" % limit
             ratio = ("%.0f%%" % (spent / limit * 100)) if limit and limit > 0 else "—"
             print("%-18s $%-10.2f $%-10s %-10s %-10s %-24s %s" % (
-                scope, spent, shown_limit, eff.get("mode"), eff.get("lead_mode"),
+                scope_name(scope), spent, shown_limit, eff.get("mode"), eff.get("lead_mode"),
                 counter_cover(data, scope, where), ratio))
         for prov in sorted({s.split("@")[0].lower() for s in labels}):
             w = price_staleness(prov)
@@ -2992,7 +3149,7 @@ def cmd_spend(a):
         if getattr(a, "reset", None) in ("month", "manual"):
             entry["reset"] = a.reset
         save_spend_limits(data)
-        print("%s limit %s: %s" % (scope, where_, "off" if value is None else "$%.2f" % value))
+        print("%s limit %s: %s" % (scope_name(scope), where_, "off" if value is None else "$%.2f" % value))
     elif action == "mode":
         if a.value not in ("stop", "evaluate", "continue"):
             raise SystemExit("orch: mode is stop, evaluate or continue, got %r" % a.value)
@@ -3009,7 +3166,7 @@ def cmd_spend(a):
                 raise SystemExit("orch: --overrun is a percentage, got %r" % a.overrun)
             entry["overrun"] = overrun
         save_spend_limits(data)
-        print("%s %s %s: %s" % (scope, where_, "lead mode" if field == "lead_mode" else "executor mode", a.value))
+        print("%s %s %s: %s" % (scope_name(scope), where_, "lead mode" if field == "lead_mode" else "executor mode", a.value))
     elif action == "reset":
         canon = spend_where(where)
         owner = canon if project else counter_key(data, scope, canon)[0]
@@ -3025,7 +3182,7 @@ def cmd_spend(a):
         new = "off" if new_limit is None else "$%.2f" % new_limit
         owner_desc = "global" if owner == "global" else "project " + canon_path(project_root(where))
         print("%s reset: $%.2f spent, limit %s → %s, %s counter (%s)" %
-              (scope, spent, old, new, kind, owner_desc))
+              (scope_name(scope), spent, old, new, kind, owner_desc))
     return 0
 
 
@@ -3446,18 +3603,19 @@ def cmd_run(a):
 
     if not output.strip() and rc == 0:
         output = log_text[-a.max_chars:]
-    shown = model or ("(default: %s)" % usage["model"] if usage and usage.get("model") else "(default)")
-    print("[%s] %s · %s %s effort=%s mode=%s · %ds%s" % (status, run_id, prof.label, shown,
+    shown = display_name(model) or ("(default: %s)" % display_name(usage["model"])
+                                    if usage and usage.get("model") else "(default)")
+    print("[%s] %s · %s %s effort=%s mode=%s · %ds%s" % (status, run_id, scope_name(prof.label), shown,
                                                        effort or "(default)", a.mode, elapsed,
                                                        " · " + usage_brief(usage) if usage else ""))
     if prof.explicit:
-        print("profile %s (%s)%s" % (prof.label, prof.source, ("; " + "; ".join(notes)) if notes else ""))
+        print("profile %s (%s)%s" % (scope_name(prof.label), prof.source, ("; " + "; ".join(notes)) if notes else ""))
     if status == "QUOTA_EXHAUSTED":
         print("Limit exhausted (subscription or balance), recorded in orch quota%s. Reassign the task to a fallback."
               % quota_note)
     if status == "SPEND_LIMIT":
         config = load_spend_limits()[0]
-        print("Spend limit reached (%s; %s) — %s." % (scope, counter_cover(config, scope, cwd),
+        print("Spend limit reached (%s; %s) — %s." % (scope_name(scope), counter_cover(config, scope, cwd),
                                                       _way_out(config, scope, cwd)))
     body = output if output.strip() else log_text
     if len(body) > a.max_chars:
@@ -3482,7 +3640,7 @@ def masked(name, value):
 
 
 def lead_line():
-    """'Lead: deepseek@work · deepseek-v4-pro …' for status / SessionStart, or None in a Claude-led session."""
+    """'Lead: DeepSeek@work · DeepSeek V4 Pro …' for status / SessionStart, or None in a Claude-led session."""
     lead = os.environ.get("ORCH_LEAD")
     if not lead:
         return None
@@ -3492,7 +3650,8 @@ def lead_line():
     except ProfileError as ex:
         lane = "unknown (%s)" % ex
     return ("Lead: %s · %s (orch launch) — you are not Claude; orch-* subagents run on this model too. Claude: %s. "
-            "Read `orch guide lead` before planning." % (lead, os.environ.get("ORCH_LEAD_MODEL") or "?", lane))
+            "Read `orch guide lead` before planning." % (
+                scope_name(lead), display_name(os.environ.get("ORCH_LEAD_MODEL")) or "?", lane))
 
 
 def cmd_launch(a):
@@ -3580,11 +3739,12 @@ def cmd_launch(a):
     except ProfileError as ex:
         raise SystemExit("orch: PROFILE_ERROR claude — %s" % ex)
     print("Lead: %s · %s (background calls: %s) — every model request of this session goes to %s"
-          % (prof.label, lead["ORCH_LEAD_MODEL"], spec.get("fast_model") or "?", spec.get("endpoint") or provider))
+          % (scope_name(prof.label), display_name(lead["ORCH_LEAD_MODEL"]),
+             display_name(spec.get("fast_model")) or "?", display_name(spec.get("endpoint") or provider)))
     print("Claude: %s" % ("off — no Claude model is used in this session" if claude_off else
                           "only as an executor (orch run claude, on your Claude login)"))
     for n in notes:
-        print("profile %s: %s" % (prof.label, n))
+        print("profile %s: %s" % (scope_name(prof.label), n))
     if unset:
         print("Dropped for this session: %s" % ", ".join(sorted(unset)))
     if a.dry_run:
@@ -4410,7 +4570,9 @@ def cmd_hook(a):
             log_session(data)         # usage snapshot of the main thread + subagents; silent
             return 0
         has_state = (project_dir() / ".orchestra").exists()
-        heartbeat(sid)                # an active orchestrator instance (for the budget's consumer count)
+        entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT") or ""
+        if not entrypoint.startswith("sdk"):
+            heartbeat(sid)            # an active instance (for the budget's consumer count); a headless run doesn't count
         if a.event == "session-start":
             out = io_capture(lambda: cmd_status(argparse.Namespace(brief=True)))
             print(out.rstrip())
@@ -4731,19 +4893,28 @@ def short_time(ts):
     return t.astimezone().strftime("%d.%m %H:%M") if t else "?"
 
 
-def usage_rows(info, ext):
-    """Uniform rows: who, model, effort, what for, tokens."""
+def usage_rows(info, ext, display=False):
+    """Uniform rows: who, model, effort, what for, tokens. With display=True the ids are shown as their
+    official names (models via display_name, manual who labels via scope_name); --json always uses raw ids."""
     out = []
     for r in info["rows"]:
         who = "orchestrator" if r["who"] == "main" else "subagent " + (r.get("agent_type") or "?").split(":")[-1]
-        out.append({"who": who, "model": r["model"], "effort": ",".join(r.get("efforts") or []),
+        model = r["model"]
+        if display:
+            model = display_name(model) or model
+        out.append({"who": who, "model": model, "effort": ",".join(r.get("efforts") or []),
                     "task": r.get("task") or ("main thread" if r["who"] == "main" else ""), "usage": r})
     for r in ext:
         manual = r["kind"] == "handoff"
-        task = "%s · %s · %s" % (r.get("task") or "", r.get("status"), fmt_dur(r.get("elapsed_s")))
-        out.append({"who": (r.get("label") or r.get("provider") or "?") + (" (manual)" if manual else ""),
-                    "model": r.get("agent") or r.get("model") or "(default)", "effort": r.get("effort") or "",
-                    "task": task, "usage": r.get("usage")})
+        who_label = r.get("label") or r.get("provider") or "?"
+        model = r.get("agent") or r.get("model") or "(default)"
+        if display:
+            who_label = scope_name(who_label) or who_label
+            model = display_name(model) or model
+        out.append({"who": who_label + (" (manual)" if manual else ""), "model": model,
+                    "effort": r.get("effort") or "",
+                    "task": "%s · %s · %s" % (r.get("task") or "", r.get("status"), fmt_dur(r.get("elapsed_s"))),
+                    "usage": r.get("usage")})
     return out
 
 
@@ -4754,8 +4925,8 @@ def print_session(info, ext):
     if not lead and main_models and not any(m.startswith("claude") for m in main_models):
         lead = ", ".join(sorted(main_models))         # a session started with orch launch, seen in its transcript
     print("Session %s · %s · %s%s" % (info["session"][:8], ("“%s”" % info["title"]) if info.get("title") else "untitled",
-                                      span, " · lead: %s" % lead if lead else ""))
-    rows = usage_rows(info, ext)
+                                      span, " · lead: %s" % display_name(lead) if lead else ""))
+    rows = usage_rows(info, ext, display=True)
     if not rows:
         print("  (no usage data)")
         return
@@ -4777,7 +4948,7 @@ def print_session(info, ext):
         print("    %-24s input %s · cache %s · output %s" % (model, fmt_tok(i), fmt_tok(c), fmt_tok(o)))
     if info.get("cost_usd") and lead:
         print("  Claude Code's estimate ($%.2f) assumes Claude prices: not meaningful with a %s lead." % (
-            info["cost_usd"], lead))
+            info["cost_usd"], display_name(lead)))
     elif info.get("cost_usd"):
         print("  Claude Code estimates the session at $%.2f at API prices (notional on a subscription)." % info["cost_usd"])
     if any(r["who"].endswith("(manual)") for r in rows):
@@ -4807,7 +4978,7 @@ def cmd_usage(a):
         for info, ext in lines:
             tok = sum(int((r["usage"] or {}).get(k) or 0) for r in usage_rows(info, ext)
                       for k in ("input_tokens", "output_tokens"))
-            models = sorted({r["model"] for r in usage_rows(info, ext)})
+            models = sorted({display_name(r["model"]) for r in usage_rows(info, ext)})
             print("%s  %s  %-40s  %s tokens (uncached) · %s" % (
                 short_time(info.get("start")), info["session"][:8], (info.get("title") or "")[:40], fmt_tok(tok),
                 ", ".join(models)[:80]))
@@ -4962,19 +5133,20 @@ def cmd_doctor(a):
         bash = find_bash()
         row("bash (shell adapters)", bool(bash), bash or "needed only for shell adapters: Git for Windows", optional=True)
     cx, note = find_codex()
-    row("codex CLI", bool(cx), (cx + note) if cx else "npm i -g @openai/codex && codex login (or ORCH_CODEX_BIN)")
+    row("Codex CLI", bool(cx), (cx + note) if cx else "npm i -g @openai/codex && codex login (or ORCH_CODEX_BIN)")
     if cx:
         try:
             r = subprocess.run(exe_command(cx) + ["login", "status"], capture_output=True, text=True, timeout=20,
                                stdin=subprocess.DEVNULL)
-            row("codex login", r.returncode == 0, (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr).strip() else "?")
+            row("Codex login", r.returncode == 0, (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr).strip() else "?")
         except Exception as ex:
-            row("codex login", False, str(ex))
+            row("Codex login", False, str(ex))
     cl = os.environ.get("ORCH_CLAUDE_BIN") or shutil.which("claude")
-    row("claude CLI (headless)", bool(cl), cl or "needed for the DeepSeek and Claude executors and orch launch",
+    row("Claude CLI (headless)", bool(cl), cl or "needed for the DeepSeek and Claude executors and orch launch",
         optional=True)
     if os.environ.get("ORCH_LEAD"):
-        row("lead", True, "%s · %s (orch launch)" % (os.environ["ORCH_LEAD"], os.environ.get("ORCH_LEAD_MODEL") or "?"))
+        row("lead", True, "%s · %s (orch launch)" % (display_name(os.environ["ORCH_LEAD"]),
+                                                     display_name(os.environ.get("ORCH_LEAD_MODEL")) or "?"))
     src = secret_source("DEEPSEEK_API_KEY")
     row("DEEPSEEK_API_KEY", bool(src), ("set: " + src) if src else "missing — add a line DEEPSEEK_API_KEY=sk-… to %s"
         % SECRETS_FILE, optional=True)
@@ -4988,7 +5160,7 @@ def cmd_doctor(a):
                 d = d if isinstance(d, dict) else {}
                 if d.get("key"):
                     src = secret_source(d["key"])
-                    row("%s@%s key" % (provider, name), bool(src), ("%s set: %s" % (d["key"], src)) if src else
+                    row("%s@%s key" % (display_name(provider), name), bool(src), ("%s set: %s" % (d["key"], src)) if src else
                         "missing — add a line %s=… to %s" % (d["key"], SECRETS_FILE), optional=True)
                 if provider == "codex" and d.get("home") and not d.get("key") and cx:
                     home = local_path(str(d["home"]))
@@ -4997,10 +5169,10 @@ def cmd_doctor(a):
                                            timeout=20, stdin=subprocess.DEVNULL,
                                            env=dict(os.environ, CODEX_HOME=home))
                         info = ((r.stdout or r.stderr).strip().splitlines() or ["?"])[0]
-                        row("codex@%s login" % name, r.returncode == 0, info if r.returncode == 0 else
+                        row("Codex@%s login" % name, r.returncode == 0, info if r.returncode == 0 else
                             "%s — %s" % (info, login_hint(home)), optional=True)
                     except Exception as ex:
-                        row("codex@%s login" % name, False, str(ex), optional=True)
+                        row("Codex@%s login" % name, False, str(ex), optional=True)
     hint = "bash install.sh (creates the orch and orch.cmd launchers in ~/.local/bin)" if IS_WINDOWS else \
         "ln -s %s ~/.local/bin/orch" % Path(__file__).resolve()
     row("orch on PATH", bool(shutil.which("orch")), shutil.which("orch") or hint)

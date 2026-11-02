@@ -6,12 +6,12 @@ No reset time given — don't make one up: set it without `--until` and say the 
 
 | The operator says | Command |
 |---|---|
-| "codex hit its limit until 18:00" | `orch quota set codex exhausted --until 18:00` |
+| "Codex hit its limit until 18:00" | `orch quota set codex exhausted --until 18:00` |
 | "Sol is out until 9 am tomorrow" | `orch quota set codex/gpt-6.1-sol exhausted --until "tomorrow 09:00"` |
 | "the weekly Argon quota is used up, resets on Wednesday" | `orch quota set antigravity/gemini-4-argon exhausted --until "<Wednesday's date> 09:00"` |
 | "Opus is running low" | `orch quota set claude/opus low --note "conserve"` |
-| "codex works again" | `orch quota clear codex` |
-| "topped up DeepSeek" / "deepseek is available again" | `orch quota clear deepseek` (also lifts blocks on `deepseek@…` profiles) |
+| "Codex works again" | `orch quota clear codex` |
+| "topped up DeepSeek" / "DeepSeek is available again" | `orch quota clear deepseek` (also lifts blocks on `deepseek@…` profiles) |
 | "topped up the DeepSeek work key" | `orch quota clear deepseek@work` |
 | "leave DeepSeek alone today" | `orch quota set deepseek disabled --until "tomorrow 09:00"` |
 | "I'm away until the evening" / "no Antigravity for me today" | `orch quota set operator away --until 19:00` |

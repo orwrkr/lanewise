@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0
+
+- **One status line format for every provider**: Claude and Codex build their status-line part with the same
+  `provider_line` helper — `name · 5h N% → HH:MM · week N% · [N session(s)] · mode · stale: age`. The compact mode
+  text is identical on both (`tight: 5h`, `tight: week N% projected`, `tight: week over reserve`; Claude also
+  `surplus: Claude first`), and both mark a measurement older than 20 minutes as `stale:`. The third line now reads
+  `Session in/out:`.
+- **Official names in all output**: ids are mapped to their display names (claude → Claude, codex → Codex,
+  deepseek → DeepSeek, gemini → Gemini, antigravity → Antigravity, gpt-6.1-terra → GPT-6.1 Terra, deepseek-v4-pro →
+  DeepSeek V4 Pro, …; unknown ids stay as-is) in the status line, `orch status` (including the profile table),
+  the `orch run` header, `orch usage` tables and totals, `orch doctor`, spend surfaces and event/prose text. Raw
+  ids are kept in suggested commands, `--json`, the ledger and profile/cache files. The Codex status line now names
+  the model of the last `turn_context` event in the same rollout file that gave the limits (kept when it scrolls out
+  of the tail).
+- **Session count on the Claude line**: the Claude status line always shows `N session(s)` (including `1 session`),
+  describing Claude Code sessions with this plugin active in the last 15 minutes. A headless `sdk-*` entrypoint
+  no longer registers as a consumer.
+- **`orch spend limit … --project PATH`** can set another project's own limit from a different directory; that
+  project shows the limit while the current one keeps its default.
+
 ## 0.10.0
 
 - **Spend limits for API-billed executors**: `orch spend` caps how much DeepSeek (always) and Codex/Claude on a key

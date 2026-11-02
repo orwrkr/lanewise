@@ -1,6 +1,6 @@
 {
   "name": "orchestra",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Multi-model orchestrator: routes subtasks to Claude subagents, Codex CLI, DeepSeek (isolated headless Claude Code on the DeepSeek API) and a pool of manual tasks (Antigravity & co) by difficulty, effort, subscription limits, balance, operator availability and per-project executor profiles (API keys, Codex accounts, rules); USD spend limits for API-billed executors (orch spend); DeepSeek can lead instead of Claude, with Claude switched off entirely; per-session usage log (model, task, tokens); WSL/Linux and native Windows",
   "author": {
     "name": "Roman Obukhov",

@@ -29,7 +29,7 @@ single `run` is stronger. `--use deepseek=off` refuses to launch; an unknown pro
   Registry slot `claude/<alias>-<effort>` → `--model <alias> --effort <effort>` (aliases: haiku, sonnet, opus, fable;
   `never_auto` still applies). Exit 75 = Claude limit → fallback.
 - **Claude off** (`--no-claude`, `orch profile use claude off`): `orch run claude` answers `PROFILE_OFF`; plan no
-  Claude slots; cross-review goes codex ↔ deepseek.
+  Claude slots; cross-review goes Codex ↔ DeepSeek.
 - `orch run deepseek` workers are separate isolated instances: use them for parallel or write tasks in their own
   worktree, exactly as in a Claude-led session.
 - Cross-review: the lead's own code is DeepSeek-family code, so it is reviewed by Codex or the Claude lane.

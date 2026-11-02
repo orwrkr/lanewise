@@ -375,7 +375,7 @@ out=$(FAKE_CLAUDE=ok $ORCH run claude "x"); expect_rc 75 $? "claude off → refu
 contains "$out" "PROFILE_OFF claude" "Claude switched off by its profile"
 $ORCH profile use claude inherit >/dev/null
 out=$(FAKE_CLAUDE=ok ORCH_PROFILES=claude=off $ORCH run claude "x"); expect_rc 75 $? "session choice ORCH_PROFILES=claude=off"
-out=$(ORCH_PROFILES=claude=off $ORCH profile show 2>&1); contains "$out" "claude *OFF (session)" "profile show names the session choice"
+out=$(ORCH_PROFILES=claude=off $ORCH profile show 2>&1); contains "$out" "Claude *OFF (session)" "profile show names the session choice"
 FAKE_CODEX=ok ORCH_LEAD_ENV=ANTHROPIC_AUTH_TOKEN ANTHROPIC_AUTH_TOKEN=lead-token $ORCH run codex "x" >/dev/null
 contains "$(cat "$FAKE_ENV_LOG")" "lead=none" "workers never get the lead's token"
 out=$(CLAUDECODE=1 $ORCH launch deepseek 2>&1); expect_rc 1 $? "launch refused inside a Claude Code session"
@@ -401,7 +401,7 @@ out=$($ORCH launch deepseek --dry-run 2>&1); expect_rc 1 $? "no launch while the
 $ORCH profile use deepseek inherit >/dev/null
 rm -f "$ORCH_HOME/profiles.json"
 out=$(ORCH_LEAD=deepseek ORCH_LEAD_MODEL=deepseek-v4-pro ORCH_PROFILES=claude=off $ORCH status)
-contains "$out" "Lead: deepseek · deepseek-v4-pro .*Claude: off" "status tells a non-Claude lead who it is"
+contains "$out" "Lead: DeepSeek · DeepSeek V4 Pro .*Claude: off" "status tells a non-Claude lead who it is"
 out=$(echo '{}' | ORCH_LEAD=deepseek ORCH_LEAD_MODEL=deepseek-v4-pro $ORCH hook session-start)
 contains "$out" "orch guide lead" "session-start points a non-Claude lead to its guide"
 out=$($ORCH guide lead); contains "$out" "orch run claude" "orch guide lead"
@@ -445,15 +445,15 @@ json.dump({"agentType": "orchestra:orch-sonnet-high", "description": "Find naïv
 EOF
 out=$($ORCH usage)
 contains "$out" "Session sess-tes · “Café parser”" "usage: current session with its title"
-contains "$out" "orchestrator *claude-opus-5-5 *high .* 115 *3.0k *70" "main thread: streamed lines counted once"
-contains "$out" "subagent orch-sonnet-high *claude-sonnet-5-5 *medium *Find naïve parse calls" "subagent: type, model, what for"
-contains "$out" "codex *gpt-6.1-terra *.*Implement the café parser · OK" "CLI executor in the session report"
-contains "$out" "deepseek *deepseek-v4-pro .*Café parser tests" "DeepSeek executor in the session report"
+contains "$out" "orchestrator *Claude Opus 5.5 *high .* 115 *3.0k *70" "main thread: streamed lines counted once"
+contains "$out" "subagent orch-sonnet-high *Claude Sonnet 5.5 *medium *Find naïve parse calls" "subagent: type, model, what for"
+contains "$out" "Codex *GPT-6.1 Terra *.*Implement the café parser · OK" "CLI executor in the session report"
+contains "$out" "DeepSeek *DeepSeek V4 Pro .*Café parser tests" "DeepSeek executor in the session report"
 echo "{\"session_id\": \"sess-test\", \"transcript_path\": \"$(native "$CFG/sess-test.jsonl")\", \"cwd\": \"$(native "$REPO")\"}" | \
   $ORCH hook session-end >"$T/se.out"; rc=$?
 [[ $rc -eq 0 && ! -s "$T/se.out" ]] && ok "SessionEnd hook silent" || bad "session-end: rc=$rc $(cat "$T/se.out")"
 mv "$CFG" "$T/cfg-gone"
-out=$($ORCH usage --session sess-test); contains "$out" "orchestrator *claude-opus-5-5" "usage survives transcript cleanup (SessionEnd snapshot)"
+out=$($ORCH usage --session sess-test); contains "$out" "orchestrator *Claude Opus 5.5" "usage survives transcript cleanup (SessionEnd snapshot)"
 out=$($ORCH usage --list); contains "$out" "sess-tes *Café parser" "usage --list shows the project's sessions"
 mv "$T/cfg-gone" "$CFG"
 $PY - "$CFG" <<'EOF'
@@ -464,7 +464,7 @@ ev = {"type": "assistant", "timestamp": "2026-10-29T11:00:00.000Z", "message": {
 open(os.path.join(sys.argv[1], "sess-lead.jsonl"), "w", encoding="utf-8").write(
     c(ev) + "\n" + c({"type": "cost-state", "totalCostUSD": 1.5}) + "\n")
 EOF
-out=$($ORCH usage --session sess-lead); contains "$out" "lead: deepseek-v4-pro" "a DeepSeek-led session is recognised in its transcript"
+out=$($ORCH usage --session sess-lead); contains "$out" "lead: DeepSeek V4 Pro" "a DeepSeek-led session is recognised in its transcript"
 contains "$out" "assumes Claude prices" "no misleading Claude cost estimate for a DeepSeek lead"
 
 echo "── worktree"
@@ -552,7 +552,7 @@ import json, sys
 r = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if '"handoff"' in l and sys.argv[2] in l][-1]
 assert r["agent"] == "Antigravity · Gemini 4 Argon" and r["model"] == "Gemini 4 Argon" and r["session"] == "sess-test", r
 EOF
-out=$($ORCH usage); contains "$out" "antigravity (manual) *Antigravity · Gemini" "manual task in the session report"
+out=$($ORCH usage); contains "$out" "Antigravity (manual) *Antigravity · Gemini" "manual task in the session report"
 out=$(printf 'x' | $ORCH handoff offer --title "stale offer"); OID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
 contains "$out" "No take from the pool for 5 min → the orchestrator starts taking tasks back, one at a time" "pool card explains the reclaim clock"
 grep -q "After 5 min without a take the orchestrator starts taking tasks back" "$REPO/.orchestra/MANUAL.md" && ok "board explains the pool clock" || bad "board: no pool clock"
@@ -631,7 +631,7 @@ out=$(echo '{}' | ORCH_WORKER=dee-1 sh "$PLUGIN/hooks/run.sh" session-start); rc
 [[ $rc -eq 0 && -z "$out" ]] && ok "launcher skips python inside a worker" || bad "worker launcher: rc=$rc out=$out"
 
 echo "── profiles"
-out=$($ORCH profile show); contains "$out" "deepseek *default (built-in) · no limits" "no profiles → built-in profile, no limits"
+out=$($ORCH profile show); contains "$out" "DeepSeek *default (built-in) · no limits" "no profiles → built-in profile, no limits"
 [[ -f "$ORCH_HOME/profiles.json" ]] && bad "show created profiles.json" || ok "show does not create profiles.json"
 printf 'DEEPSEEK_API_KEY_WORK=sk-work\n' >> "$T/home/secrets.env"
 $ORCH profile set deepseek personal --key DEEPSEEK_API_KEY --default >/dev/null
@@ -641,20 +641,20 @@ $ORCH profile set deepseek bad --key sk-12345 >/dev/null 2>&1; [[ $? -ne 0 ]] &&
 grep -q "sk-" "$ORCH_HOME/profiles.json" && bad "key leaked into profiles.json" || ok "profiles.json holds only variable names"
 $ORCH profile set antigravity x --home /tmp >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "field the provider does not take refused" || bad "field accepted"
 $ORCH profile use deepseek nope >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "unknown profile refused" || bad "unknown profile bound"
-out=$($ORCH profile show); contains "$out" "deepseek *personal (default)" "provider default applies"
-contains "$out" "codex *default (built-in)" "providers without profiles keep the built-in one"
+out=$($ORCH profile show); contains "$out" "DeepSeek *personal (default)" "provider default applies"
+contains "$out" "Codex *default (built-in)" "providers without profiles keep the built-in one"
 $ORCH profile use deepseek work >/dev/null
-out=$($ORCH profile show); contains "$out" "deepseek *work (project)" "project binding wins over the default"
+out=$($ORCH profile show); contains "$out" "DeepSeek *work (project)" "project binding wins over the default"
 contains "$out" "rules: open-source code only" "rules shown to the orchestrator"
 out=$($ORCH status); contains "$out" "Executor profiles" "status shows profiles"
-out=$(echo '{}' | $ORCH hook session-start); contains "$out" "deepseek *work (project)" "session-start tells the orchestrator the profiles"
+out=$(echo '{}' | $ORCH hook session-start); contains "$out" "DeepSeek *work (project)" "session-start tells the orchestrator the profiles"
 rm -f "$T/claude.json"
 out=$(FAKE_CLAUDE=ok $ORCH run deepseek --effort max "x"); rc=$?
 expect_rc 0 $rc "run under the project profile"
 check 'e["ANTHROPIC_API_KEY"] == "sk-work"' "profile key reaches the worker as DEEPSEEK_API_KEY"
 check 'a[a.index("--model") + 1] == "deepseek-flash"' "first allowed model is the profile default"
 check 'a[a.index("--effort") + 1] == "high"' "effort capped by the profile"
-contains "$out" "deepseek@work deepseek-flash" "run reports profile and model"
+contains "$out" "DeepSeek@work DeepSeek V4.1 Flash" "run reports profile and model"
 contains "$out" "effort max → high" "cap noted in the result"
 FAKE_CLAUDE=ok $ORCH run deepseek --model 'deepseek-flash[1m]' "x" >/dev/null; expect_rc 0 $? "[1m] variant of an allowed model"
 rm -f "$T/claude.json"
@@ -681,9 +681,9 @@ contains "$out" "PROFILE_OFF" "off explained"
 [[ -f "$T/claude.json" ]] && bad "adapter ran while off" || ok "adapter not started while off"
 FAKE_CLAUDE=ok $ORCH run deepseek --profile personal "x" >/dev/null; expect_rc 0 $? "explicit --profile for one run"
 $ORCH profile use deepseek inherit >/dev/null
-out=$($ORCH profile show); contains "$out" "deepseek *personal (default)" "inherit → back to the default"
+out=$($ORCH profile show); contains "$out" "DeepSeek *personal (default)" "inherit → back to the default"
 $ORCH profile use deepseek work >/dev/null
-out=$($ORCH profile show --path "$(native "$T/proj.wt/feat-x")"); contains "$out" "deepseek *work (project)" "worktree inherits its project's profile"
+out=$($ORCH profile show --path "$(native "$T/proj.wt/feat-x")"); contains "$out" "DeepSeek *work (project)" "worktree inherits its project's profile"
 $ORCH profile set deepseek nokey --key DEEPSEEK_API_KEY_MISSING >/dev/null
 out=$($ORCH run deepseek --profile nokey "x"); expect_rc 1 $? "profile key missing → failure before start"
 contains "$out" "DEEPSEEK_API_KEY_MISSING" "missing profile key named"
@@ -705,9 +705,9 @@ $ORCH profile set antigravity argon --max-open "" >/dev/null
 out=$(printf 'task' | $ORCH handoff new --title "argon" --model-key gemini-4-argon --max-open 99); expect_rc 0 $? "allowed manual model passes"
 grep -q '"profile": "argon"' "$REPO/.orchestra/handoffs/$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)/meta.json" && \
   ok "handoff records its profile" || bad "handoff profile missing"
-out=$($ORCH doctor </dev/null); contains "$out" "deepseek@work key *DEEPSEEK_API_KEY_WORK set" "doctor checks profile keys"
+out=$($ORCH doctor </dev/null); contains "$out" "DeepSeek@work key *DEEPSEEK_API_KEY_WORK set" "doctor checks profile keys"
 $ORCH profile rm deepseek work >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "bound profile not removed silently" || bad "bound profile removed"
-$ORCH profile rm deepseek work --force >/dev/null; out=$($ORCH profile show); contains "$out" "deepseek *personal (default)" "rm --force drops its bindings"
+$ORCH profile rm deepseek work --force >/dev/null; out=$($ORCH profile show); contains "$out" "DeepSeek *personal (default)" "rm --force drops its bindings"
 $PY -B - "$PLUGIN/bin/orch" <<'EOF' && ok "directory keys equal in Windows and WSL; profile quota keys" || bad "canon_path / key_chain"
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("orch", sys.argv[1])
@@ -734,7 +734,7 @@ out=$(echo '{}' | $ORCH statusline); rc=$?; [[ $rc -eq 0 && -n "$out" ]] && ok "
 out=$(echo 'garbage' | $ORCH statusline); expect_rc 0 $? "statusline survives garbage input"
 out=$($ORCH budget); contains "$out" "No current Claude subscription numbers" "budget: no numbers yet"
 out=$(sl 10 $((now + 7200)) "$(week 40)")
-contains "$out" "Opus 5.5 · 5h 10% → .* · week 40% .*surplus: Claude first" "statusline shows the usage and the surplus mode"
+contains "$out" "Claude Opus 5.5 · 5h 10% → .* · week 40% .*surplus: Claude first" "statusline shows the usage and the surplus mode"
 [[ -f "$ORCH_HOME/claude_usage.json" ]] && ok "statusline keeps the snapshot in ORCH_HOME" || bad "no snapshot"
 out=$($ORCH status); contains "$out" "SURPLUS: at the current pace (window average) about 7[0-9]% of the window would expire unused beyond the reserve" "status: surplus beyond the reserve, projected from the pace"
 out=$(echo '{}' | $ORCH hook session-start); contains "$out" "Claude subscription: 5-hour window 10% used" "session-start shows the budget"
@@ -782,22 +782,36 @@ snap 35
 out=$($ORCH budget); contains "$out" "SURPLUS: at the current pace (window average)" "35% after 3 h at the window average: surplus"
 snap 35 10 40
 out=$($ORCH budget); contains "$out" "TIGHT: at the current pace (last 4[0-9] min, all sessions)" "the recent pace of all sessions wins: 10% → 35% in 40 min is tight"
-# the consumers: orchestrator sessions (hooks, status line), Claude executor runs; a DeepSeek-led session doesn't count
+# the consumers: Claude Code sessions (hooks, status line), Claude executor runs; a DeepSeek-led session doesn't count
 rm -f "$ORCH_HOME/sessions.json"
 echo '{"session_id": "s-a"}' | $ORCH hook user-prompt >/dev/null
 echo '{"session_id": "s-b"}' | $ORCH hook user-prompt >/dev/null
 echo '{"session_id": "s-lead"}' | ORCH_LEAD=deepseek $ORCH hook user-prompt >/dev/null
 snap 10
-out=$($ORCH budget); contains "$out" "active: 2 orchestrator sessions" "active sessions counted, a DeepSeek-led one not"
-contains "$out" "≈3[0-9]% for each of the 2 orchestrator sessions" "the surplus is shared between the sessions"
+out=$($ORCH budget); contains "$out" "active: 2 sessions" "active sessions counted, a DeepSeek-led one not"
+contains "$out" "≈3[0-9]% for each of the 2 sessions" "the surplus is shared between the sessions"
 contains "$out" "s-a .*session" "budget lists the active consumers"
 out=$(printf '{"session_id": "s-c", "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": %s}}}' "$((now + 7200))" | $ORCH statusline)
 contains "$out" "3 sessions" "the status line marks its session as a consumer"
 echo '{"session_id": "s-b"}' | $ORCH hook session-end >/dev/null
-out=$($ORCH budget); contains "$out" "active: 2 orchestrator sessions" "SessionEnd removes the session"
+out=$($ORCH budget); contains "$out" "active: 2 sessions" "SessionEnd removes the session"
 FAKE_CLAUDE=ok $ORCH run claude --model haiku "x" >/dev/null
 check 'any(v.get("kind") == "executor" for v in r["sessions"].values())' "a running Claude executor counts as a consumer"
 grep -q '"executor"' "$ORCH_HOME/sessions.json" && bad "finished run still listed" || ok "the run leaves the consumer list when it ends"
+rm -f "$ORCH_HOME/sessions.json"
+$ORCH budget clear >/dev/null
+
+# a single active session still shows "1 session" (never hidden); a headless sdk-* entrypoint does not register
+rm -f "$ORCH_HOME/sessions.json" "$ORCH_HOME/claude_usage.json"
+echo '{"session_id": "s-one"}' | $ORCH hook user-prompt >/dev/null
+out=$(sl 10 $((now + 7200)))
+contains "$out" "Claude Opus 5.5 · 5h 10% → .* · 1 session" "the Claude line shows a single session as 1 session"
+rm -f "$ORCH_HOME/sessions.json"
+snap 10
+echo '{"session_id": "s-sdk"}' | CLAUDE_CODE_ENTRYPOINT=sdk-cli $ORCH hook user-prompt >/dev/null
+out=$($ORCH budget); grep -q "s-sdk" <<<"$out" && bad "sdk-cli entrypoint registered as a consumer" || ok "an sdk-* entrypoint does not register as a consumer"
+echo '{"session_id": "s-cli"}' | CLAUDE_CODE_ENTRYPOINT=cli $ORCH hook user-prompt >/dev/null
+out=$($ORCH budget); contains "$out" "s-cli" "a cli entrypoint registers as a consumer"
 rm -f "$ORCH_HOME/sessions.json"
 $ORCH budget clear >/dev/null
 
@@ -842,7 +856,7 @@ lines = [
 ]
 open(sys.argv[1], "w", encoding="utf-8").write("\n".join(lines))
 EOF
-out=$(cx_status); contains "$out" "codex 5h 30%" "codex status line: compact five-hour"
+out=$(cx_status); contains "$out" "Codex · 5h 30%" "codex status line: compact five-hour"
 contains "$out" "week 20%" "codex status line: compact week"
 out=$($ORCH status)
 contains "$out" "Codex subscription: 5-hour window 30% used" "codex: five-hour window read from the swapped secondary slot"
@@ -865,7 +879,7 @@ open(sys.argv[1], "w", encoding="utf-8").write(filler + ev + "\n")
 EOF
 size=$(wc -c < "$T/cx2/sessions/2026/11/01/rollout-big.jsonl")
 [[ $size -gt 262144 ]] && ok "codex: rollout larger than the tail size ($size bytes)" || bad "codex: rollout too small ($size bytes)"
-out=$(cx_status); contains "$out" "codex 5h 50%" "codex: newest event found in the tail of a large file"
+out=$(cx_status); contains "$out" "Codex · 5h 50%" "codex: newest event found in the tail of a large file"
 contains "$out" "week 60%" "codex: week found in the tail of a large file"
 
 # an expired window is dropped
@@ -880,7 +894,7 @@ rm -rf "$T/cx4"; mkdir -p "$T/cx4"
 export CODEX_HOME; CODEX_HOME="$(native "$T/cx4")"
 out=$(cx_status); rc=$?
 [[ $rc -eq 0 ]] && ok "codex: no rollouts → statusline succeeds" || bad "codex: statusline rc=$rc"
-grep -q "codex" <<<"$out" && bad "codex: line shown with no rollouts: $out" || ok "codex: no rollouts → no line"
+grep -q "Codex" <<<"$out" && bad "codex: line shown with no rollouts: $out" || ok "codex: no rollouts → no line"
 out=$($ORCH status); grep -q "Codex subscription" <<<"$out" && bad "codex: status shows a Codex line with no rollouts" || ok "codex: no Codex line in status"
 
 # week over the reserve cap → TIGHT
@@ -931,8 +945,8 @@ $PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx8a/sessions/2026/11/02/rollo
 $PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx8b/sessions/2026/11/02/rollout-0001.jsonl")" 30 2 40 168
 export CODEX_HOME; CODEX_HOME="$(native "$T/cx8a")"; cxA=$(cx_status)
 CODEX_HOME="$(native "$T/cx8b")"; cxB=$(cx_status)
-contains "$cxA" "codex 5h 81%" "codex: account A numbers"
-contains "$cxB" "codex 5h 30%" "codex: account B numbers"
+contains "$cxA" "Codex · 5h 81%" "codex: account A numbers"
+contains "$cxB" "Codex · 5h 30%" "codex: account B numbers"
 $PY - "$(native "$ORCH_HOME/codex_usage.json")" "$(native "$T/cx8a")" "$(native "$T/cx8b")" <<'EOF' && ok "codex: cache keyed per account" || bad "codex: cache not per account"
 import json, sys
 d = {k.replace("\\", "/"): v for k, v in json.load(open(sys.argv[1], encoding="utf-8")).items()}
@@ -941,13 +955,105 @@ assert isinstance(d.get(a), dict) and isinstance(d.get(b), dict), list(d)
 assert d[a]["five_hour"]["used"] == 81.0 and d[b]["five_hour"]["used"] == 30.0, d
 EOF
 
+# the model comes from a turn_context event in the same file as the limits; a known id is shown by its display name
+cat > "$T/gen_rollout_tc.py" <<'EOF'
+import datetime as dt, json, sys
+path = sys.argv[1]; model = sys.argv[2]
+used5 = float(sys.argv[3]); r5h = float(sys.argv[4])
+used7 = float(sys.argv[5]); r7h = float(sys.argv[6])
+now = dt.datetime.now(dt.timezone.utc)
+def iso(t): return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+tc = json.dumps({"timestamp": iso(now - dt.timedelta(minutes=3)), "type": "turn_context",
+                 "payload": {"model": model, "effort": "medium"}})
+ev = json.dumps({"timestamp": iso(now), "type": "event_msg", "payload": {"type": "token_count",
+    "rate_limits": {"limit_id": "codex",
+        "primary": {"used_percent": used5, "window_minutes": 300, "resets_at": int((now + dt.timedelta(hours=r5h)).timestamp())},
+        "secondary": {"used_percent": used7, "window_minutes": 10080, "resets_at": int((now + dt.timedelta(hours=r7h)).timestamp())},
+        "credits": {"has_credits": False}, "plan_type": "plus"}}})
+open(path, "w", encoding="utf-8").write(tc + "\n" + ev + "\n")
+EOF
+rm -rf "$T/cxmk" "$T/cxmu"; mkdir -p "$T/cxmk/sessions/2026/11/02" "$T/cxmu/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cxmk")"
+$PY "$(native "$T/gen_rollout_tc.py")" "$(native "$T/cxmk/sessions/2026/11/02/rollout-0001.jsonl")" gpt-6.1-sol 30 2 20 168
+out=$(cx_status); contains "$out" "GPT-6.1 Sol · 5h 30%" "codex: a known model is shown by its display name"
+CODEX_HOME="$(native "$T/cxmu")"
+$PY "$(native "$T/gen_rollout_tc.py")" "$(native "$T/cxmu/sessions/2026/11/02/rollout-0001.jsonl")" my-custom-model-7b 30 2 20 168
+out=$(cx_status); contains "$out" "my-custom-model-7b · 5h 30%" "codex: an unknown model id is shown as-is"
+
+# a turn_context scrolled out of the tail keeps the last seen model
+rm -rf "$T/cxr"; mkdir -p "$T/cxr/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cxr")"
+f="$(native "$T/cxr/sessions/2026/11/02/rollout-0001.jsonl")"
+$PY "$(native "$T/gen_rollout_tc.py")" "$f" gpt-6.1-sol 30 2 20 168
+out=$(cx_status); contains "$out" "GPT-6.1 Sol · 5h 30%" "codex: model seen while the turn_context is still in the tail"
+$PY - "$(native "$ORCH_HOME/codex_usage.json")" <<'EOF' && ok "codex: cache aged for the retention re-scan" || bad "codex: could not age the cache"
+import datetime as dt, json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+for k, v in d.items():
+    if isinstance(v, dict) and "updated" in v:
+        v["updated"] = (dt.datetime.now().astimezone() - dt.timedelta(minutes=5)).isoformat(timespec="seconds")
+json.dump(d, open(p, "w", encoding="utf-8"))
+EOF
+$PY - "$f" <<'EOF'
+import datetime as dt, json, sys
+now = dt.datetime.now(dt.timezone.utc)
+def iso(t): return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+filler = "\n".join(json.dumps({"type": "noise", "i": i}) for i in range(12000)) + "\n"
+ev = json.dumps({"timestamp": iso(now), "type": "event_msg", "payload": {"type": "token_count",
+    "rate_limits": {"limit_id": "codex",
+        "primary": {"used_percent": 40.0, "window_minutes": 300, "resets_at": int((now + dt.timedelta(hours=2)).timestamp())},
+        "secondary": {"used_percent": 25.0, "window_minutes": 10080, "resets_at": int((now + dt.timedelta(days=7)).timestamp())},
+        "plan_type": "plus"}}})
+open(sys.argv[1], "a", encoding="utf-8").write(filler + ev + "\n")
+EOF
+out=$(cx_status); contains "$out" "GPT-6.1 Sol · 5h 40%" "codex: model retained after the turn_context scrolled out of the tail"
+
+# a missing week (only the five-hour window) leaves the week part out
+rm -rf "$T/cxmw"; mkdir -p "$T/cxmw/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cxmw")"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxmw/sessions/2026/11/02/rollout-0001.jsonl")" 30 2 40 -1
+out=$(cx_status); contains "$out" "Codex · 5h 30%" "codex: five-hour shown without a week"
+grep -q "week" <<<"$out" && bad "codex: week shown when missing: $out" || ok "codex: no week part when the week window is missing"
+
+# the same compact mode texts as Claude, from the codex windows
+rm -rf "$T/cxmo1" "$T/cxmo2" "$T/cxmo3"; mkdir -p "$T/cxmo1/sessions/2026/11/02" "$T/cxmo2/sessions/2026/11/02" "$T/cxmo3/sessions/2026/11/02"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxmo1/sessions/2026/11/02/rollout-0001.jsonl")" 10 2 95 168
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxmo2/sessions/2026/11/02/rollout-0001.jsonl")" 95 2 20 168
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxmo3/sessions/2026/11/02/rollout-0001.jsonl")" 10 2 15 143
+export CODEX_HOME; CODEX_HOME="$(native "$T/cxmo1")"; out=$(cx_status)
+contains "$out" "week 95%" "codex: over-reserve week in the line"
+contains "$out" "tight: week over reserve" "codex: over-reserve mode text"
+CODEX_HOME="$(native "$T/cxmo2")"; out=$(cx_status)
+contains "$out" "tight: 5h" "codex: five-hour-tight mode text"
+CODEX_HOME="$(native "$T/cxmo3")"; out=$(cx_status)
+contains "$out" "tight: week 101% projected" "codex: projected week mode text"
+
+# a measurement older than the freshness constant is marked stale on the codex line too
+rm -rf "$T/cxs"; mkdir -p "$T/cxs/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cxs")"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxs/sessions/2026/11/02/rollout-0001.jsonl")" 30 2 20 168
+cx_status >/dev/null
+$PY - "$(native "$ORCH_HOME/codex_usage.json")" <<'EOF' && ok "codex: measurement aged for the stale check" || bad "codex: could not age the measurement"
+import datetime as dt, json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+for k, v in d.items():
+    if isinstance(v, dict):
+        for w in ("five_hour", "seven_day"):
+            if isinstance(v.get(w), dict) and "measured" in v[w]:
+                v[w]["measured"] = (dt.datetime.now().astimezone() - dt.timedelta(minutes=25)).isoformat(timespec="seconds")
+json.dump(d, open(p, "w", encoding="utf-8"))
+EOF
+out=$(cx_status); contains "$out" "stale:" "codex: a stale measurement is marked"
+
 # Codex profile off → no line even with data
 rm -rf "$T/cxoff"; mkdir -p "$T/cxoff/sessions/2026/11/02"
 export CODEX_HOME; CODEX_HOME="$(native "$T/cxoff")"
 $PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxoff/sessions/2026/11/02/rollout-0001.jsonl")" 81 2 20 168
-out=$(cx_status); contains "$out" "codex 5h 81%" "codex: data present before switching off"
+out=$(cx_status); contains "$out" "Codex · 5h 81%" "codex: data present before switching off"
 $ORCH profile use codex off >/dev/null
-out=$(cx_status); grep -q "codex" <<<"$out" && bad "codex: line shown while the profile is off: $out" || ok "codex: profile off → no line"
+out=$(cx_status); grep -q "Codex" <<<"$out" && bad "codex: line shown while the profile is off: $out" || ok "codex: profile off → no line"
 out=$($ORCH status); grep -q "Codex subscription" <<<"$out" && bad "codex: status line while the profile is off" || ok "codex: profile off → no Codex status line"
 rm -f "$ORCH_HOME/profiles.json"
 
@@ -973,7 +1079,7 @@ rm -rf "$T/cxkey"; mkdir -p "$T/cxkey/sessions/2026/11/02"
 $PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxkey/sessions/2026/11/02/rollout-0001.jsonl")" 81 2 95 168
 CODEX_HOME="$(native "$T/cxkey")"
 $ORCH profile use codex keyed >/dev/null
-out=$(cx_status); grep -q "codex" <<<"$out" && bad "codex key profile: limits in the status line: $out" || ok "codex key profile: no limits in the status line"
+out=$(cx_status); grep -q "Codex" <<<"$out" && bad "codex key profile: limits in the status line: $out" || ok "codex key profile: no limits in the status line"
 out=$($ORCH status); grep -q "Codex subscription" <<<"$out" && bad "codex key profile: Codex line in status: $out" || ok "codex key profile: no Codex subscription line"
 rm -f "$ORCH_HOME/profiles.json"
 
@@ -1082,7 +1188,7 @@ spend_reset() { rm -f "$SDIR/spend_limits.json" "$SDIR/spend_cache.json" "$SDIR/
 
 # defaults ($10, evaluate) — show is read-only
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
-contains "$out" "deepseek" "spend show lists the API-billed scope"
+contains "$out" "DeepSeek" "spend show lists the API-billed scope"
 contains "$out" "10.00" "spend show default limit \$10"
 contains "$out" "evaluate" "spend show default executor mode"
 [[ -f "$SDIR/spend_limits.json" ]] && bad "spend show created state" || ok "spend show does not create state"
@@ -1104,6 +1210,15 @@ contains "$out" "project" "spend limit per project"
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
 contains "$out" "6.00" "per-project limit overrides the global one"
 contains "$out" "stop" "global mode still applies to the project"
+spend_reset
+
+# --project PATH: from project A set project B's own limit; B shows it, A keeps its default
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 5 --project "$SB" >/dev/null
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SB" $ORCH spend)
+contains "$out" "5.00" "--project PATH: project B shows the limit set from project A"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
+contains "$out" "10.00" "--project PATH: project A keeps its own default"
+grep -q "5.00" <<<"$out" && bad "--project PATH: project A shows project B's limit: $out" || ok "--project PATH: project A is unaffected by project B's limit"
 spend_reset
 
 # stop: a run already at the limit refuses before starting (exit 75); --force does not bypass
@@ -1206,14 +1321,14 @@ EOF
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend reset deepseek >/dev/null   # baseline for the manual counter
 spend_ledger 8100000      # $8.10 of the default $10 → 81%
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH status)
-contains "$out" "API spend: deepseek" "status: spend line at ≥ 80%"
+contains "$out" "API spend: DeepSeek" "status: spend line at ≥ 80%"
 contains "$out" "8.10" "status: spend amount"
 contains "$out" "81%" "status: spend percentage"
 out=$(printf '{"session_id":"s-spend","workspace":{"current_dir":"%s"}}' "$SS" | ORCH_HOME="$SH" $ORCH statusline)
 contains "$out" "8.10" "status line: spend fragment at ≥ 80%"
 out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook user-prompt)
 contains "$out" "80%" "spend event: 80% announced"
-contains "$out" "deepseek" "spend event: names the scope"
+contains "$out" "DeepSeek" "spend event: names the scope"
 out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook user-prompt)
 [[ -z "$out" ]] && ok "spend event: announced once" || bad "spend event: 80% repeated: $out"
 spend_ledger 2700000      # +$2.70 → $10.80, past the limit
@@ -1255,15 +1370,15 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
 EOF
 out=$(printf '{"session_id":"sess-tok","transcript_path":"%s","workspace":{"current_dir":"%s"}}' \
       "$(native "$TCFG/sess-tok.jsonl")" "$(native "$REPO")" | $ORCH statusline)
-contains "$out" "codex 5h 81%" "status line: codex limits part"
+contains "$out" "Codex · 5h 81%" "status line: codex limits part"
 contains "$out" "week 20%" "status line: codex week part"
-contains "$out" "session in/out: claude 1.5k/150 · codex 400/40 · deepseek 500/60" "session tokens: claude from the transcript, runs from the ledger"
-[[ "$(sed -n 2p <<<"$out")" == "codex 5h 81%"* && "$(sed -n 3p <<<"$out")" == "session in/out: "* ]] \
+contains "$out" "Session in/out: Claude 1.5k/150 · Codex 400/40 · DeepSeek 500/60" "session tokens: claude from the transcript, runs from the ledger"
+[[ "$(sed -n 2p <<<"$out")" == "Codex · 5h 81%"* && "$(sed -n 3p <<<"$out")" == "Session in/out: "* ]] \
   && ok "Codex limits and session tokens are on lines of their own" || bad "status line layout: $out"
 out=$(printf '{"session_id":"sess-tok","transcript_path":"%s","workspace":{"current_dir":"%s"}}' \
       "$(native "$TCFG/sess-tok.jsonl")" "$(native "$REPO")" | $ORCH statusline --then "echo mine")
 contains "$out" "^mine  " "statusline --then: the operator's own line stays first"
-contains "$out" "session in/out: claude 1.5k/150" "statusline --then keeps the Codex and session lines"
+contains "$out" "Session in/out: Claude 1.5k/150" "statusline --then keeps the Codex and session lines"
 $ORCH usage --session sess-tok --json > "$T/usage-tok.json"
 $PY - "$(native "$T/usage-tok.json")" <<'EOF' && ok "session tokens agree with orch usage --session" || bad "session tokens disagree with orch usage"
 import json, sys
@@ -1275,6 +1390,7 @@ for r in rows:
 assert by["orchestrator"] == (1500, 150), by
 assert by["codex"] == (400, 40), by
 assert by["deepseek"] == (500, 60), by
+assert {r["model"] for r in rows} == {"claude-opus-5-5", "gpt-6.1-terra", "deepseek-v4-pro"}, [r["model"] for r in rows]
 EOF
 INCF="$TCFG/sess-inc.jsonl"
 $PY - "$(native "$INCF")" <<'EOF'
@@ -1285,7 +1401,7 @@ open(sys.argv[1], "w", encoding="utf-8").write(c({"type": "assistant", "timestam
                 "usage": {"input_tokens": 1000, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 5000, "output_tokens": 100}}}) + "\n")
 EOF
 out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
-contains "$out" "session in/out: claude 1.2k/100" "first run counts the transcript once"
+contains "$out" "Session in/out: Claude 1.2k/100" "first run counts the transcript once"
 $PY - "$(native "$INCF")" <<'EOF'
 import json, sys
 c = lambda o: json.dumps(o, separators=(",", ":"))
@@ -1295,7 +1411,7 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
                            "usage": {"input_tokens": 300, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 1000, "output_tokens": 50}}}) + "\n")
 EOF
 out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
-contains "$out" "session in/out: claude 1.5k/150" "appended lines are counted once (not re-read)"
+contains "$out" "Session in/out: Claude 1.5k/150" "appended lines are counted once (not re-read)"
 $PY - "$(native "$INCF")" <<'EOF'
 import json, sys
 c = lambda o: json.dumps(o, separators=(",", ":"))
@@ -1304,9 +1420,9 @@ open(sys.argv[1], "w", encoding="utf-8").write(c({"type": "assistant", "timestam
                 "usage": {"input_tokens": 500, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 30}}}) + "\n")
 EOF
 out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
-contains "$out" "session in/out: claude 500/30" "a shrunken transcript restarts from scratch"
+contains "$out" "Session in/out: Claude 500/30" "a shrunken transcript restarts from scratch"
 out=$(printf '{"session_id":"sess-empty","workspace":{"current_dir":"%s"}}' "$(native "$REPO")" | $ORCH statusline)
-grep -q "session in/out:" <<<"$out" && bad "session line shown with no tokens" || ok "no session line with no tokens"
+grep -q "Session in/out:" <<<"$out" && bad "session line shown with no tokens" || ok "no session line with no tokens"
 
 echo "── rounding"
 now=$($PY -c "import time; print(int(time.time()))")
@@ -1322,7 +1438,7 @@ for entry in d.values():                  # let the once-a-minute refresh run ag
         entry["updated"] = (dt.datetime.now().astimezone() - dt.timedelta(minutes=5)).isoformat(timespec="seconds")
 json.dump(d, open(p, "w", encoding="utf-8"))
 EOF
-out=$(cx_status); contains "$out" "codex 5h 83%" "codex status line rounds 82.6 → 83"
+out=$(cx_status); contains "$out" "Codex · 5h 83%" "codex status line rounds 82.6 → 83"
 CODEX_HOME="$(native "$T/no-codex")"
 
 echo "── review regressions (isolated processes and deterministic snapshots)"
@@ -1508,16 +1624,16 @@ def launch_profiles():
     good(["profile", "set", "deepseek", "personal", "--key", "DUMMY_A", "--default"])
     good(["profile", "set", "deepseek", "work", "--key", "DUMMY_B"])
     out = good(["launch", "deepseek", "--dry-run", "--use", "deepseek=work"])
-    assert "Lead: deepseek@work" in out and "bbbb" in out, out
+    assert "Lead: DeepSeek@work" in out and "bbbb" in out, out
     for name, message in (("off", "PROFILE_OFF"), ("missing", "PROFILE_ERROR")):
         rc, out = run(["launch", "deepseek", "--dry-run", "--use", "deepseek=" + name])
         assert rc != 0 and message in out, out
     out = good(["launch", "deepseek", "--dry-run", "--use", "deepseek=off", "--profile", "work"])
-    assert "Lead: deepseek@work" in out
+    assert "Lead: DeepSeek@work" in out
     good(["profile", "use", "claude", "off"])
     assert "Claude: only as an executor" in good(["launch", "deepseek", "--dry-run", "--use", "claude=default"])
     assert "Claude: off" in good(["launch", "deepseek", "--dry-run", "--use", "claude=default", "--no-claude"])
-    assert "Lead: deepseek@work" in good(["launch", "deepseek", "--dry-run"], extra={"ORCH_PROFILES":"deepseek=work"})
+    assert "Lead: DeepSeek@work" in good(["launch", "deepseek", "--dry-run"], extra={"ORCH_PROFILES":"deepseek=work"})
     good(["profile", "use", "claude", "inherit"])
 
 def worker_guard():
@@ -1565,7 +1681,7 @@ def weekly_budget():
         snapshot(five, window(82, 24 * 1.7))
         mode, line = m.claude_budget()
         assert mode == "tight" and "weekly limit" in line and "108% projected" in line, line
-    assert "tight: weekly limit (108% projected); conserve Claude" in good(["statusline"], '{}')
+    assert "tight: week 108% projected" in good(["statusline"], '{}')
     snapshot(None, {"used":95})
     assert m.claude_budget()[0] == "tight"
     snapshot(window(10, 2), window(15, 167))
@@ -1920,7 +2036,7 @@ out=$($ORCH registry path); contains "$out" "registry/providers.yaml" "default r
 $ORCH registry init >/dev/null; out=$($ORCH registry path); contains "$out" "$ORCH_HOME/providers.yaml" "user registry overrides default"
 out=$($ORCH doctor); ok "doctor runs (rc=$?)"
 contains "$out" "DEEPSEEK_API_KEY *set" "doctor sees the DeepSeek key"
-contains "$out" "codex login *Logged in" "doctor checks the codex login"
+contains "$out" "Codex login *Logged in" "doctor checks the codex login"
 
 echo "── guide, footprint, plugin wiring"
 out=$($ORCH guide); contains "$out" "manual" "guide lists the reference parts"

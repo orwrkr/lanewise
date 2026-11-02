@@ -22,12 +22,12 @@ window, 10% of the week) is kept for sessions orch doesn't know about and as a s
 - **TIGHT** — the five-hour window reaches its reserve before reset, or the weekly used share has reached its
   reserve, or the weekly projection reaches it after at least 24 hours of the week have been measured. Weekly
   TIGHT works even without current five-hour numbers; without a weekly reset only the used share counts. The
-  line names the weekly limit and its projection; the status line says `tight: weekly limit (N% projected);
-  conserve Claude` (or the used share when projection is unavailable). Treat Claude as `low`: use the cheapest Claude slots, offload the rest to Codex / DeepSeek.
+  line names the weekly limit and its projection; the status line's mode part says `tight: week N% projected` (or
+  `tight: week over reserve` for the used share, `tight: 5h` for a five-hour-only squeeze). Treat Claude as `low`: use the cheapest Claude slots, offload the rest to Codex / DeepSeek.
   An earlier weekly projection still blocks SURPLUS but cannot by itself raise TIGHT.
 - **no mode in the line / no line** — route as usual (too early in the window to tell, or no numbers).
 
-`orch budget` shows the numbers, the active consumers orch knows of (orchestrator sessions with the plugin seen in
+`orch budget` shows the numbers, the active consumers orch knows of (Claude Code sessions with this plugin active in
 the last 15 minutes, running `orch run claude` executors; sessions led by another model don't count) and the
 thresholds.
 
@@ -74,5 +74,18 @@ projection counts only after 24 h of the week. Treat Codex as `low` then — off
 SURPLUS mode for Codex. The line and its `💡` event only appear with current data and while the `codex` profile
 isn't `off`; `orch run codex` itself is not blocked by this (real exhaustion is still the adapter's exit 75).
 
-The status line shows the limits on a line of their own, and a further `session in/out:` line with this session's
+The status line shows the limits on a line of their own, and a further `Session in/out:` line with this session's
 tokens per provider, without cache reads. None of this costs tokens: the status line never reaches the model.
+
+## The status line format
+
+Every provider's part of the status line is built the same way, as
+`name · 5h N% → HH:MM · week N% · [N session(s)] · mode · stale: age`, with any part that has no data left out:
+
+- the Claude part is `Claude <model> · 5h 40% → 18:00 · week 60% · 3 sessions · surplus: Claude first` (a session
+  led by another model shows the model's display name with no `Claude ` prefix);
+- the Codex part is the model of the last `turn_context` event in the same rollout file that gave the limits
+  (`Codex GPT-6.1 Terra · 5h 81% → 18:28 · week 95% · tight: week over reserve`; just `Codex` when no model is
+  logged, an unknown model id as-is). It has no session count.
+- the mode text is the same on both (`tight: 5h`, `tight: week N% projected`, `tight: week over reserve`; Claude
+  also `surplus: Claude first`), and both append `stale: <age>` once the measurement is older than 20 minutes.

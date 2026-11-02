@@ -53,3 +53,26 @@ A reserve time already in the past is replaced by a warning instead of an obsole
 `orch profile set claude <name> --opt reserve=25 --opt week_reserve=15 --opt surplus=40` (or `surplus=off`), then
 `orch profile use claude <name>` for a project or `--default`. "Keep more for my other sessions" → raise `reserve`.
 With the `claude` profile `off` there is no surplus mode (Claude is not used at all).
+
+## Codex subscription limits
+
+Codex writes its own rate limits into its session logs, `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`
+(`CODEX_HOME` defaults to `~/.codex`; a profile with `--home` is another account with its own entry). The format
+is undocumented, so `orch` parses it defensively and treats any surprise as "no data" — never an error or noise.
+It reads only the newest files and just a tail of each, and refreshes at most once a minute from the status line
+and once after every `orch run codex`.
+
+The limits appear next to the Claude line in `orch status`:
+
+```
+Codex subscription: 5-hour window 81% used, resets 18:28, week 95%, resets Nov 4 21:08 (measured 14:46). TIGHT: treat Codex as low
+```
+
+The mode reuses the Claude thresholds (`reserve`, `week_reserve` from the `codex` profile, default 10): **TIGHT**
+when a window's used share is at or above its cap, or its projection at reset is, with the same rule that a weekly
+projection counts only after 24 h of the week. Treat Codex as `low` then — offload to other providers. There is no
+SURPLUS mode for Codex. The line and its `💡` event only appear with current data and while the `codex` profile
+isn't `off`; `orch run codex` itself is not blocked by this (real exhaustion is still the adapter's exit 75).
+
+The status line shows the limits on a line of their own, and a further `session in/out:` line with this session's
+tokens per provider, without cache reads. None of this costs tokens: the status line never reaches the model.

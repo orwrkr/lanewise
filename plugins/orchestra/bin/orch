@@ -73,6 +73,14 @@ def parse_iso(s):
     return t
 
 
+def pct(x):
+    """Round a percentage to the nearest integer (the %d form truncates, the apps show the rounded value)."""
+    try:
+        return int(round(float(x)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def human_delta(t):
     """'in 2h 10m' / '5m ago'."""
     secs = int((t - now()).total_seconds())
@@ -210,7 +218,8 @@ def warn_state(path, detail):
 
 def read_json(path, default, recover_corrupt=False, object_required=False):
     if recover_corrupt:
-        lock = ORCH_HOME / ".state.lock" if Path(path) in (USAGE_SNAPSHOT, SESSIONS_FILE) else state_dir() / ".state.lock"
+        lock = ORCH_HOME / ".state.lock" if Path(path) in (
+            USAGE_SNAPSHOT, SESSIONS_FILE, CODEX_USAGE_FILE, SESSION_TOKENS_FILE) else state_dir() / ".state.lock"
         with state_lock(lock):
             return _read_json(path, default, True, object_required)
     return _read_json(path, default, False, object_required)
@@ -283,15 +292,20 @@ def git(args, cwd, check=False):
     return r
 
 
+_toplevels = {}                # cwd → project root: one `git` process per run, this is called many times
+
+
 def project_dir():
     for var in ("ORCH_PROJECT_DIR", "CLAUDE_PROJECT_DIR"):
         v = os.environ.get(var)
         if v:
             return Path(v).resolve()
-    r = git(["rev-parse", "--show-toplevel"], Path.cwd())
-    if r is not None and r.returncode == 0 and r.stdout.strip():
-        return Path(r.stdout.strip()).resolve()
-    return Path.cwd().resolve()
+    cwd = Path.cwd()
+    if cwd not in _toplevels:
+        r = git(["rev-parse", "--show-toplevel"], cwd)
+        found = r is not None and r.returncode == 0 and r.stdout.strip()
+        _toplevels[cwd] = Path(r.stdout.strip()).resolve() if found else cwd.resolve()
+    return _toplevels[cwd]
 
 
 def state_dir(create=True):
@@ -693,13 +707,13 @@ def claude_budget(where=None):
         wm = measured_at(snap, "seven_day")
         wrate, _ = window_pace(snap, wu, wr, 24 * 7)
         weekly = max(wu, projected_at_reset(wu, wr, wrate, wm) if wrate is not None else wu)
-        projection = "%d%% projected" % weekly if wrate is not None else "projection unavailable"
+        projection = "%d%% projected" % pct(weekly) if wrate is not None else "projection unavailable"
         elapsed = (wm - (wr - dt.timedelta(days=7))).total_seconds() if wm and wr else 0
         week_tight = wu >= 100 - cfg["week_reserve"] or (
             elapsed >= 86400 and weekly >= 100 - cfg["week_reserve"])
     instruction = "treat Claude as low (conserve it; offload to Codex / DeepSeek)."
     weekly_line = (" TIGHT: weekly limit is tight (%s, %d%% used, reserve %d%%) — %s"
-                   % (projection, week[0], cfg["week_reserve"], instruction)) if week_tight else ""
+                   % (projection, pct(week[0]), cfg["week_reserve"], instruction)) if week_tight else ""
     if not five or five[1] is None:
         if week_tight:
             return "tight", "Claude subscription:" + weekly_line
@@ -716,7 +730,7 @@ def claude_budget(where=None):
                                                         ", %d Claude executor run%s" % (runs, "" if runs == 1 else "s")
                                                         if runs else "")) if users else ""
     line = "Claude subscription: 5-hour window %d%% used, resets %s (%s)%s%s; reserve %d%%%s" % (
-        used, at, human_delta(reset), ", week %d%%" % week[0] if week else "",
+        pct(used), at, human_delta(reset), ", week %d%%" % pct(week[0]) if week else "",
         " — reported by the operator" if snap.get("source") == "operator" else "", cfg["reserve"], active)
     if stale:
         line += "; measured %s (stale)" % (human_delta(measured) if measured else "at an unknown time")
@@ -734,11 +748,11 @@ def claude_budget(where=None):
     if rate is None or stale or cfg["surplus"] <= 0 or spare < cfg["surplus"]:
         return "normal", line + "."
     if weekly is not None and weekly >= 100 - cfg["week_reserve"]:
-        return "normal", line + ". Weekly projection %d%%: no surplus mode yet." % weekly
-    each = " — ≈%d%% for each of the %d orchestrator sessions" % (spare / sessions, sessions) if sessions > 1 else ""
+        return "normal", line + ". Weekly projection %d%%: no surplus mode yet." % pct(weekly)
+    each = " — ≈%d%% for each of the %d orchestrator sessions" % (pct(spare / sessions), sessions) if sessions > 1 else ""
     return "surplus", line + (". SURPLUS: at the current pace (%s) about %d%% of the window would expire unused beyond "
                               "the reserve%s — until %s give subtasks to Claude subagents rather than to API-billed "
-                              "executors (DeepSeek, API-key profiles); orch guide budget." % (basis, spare, each, at))
+                              "executors (DeepSeek, API-key profiles); orch guide budget." % (basis, pct(spare), each, at))
 
 
 @locked("home")
@@ -796,6 +810,473 @@ def cmd_budget(a):
     return 0
 
 
+# ───────────────────────── Codex subscription limits (read from its session logs) ─────────────────────────
+#
+# Codex writes session logs to $CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl; a token_count event carries
+# `rate_limits` (5-hour and weekly windows by window_minutes). The format is undocumented — parse defensively:
+# anything unexpected means "no data", never an error. `orch statusline` caches the newest windows per account in
+# ~/.orchestra/codex_usage.json, keyed by the effective CODEX_HOME (so a profile with --home has its own entry);
+# `orch run codex` refreshes right after finishing. A window whose reset has passed counts as absent.
+
+CODEX_USAGE_FILE = ORCH_HOME / "codex_usage.json"
+CODEX_TAIL_BYTES = 256 * 1024
+CODEX_REFRESH_SECONDS = 60
+CODEX_WINDOWS = ((300, "five_hour"), (10080, "seven_day"))
+
+
+def codex_home(where=None):
+    """Effective CODEX_HOME: the profile's --home (account) or the environment / the default ~/.codex."""
+    home = os.environ.get("CODEX_HOME")
+    try:
+        prof = resolve_profile("codex", where or project_dir())
+        if prof.name != "off" and prof.data.get("home"):
+            home = local_path(str(prof.data["home"]))
+    except ProfileError:
+        pass
+    return str(Path(home).expanduser()) if home else str(Path.home() / ".codex")
+
+
+def codex_rollouts(home, days=3, per_day=3):
+    """Newest rollout files: the latest date directories first, a bounded few only."""
+    sessions = Path(home) / "sessions"
+    if not sessions.is_dir():
+        return []
+    day_dirs = []
+    for y in sessions.iterdir():
+        if not y.is_dir() or not y.name.isdigit():
+            continue
+        for m in y.iterdir():
+            if not m.is_dir() or not m.name.isdigit():
+                continue
+            for d in m.iterdir():
+                if d.is_dir() and d.name.isdigit():
+                    day_dirs.append(d)
+    day_dirs.sort(key=lambda d: (d.parent.parent.name, d.parent.name, d.name), reverse=True)
+    out = []
+    for d in day_dirs[:days]:
+        try:
+            found = sorted(d.glob("rollout-*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
+        except OSError:
+            continue
+        out.extend(found[:per_day])
+    return out
+
+
+def tail_lines(path, max_bytes):
+    """The last `max_bytes` of a file, as lines, with the first partial line dropped."""
+    try:
+        size = path.stat().st_size
+        start = max(0, size - max_bytes)
+        with path.open("rb") as f:
+            f.seek(start)
+            data = f.read()
+    except OSError:
+        return []
+    if start > 0:
+        nl = data.find(b"\n")
+        if nl != -1:
+            data = data[nl + 1:]
+    return data.decode("utf-8", "replace").splitlines()
+
+
+def codex_event_limits(line):
+    """(measured, {window_minutes: {used, resets_at}}, plan_type) of one rollout line, or None."""
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(ev, dict) or ev.get("type") != "event_msg":
+        return None
+    measured = parse_iso(str(ev.get("timestamp") or "").replace("Z", "+00:00"))
+    payload = ev.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "token_count":
+        return None
+    rl = payload.get("rate_limits")
+    if not isinstance(rl, dict) or measured is None:
+        return None
+    windows = {}
+    for name in ("primary", "secondary"):
+        w = rl.get(name)
+        if not isinstance(w, dict):
+            continue
+        wm = w.get("window_minutes")
+        used = w.get("used_percent")
+        if used is None:
+            used = w.get("used")
+        resets = epoch_iso(w.get("resets_at"))
+        if not isinstance(wm, (int, float)) or not isinstance(used, (int, float)) or resets is None:
+            continue
+        windows[int(wm)] = {"used": float(used), "resets_at": resets}
+    if not windows:
+        return None
+    return measured, windows, rl.get("plan_type")
+
+
+def scan_codex_limits(home):
+    """The newest windows seen in the newest rollout tails, or None when nothing is readable."""
+    try:
+        best = None
+        for f in codex_rollouts(home):
+            for line in tail_lines(f, CODEX_TAIL_BYTES):
+                ev = codex_event_limits(line)
+                if ev and (best is None or ev[0] > best[0]):
+                    best = ev
+        return best
+    except OSError:
+        return None
+
+
+def codex_windows(measured, windows, plan_type):
+    """Cache entry {five_hour: {…}, seven_day: {…}, plan_type} with each window's own measurement time."""
+    out = {}
+    for wm, name in CODEX_WINDOWS:
+        w = windows.get(wm)
+        if w and parse_iso(w["resets_at"]) > now():
+            out[name] = {"used": w["used"], "resets_at": w["resets_at"], "measured": iso(measured)}
+    if plan_type:
+        out["plan_type"] = str(plan_type)
+    return out
+
+
+@locked("home")
+def refresh_codex(where=None, force=False):
+    """Update the cached Codex windows; at most once a minute (unless forced). Returns the (possibly empty) entry."""
+    home = codex_home(where)
+    snap = read_json(CODEX_USAGE_FILE, {}, recover_corrupt=True)
+    if not isinstance(snap, dict):
+        snap = {}
+    entry = snap.get(home) if isinstance(snap.get(home), dict) else {}
+    updated = parse_iso(entry.get("updated") or "")
+    if not force and updated and (now() - updated).total_seconds() < CODEX_REFRESH_SECONDS:
+        return entry
+    scanned = scan_codex_limits(home)
+    if scanned is None:
+        return entry
+    measured, windows, plan_type = scanned
+    entry = codex_windows(measured, windows, plan_type)
+    entry["updated"] = iso(now())
+    snap[home] = entry
+    t = now()      # drop accounts untouched for over a day (but keep the 💡 announcement state)
+    announced = snap.get("announced")
+    snap = {k: v for k, v in snap.items() if isinstance(v, dict) and (k == home or (
+        parse_iso(v.get("updated") or "") and (t - parse_iso(v["updated"])).total_seconds() < 86400))}
+    if isinstance(announced, dict):
+        snap["announced"] = announced
+    write_json(CODEX_USAGE_FILE, snap)
+    return entry
+
+
+def codex_reserve(where=None):
+    """reserve / week_reserve (%) from the codex profile, else 10/10; None when Codex is off for the project."""
+    out = {"reserve": 10, "week_reserve": 10}
+    try:
+        prof = resolve_profile("codex", where or project_dir())
+    except ProfileError as ex:
+        if str(PROFILES_FILE) in str(ex):
+            warn_state(PROFILES_FILE, str(ex))
+        return out
+    if prof.name == "off":
+        return None
+    for k in out:
+        v = str(prof.data.get(k, out[k])).lower()
+        out[k] = 0 if v in ("off", "no", "false") else int(v) if v.isdigit() else out[k]
+    return out
+
+
+def codex_window(entry, name):
+    """(used %, reset time, measured time) while the window is current; None once it has reset or has no data."""
+    w = entry.get(name) if isinstance(entry.get(name), dict) else {}
+    if w.get("used") is None:
+        return None
+    reset = parse_iso(w.get("resets_at") or "")
+    if reset and reset <= now():
+        return None
+    return float(w["used"]), reset, parse_iso(w.get("measured") or "")
+
+
+def codex_projected(used, reset, measured, window_minutes):
+    """Projected used % at the reset, from the window average; None when it cannot be computed."""
+    if reset is None or measured is None:
+        return None
+    elapsed = (measured - (reset - dt.timedelta(minutes=window_minutes))).total_seconds() / 60.0
+    if elapsed <= 0:
+        return None
+    return used * window_minutes / elapsed
+
+
+def codex_state(where=None):
+    """(cfg, home, entry) of the Codex budget for a directory; (None, None, None) when Codex is off."""
+    cfg = codex_reserve(where)
+    if cfg is None:
+        return None, None, None
+    home = codex_home(where)
+    snap = read_json(CODEX_USAGE_FILE, {}, recover_corrupt=True)
+    entry = snap.get(home) if isinstance(snap, dict) else None
+    if not isinstance(entry, dict):
+        entry = None
+    return cfg, home, entry
+
+
+def codex_budget(where=None):
+    """(mode, line) of the Codex subscription: TIGHT when a window's used share or its projection reaches its
+    reserve (a weekly projection counts only after 24 h). No current data → no line and no mode."""
+    cfg, _, entry = codex_state(where)
+    if cfg is None or not entry:
+        return "unknown", None
+    five = codex_window(entry, "five_hour")
+    week = codex_window(entry, "seven_day")
+    if not five and not week:
+        return "unknown", None
+    parts = []
+    tight = False
+    measured = None
+    if five:
+        used, reset, m = five
+        measured = m or measured
+        cap = 100 - cfg["reserve"]
+        proj = codex_projected(used, reset, m, 300)
+        if used >= cap or (proj is not None and proj >= cap):
+            tight = True
+        parts.append("5-hour window %d%% used, resets %s" % (pct(used), reset.astimezone().strftime("%H:%M")))
+    if week:
+        used, reset, m = week
+        measured = m or measured
+        cap = 100 - cfg["week_reserve"]
+        proj = codex_projected(used, reset, m, 10080)
+        elapsed = (m - (reset - dt.timedelta(minutes=10080))).total_seconds() if m and reset else 0
+        weekly = max(used, proj) if proj is not None else used
+        if used >= cap or (elapsed >= 86400 and weekly >= cap):
+            tight = True
+        parts.append("week %d%%" % pct(used) + (", resets %s" % reset.astimezone().strftime("%b %d %H:%M")
+                                               if reset else ""))
+    line = "Codex subscription: " + ", ".join(parts)
+    if measured:
+        line += " (measured %s)" % measured.astimezone().strftime("%H:%M")
+    line += "."
+    if tight:
+        line += " TIGHT: treat Codex as low; offload to other providers."
+    return ("tight" if tight else "normal"), line
+
+
+def codex_status_part(where=None):
+    """Compact Codex limits part of the second status line ('codex 5h 81% → 18:28 · week 95%'), or None."""
+    cfg, _, entry = codex_state(where)
+    if cfg is None or not entry:
+        return None
+    five = codex_window(entry, "five_hour")
+    week = codex_window(entry, "seven_day")
+    parts = []
+    if five:
+        parts.append("5h %d%% → %s" % (pct(five[0]), five[1].astimezone().strftime("%H:%M")))
+    if week:
+        parts.append("week %d%%" % pct(week[0]))
+    return ("codex " + " · ".join(parts)) if parts else None
+
+
+@locked("home")
+def codex_event(session, announce=True):
+    """A hook event when this session's Codex budget mode changes (tight / normal), once per change."""
+    mode, line = codex_budget()
+    if mode == "unknown":
+        return None
+    snap = read_json(CODEX_USAGE_FILE, {}, recover_corrupt=True)
+    if not isinstance(snap, dict):
+        snap = {}
+    seen = snap.get("announced") if isinstance(snap.get("announced"), dict) else {}
+    key = session or "-"
+    if seen.get(key) == mode:
+        return None
+    seen.pop(key, None)
+    seen[key] = mode
+    snap["announced"] = dict(list(seen.items())[-30:])
+    write_json(CODEX_USAGE_FILE, snap)
+    return ("💡 " + line) if announce else None
+
+
+# ───────────────────────── session tokens per provider (second status line) ─────────────────────────
+#
+# The second status line shows this session's cumulative input/output per provider, without cache reads. The
+# numbers must agree with `orch usage`: the orchestrator thread + subagents come from the transcript (each message
+# counted once), the CLI executors from ~/.orchestra/usage.jsonl. Transcripts grow to many megabytes, so each file
+# is parsed incrementally: ~/.orchestra/session_tokens.json holds the byte offset already parsed and the running
+# totals; only appended bytes are read, a partial last line is left for the next call.
+
+SESSION_TOKENS_FILE = ORCH_HOME / "session_tokens.json"
+
+
+def transcript_provider(model):
+    m = str(model or "").lower()
+    return "deepseek" if m.startswith("deepseek") else "claude"
+
+
+def parse_append(path, state):
+    """Count assistant usage appended to a transcript file; state: {offset, ids, in, out, provider}.
+    Returns True when the state changed (bytes consumed or the file was reset after shrinking)."""
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    offset = int(state.get("offset") or 0)
+    changed = False
+    if size < offset:                      # the file shrank: start over
+        offset = 0
+        state["offset"] = 0
+        state["ids"] = {}
+        state["in"] = 0
+        state["out"] = 0
+        changed = True
+    if size <= offset:
+        return changed
+    try:
+        with path.open("rb") as f:
+            f.seek(offset)
+            data = f.read(size - offset)
+    except OSError:
+        return changed
+    nl = data.rfind(b"\n")
+    consumed = len(data) if nl == len(data) - 1 else (nl + 1 if nl != -1 else 0)
+    if consumed == 0:                      # only a partial last line so far: leave it for the next call
+        return changed
+    ids = state.setdefault("ids", {})
+    for line in data[:consumed].decode("utf-8", "replace").splitlines():
+        if '"type":"assistant"' not in line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+        model = msg.get("model")
+        if ev.get("type") != "assistant" or not model or str(model).startswith("<"):
+            continue
+        mid = msg.get("id") or ev.get("requestId") or ev.get("uuid")
+        u = claude_tokens(msg.get("usage") or {})
+        inp, out = int(u["input_tokens"]), int(u["output_tokens"])
+        if mid:
+            old = ids.get(mid)
+            if isinstance(old, dict):
+                inp -= int(old.get("i") or 0)
+                out -= int(old.get("o") or 0)
+            ids[mid] = {"i": u["input_tokens"], "o": u["output_tokens"]}
+        state["in"] = int(state.get("in") or 0) + inp
+        state["out"] = int(state.get("out") or 0) + out
+        if not state.get("provider"):
+            state["provider"] = transcript_provider(model)
+    state["offset"] = offset + consumed
+    return True
+
+
+def parse_ledger_append(offset, sid):
+    """(new_offset, {provider: {input, output}}, changed) from run records of sid appended to the ledger."""
+    out = {}
+    try:
+        size = USAGE_FILE.stat().st_size
+    except OSError:
+        return offset, out, False
+    changed = False
+    if size < offset:
+        offset = 0
+        changed = True
+    if size <= offset:
+        return offset, out, changed
+    try:
+        with USAGE_FILE.open("rb") as f:
+            f.seek(offset)
+            data = f.read(size - offset)
+    except OSError:
+        return offset, out, changed
+    nl = data.rfind(b"\n")
+    consumed = len(data) if nl == len(data) - 1 else (nl + 1 if nl != -1 else 0)
+    if consumed == 0:
+        return offset, out, changed
+    for line in data[:consumed].decode("utf-8", "replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("kind") != "run" or rec.get("session") != sid:
+            continue
+        u = rec.get("usage")
+        if not isinstance(u, dict):
+            continue
+        prov = str(rec.get("provider") or "?").lower()
+        t = out.setdefault(prov, {"input": 0, "output": 0})
+        t["input"] += int(u.get("input_tokens") or 0)
+        t["output"] += int(u.get("output_tokens") or 0)
+    return offset + consumed, out, True
+
+
+@locked("home")
+def session_tokens(sid, transcript_path):
+    """Update the per-session token cache and return {provider: {input, output}} for this session."""
+    cache = read_json(SESSION_TOKENS_FILE, {}, recover_corrupt=True)
+    if not isinstance(cache, dict):
+        cache = {}
+    t = now()
+    keep = {k: v for k, v in cache.items() if isinstance(v, dict) and (k == sid or (
+        parse_iso(v.get("updated") or "") and (t - parse_iso(v["updated"])).total_seconds() < 86400))}
+    changed = len(keep) != len(cache)
+    entry = dict(keep.get(sid) or {})
+    entry.setdefault("files", {})
+    entry.setdefault("ledger", {})
+    entry.setdefault("ledger_offset", 0)
+    if not isinstance(entry["files"], dict):
+        entry["files"] = {}
+    if not isinstance(entry["ledger"], dict):
+        entry["ledger"] = {}
+    files = []
+    if transcript_path and Path(transcript_path).is_file():
+        files.append(Path(transcript_path))
+    elif sid and transcript_for(sid):
+        files.append(transcript_for(sid))
+    if files:
+        sub = files[0].with_suffix("") / "subagents"
+        if sub.is_dir():
+            files += sorted(sub.glob("agent-*.jsonl"))
+    advanced = False
+    for f in files:
+        if parse_append(f, entry["files"].setdefault(str(f), {})):
+            advanced = True
+    offset, ledg, ledger_changed = parse_ledger_append(entry["ledger_offset"], sid)
+    entry["ledger_offset"] = offset
+    advanced = advanced or ledger_changed
+    for prov, d in ledg.items():
+        tt = entry["ledger"].setdefault(prov, {"input": 0, "output": 0})
+        tt["input"] += d["input"]
+        tt["output"] += d["output"]
+    if advanced or changed:
+        entry["updated"] = iso(t)
+        keep[sid] = entry
+        write_json(SESSION_TOKENS_FILE, keep)
+    totals = {}
+    for f in entry["files"].values():
+        if not isinstance(f, dict):
+            continue
+        tt = totals.setdefault(f.get("provider") or "claude", {"input": 0, "output": 0})
+        tt["input"] += int(f.get("in") or 0)
+        tt["output"] += int(f.get("out") or 0)
+    for prov, d in entry["ledger"].items():
+        tt = totals.setdefault(prov, {"input": 0, "output": 0})
+        tt["input"] += int(d.get("input") or 0)
+        tt["output"] += int(d.get("output") or 0)
+    return totals
+
+
+def session_status_part(sid, transcript_path):
+    """'session in/out: claude 370k/111k · codex 450k/84k', or None with no tokens yet (or on any error)."""
+    if not sid:
+        return None
+    try:
+        totals = session_tokens(sid, transcript_path)
+    except Exception:
+        return None
+    parts = ["%s %s/%s" % (prov, fmt_tok(d["input"]), fmt_tok(d["output"]))
+             for prov, d in sorted(totals.items())
+             if int(d.get("input") or 0) + int(d.get("output") or 0) > 0]
+    return ("session in/out: " + " · ".join(parts)) if parts else None
+
+
 def cmd_statusline(a):
     """Claude Code statusLine command: keep the subscription usage for routing; print a short status line.
     Never fails (a broken status line would be visible on every screen)."""
@@ -823,12 +1304,12 @@ def cmd_statusline(a):
         snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
         five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
         if five and five[1]:
-            parts.append("5h %d%% → %s" % (five[0], five[1].astimezone().strftime("%H:%M")))
+            parts.append("5h %d%% → %s" % (pct(five[0]), five[1].astimezone().strftime("%H:%M")))
             measured = measured_at(snap, "five_hour")
             if not measured or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS:
                 parts.append("stale: %s" % (human_delta(measured) if measured else "age unknown"))
         if week:
-            parts.append("week %d%%" % week[0])
+            parts.append("week %d%%" % pct(week[0]))
         n = sum(1 for v in claude_consumers().values() if v.get("kind") != "executor")
         if n > 1:
             parts.append("%d sessions" % n)
@@ -838,12 +1319,23 @@ def cmd_statusline(a):
             if weekly:
                 parts.append("tight: weekly limit (%s%% projected); conserve Claude" % weekly.group(1))
             elif "weekly limit is tight" in (budget_line or ""):
-                parts.append("tight: weekly limit (%d%% used); conserve Claude" % week[0])
+                parts.append("tight: weekly limit (%d%% used); conserve Claude" % pct(week[0]))
             else:
                 parts.append({"surplus": "surplus: Claude first", "tight": "tight: conserve Claude"}[mode])
     except Exception:
         pass
     line = " · ".join(parts) or "Orchestra"
+    extra = []                 # one more line each: the Codex limits, this session's tokens
+    try:
+        data = json.loads(raw or "{}")
+        cwd = (data.get("workspace") or {}).get("current_dir") if isinstance(data.get("workspace"), dict) else None
+        sid = data.get("session_id")
+        where = Path(cwd) if cwd else None
+        refresh_codex(where)
+        extra = [p for p in (codex_status_part(where),
+                             session_status_part(str(sid) if sid else None, data.get("transcript_path"))) if p]
+    except Exception:
+        extra = []
     if a.then:
         try:
             r = subprocess.run(a.then, shell=True, input=raw.encode("utf-8"), stdout=subprocess.PIPE,
@@ -853,6 +1345,8 @@ def cmd_statusline(a):
         except Exception:
             pass
     print(line)
+    for part in extra:
+        print(part)
     return 0
 
 
@@ -1113,7 +1607,12 @@ def profile_fields(provider):
     if adapter is None:                      # manual lane: models = model keys (gemini-4-argon, …)
         return ["models", "use_for", "prefer_for", "rules", "max_open"]
     directives = adapter_directives(adapter_head(adapter))
-    extra = list(BUDGET_DEFAULTS) if provider.lower() == "claude" else []    # budget mode: surplus, reserve, week_reserve
+    if provider.lower() == "claude":
+        extra = list(BUDGET_DEFAULTS)             # budget mode: surplus, reserve, week_reserve
+    elif provider.lower() == "codex":
+        extra = ["reserve", "week_reserve"]       # Codex budget mode: reserve thresholds only, no surplus
+    else:
+        extra = []
     return (["key"] if directives.get("secrets") else []) + list(RULE_FIELDS) + list(profile_env_map(directives)) + extra
 
 
@@ -1861,6 +2360,11 @@ def cmd_run(a):
         body = body[:a.max_chars] + "\n…[truncated, full text: %s]" % (out_file if output.strip() else log_file)
     print(body.rstrip())
     print("\n-- files: %s (output) · %s (log)" % (out_file, log_file))
+    if provider == "codex":
+        try:
+            refresh_codex(cwd, force=True)      # the run just spent the Codex limits: read the freshest numbers
+        except Exception:
+            pass
     return rc
 
 
@@ -2800,14 +3304,15 @@ def cmd_hook(a):
             print("Route tasks to models with the orchestra:orchestrate skill "
                   "(registry — at the path above; availability — `orch status`).")
             budget_event(sid, announce=False)        # the status above already shows the budget mode
+            codex_event(sid, announce=False)         # record the Codex mode so a change later raises a 💡 event
             return 0
         if a.event == "user-prompt":
-            events = [e for e in [budget_event(sid)] if e] + (check_events(mark=True) if has_state else [])
+            events = [e for e in [budget_event(sid), codex_event(sid)] if e] + (check_events(mark=True) if has_state else [])
             if events:
                 print("Orchestra — events since the last message:\n" + "\n".join(events))
             return 0
         if a.event == "post-tool":
-            events = [e for e in [budget_event(sid)] if e]      # cheap: one small file, on a mode change only
+            events = [e for e in [budget_event(sid), codex_event(sid)] if e]      # cheap: one small file, on a mode change only
             if has_state:
                 stamp = state_dir() / ".last_hook_check"
                 last = stamp.stat().st_mtime if stamp.exists() else 0
@@ -3296,6 +3801,9 @@ def cmd_status(a):
     mode, budget = claude_budget()
     if budget:
         lines.append(budget)
+    _, codex = codex_budget()
+    if codex:
+        lines.append(codex)
     if data["entries"]:
         lines.append("Availability restrictions:")
         lines += ["  " + describe_entry(k, e) for k, e in sorted(data["entries"].items())]

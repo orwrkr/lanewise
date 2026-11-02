@@ -20,6 +20,7 @@ T="$(mktemp -d)" || die "cannot create temporary directory"
 export ORCH_HOME; ORCH_HOME="$(native "$T/home")"
 export PATH="$T/fakebin:$PATH"
 unset CLAUDE_PROJECT_DIR ORCH_PROJECT_DIR ORCH_WORKER ORCH_CODEX_BIN ORCH_CLAUDE_BIN DEEPSEEK_API_KEY ORCH_NOTIFY_CMD
+export CODEX_HOME; CODEX_HOME="$(native "$T/no-codex")"     # the status line must never read the real ~/.codex here
 pass=0; fail=0
 last_check=$SECONDS
 timing() { if [[ ${ORCH_TEST_TIMING:-0} == 1 ]]; then printf "  [timing %ss] %s\n" "$((SECONDS-last_check))" "$1"; fi; last_check=$SECONDS; }
@@ -41,7 +42,7 @@ contains() {
 }
 
 # fake codex (`codex exec --json` event stream): behaviour selected by FAKE_CODEX env
-mkdir -p "$T/fakebin" "$T/home" || die "cannot create fake and home directories"
+mkdir -p "$T/fakebin" "$T/home" "$T/no-codex" || die "cannot create fake and home directories"
 cat > "$T/fakebin/fake_codex.py" <<'EOF' || die "cannot write fake codex"
 import json, os, sys, time
 args = sys.argv[1:]
@@ -747,6 +748,254 @@ check 'any(v.get("kind") == "executor" for v in r["sessions"].values())' "a runn
 grep -q '"executor"' "$ORCH_HOME/sessions.json" && bad "finished run still listed" || ok "the run leaves the consumer list when it ends"
 rm -f "$ORCH_HOME/sessions.json"
 $ORCH budget clear >/dev/null
+
+echo "── Codex subscription limits"
+cat > "$T/gen_rollout.py" <<'EOF'
+import datetime as dt, json, sys
+path = sys.argv[1]
+used5 = float(sys.argv[2]); r5h = float(sys.argv[3])
+used7 = float(sys.argv[4]); r7h = float(sys.argv[5])
+now = dt.datetime.now(dt.timezone.utc)
+def iso(t): return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+ev = json.dumps({"timestamp": iso(now), "type": "event_msg", "payload": {"type": "token_count",
+    "rate_limits": {"limit_id": "codex",
+        "primary": {"used_percent": used5, "window_minutes": 300, "resets_at": int((now + dt.timedelta(hours=r5h)).timestamp())},
+        "secondary": {"used_percent": used7, "window_minutes": 10080, "resets_at": int((now + dt.timedelta(hours=r7h)).timestamp())},
+        "credits": {"has_credits": False}, "plan_type": "plus"}}})
+open(path, "w", encoding="utf-8").write(ev + "\n")
+EOF
+cx_status() { printf '{"workspace":{"current_dir":"%s"}}' "$(native "$REPO")" | $ORCH statusline; }
+
+# defensive parsing: a good event, then rate_limits:null, a garbage line, swapped windows, a cut last line
+rm -rf "$T/cx1"; mkdir -p "$T/cx1/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx1")"
+$PY - "$(native "$T/cx1/sessions/2026/11/02/rollout-0001.jsonl")" <<'EOF'
+import datetime as dt, json, sys
+now = dt.datetime.now(dt.timezone.utc)
+def iso(t): return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+def ev(t, primary, secondary):
+    return json.dumps({"timestamp": iso(t), "type": "event_msg", "payload": {"type": "token_count",
+        "rate_limits": {"limit_id": "codex", "primary": primary, "secondary": secondary,
+        "credits": {"has_credits": False}, "plan_type": "plus"}}})
+h2 = now + dt.timedelta(hours=2); d7 = now + dt.timedelta(days=7)
+five = lambda used: {"used_percent": used, "window_minutes": 300, "resets_at": int(h2.timestamp())}
+week = lambda used: {"used_percent": used, "window_minutes": 10080, "resets_at": int(d7.timestamp())}
+lines = [
+    ev(now - dt.timedelta(minutes=8), five(81.0), week(95.0)),
+    json.dumps({"timestamp": iso(now - dt.timedelta(minutes=7)), "type": "event_msg",
+                "payload": {"type": "token_count", "rate_limits": None}}),
+    "this is not json",
+    ev(now - dt.timedelta(minutes=2), week(20.0), five(30.0)),
+    '{"timestamp": "' + iso(now) + '", "type": "event_msg", "payload": {"type": "token_count", "rate_limits": {"primary": {"used_percent": 99.0, "window_minutes": 300, "resets_at": ' + str(int(h2.timestamp())) + '}',
+]
+open(sys.argv[1], "w", encoding="utf-8").write("\n".join(lines))
+EOF
+out=$(cx_status); contains "$out" "codex 5h 30%" "codex status line: compact five-hour"
+contains "$out" "week 20%" "codex status line: compact week"
+out=$($ORCH status)
+contains "$out" "Codex subscription: 5-hour window 30% used" "codex: five-hour window read from the swapped secondary slot"
+contains "$out" "week 20%" "codex: week read from the swapped primary slot"
+
+# a rollout larger than the tail size, newest event at the end
+rm -rf "$T/cx2"; mkdir -p "$T/cx2/sessions/2026/11/01"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx2")"
+$PY - "$(native "$T/cx2/sessions/2026/11/01/rollout-big.jsonl")" <<'EOF'
+import datetime as dt, json, sys
+now = dt.datetime.now(dt.timezone.utc)
+def iso(t): return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+filler = "\n".join(json.dumps({"type": "noise", "i": i}) for i in range(12000)) + "\n"
+ev = json.dumps({"timestamp": iso(now), "type": "event_msg", "payload": {"type": "token_count",
+    "rate_limits": {"limit_id": "codex",
+        "primary": {"used_percent": 50.0, "window_minutes": 300, "resets_at": int((now + dt.timedelta(hours=2)).timestamp())},
+        "secondary": {"used_percent": 60.0, "window_minutes": 10080, "resets_at": int((now + dt.timedelta(days=7)).timestamp())},
+        "plan_type": "plus"}}})
+open(sys.argv[1], "w", encoding="utf-8").write(filler + ev + "\n")
+EOF
+size=$(wc -c < "$T/cx2/sessions/2026/11/01/rollout-big.jsonl")
+[[ $size -gt 262144 ]] && ok "codex: rollout larger than the tail size ($size bytes)" || bad "codex: rollout too small ($size bytes)"
+out=$(cx_status); contains "$out" "codex 5h 50%" "codex: newest event found in the tail of a large file"
+contains "$out" "week 60%" "codex: week found in the tail of a large file"
+
+# an expired window is dropped
+rm -rf "$T/cx3"; mkdir -p "$T/cx3/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx3")"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx3/sessions/2026/11/02/rollout-0001.jsonl")" 50 -1 40 168
+out=$(cx_status); contains "$out" "week 40%" "codex: valid week window kept"
+grep -q "5h" <<<"$out" && bad "codex: expired five-hour window still shown: $out" || ok "codex: expired five-hour window dropped"
+
+# no rollouts at all: no line, no error
+rm -rf "$T/cx4"; mkdir -p "$T/cx4"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx4")"
+out=$(cx_status); rc=$?
+[[ $rc -eq 0 ]] && ok "codex: no rollouts → statusline succeeds" || bad "codex: statusline rc=$rc"
+grep -q "codex" <<<"$out" && bad "codex: line shown with no rollouts: $out" || ok "codex: no rollouts → no line"
+out=$($ORCH status); grep -q "Codex subscription" <<<"$out" && bad "codex: status shows a Codex line with no rollouts" || ok "codex: no Codex line in status"
+
+# week over the reserve cap → TIGHT
+rm -rf "$T/cx5"; mkdir -p "$T/cx5/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx5")"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx5/sessions/2026/11/02/rollout-0001.jsonl")" 10 2 95 168
+cx_status >/dev/null
+out=$($ORCH status)
+contains "$out" "Codex subscription: 5-hour window 10% used" "codex: five-hour window in status"
+contains "$out" "week 95%" "codex: week over the cap in status"
+contains "$out" "TIGHT: treat Codex as low" "codex: week over the cap → TIGHT"
+
+# weekly projection counts only after 24 h of the week
+rm -rf "$T/cx6a" "$T/cx6b"; mkdir -p "$T/cx6a/sessions/2026/11/02" "$T/cx6b/sessions/2026/11/02"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx6a/sessions/2026/11/02/rollout-0001.jsonl")" 10 2 15 156
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx6b/sessions/2026/11/02/rollout-0001.jsonl")" 10 2 15 143
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx6a")"
+cx_status >/dev/null
+out=$($ORCH status); grep -q "TIGHT: treat Codex as low" <<<"$out" && bad "codex: weekly projection before 24 h raised TIGHT: $out" || ok "codex: weekly projection before 24 h is ignored"
+CODEX_HOME="$(native "$T/cx6b")"
+cx_status >/dev/null
+out=$($ORCH status); contains "$out" "TIGHT: treat Codex as low" "codex: weekly projection after 24 h → TIGHT"
+
+# the 💡 event fires once on a mode change
+rm -rf "$T/cx7"; mkdir -p "$T/cx7/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx7")"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx7/sessions/2026/11/02/rollout-0001.jsonl")" 10 2 15 168
+echo '{"session_id":"s-cx"}' | $ORCH statusline >/dev/null
+out=$(echo '{"session_id":"s-cx"}' | $ORCH hook session-start); contains "$out" "Codex subscription: 5-hour window 10% used" "codex: session-start shows the Codex line"
+out=$(echo '{"session_id":"s-cx"}' | $ORCH hook user-prompt); grep -q "Codex subscription" <<<"$out" && bad "codex: event before a mode change: $out" || ok "codex: no event while the mode is unchanged"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx7/sessions/2026/11/02/rollout-0001.jsonl")" 10 2 95 168
+$PY - "$(native "$ORCH_HOME/codex_usage.json")" <<'EOF' && ok "codex: cache aged past the refresh throttle" || bad "codex: could not age the cache"
+import datetime as dt, json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+for k, v in d.items():
+    if isinstance(v, dict) and "updated" in v:
+        v["updated"] = (dt.datetime.now().astimezone() - dt.timedelta(minutes=5)).isoformat(timespec="seconds")
+json.dump(d, open(p, "w", encoding="utf-8"))
+EOF
+echo '{"session_id":"s-cx"}' | $ORCH statusline >/dev/null
+out=$(echo '{"session_id":"s-cx"}' | $ORCH hook user-prompt); contains "$out" "💡 Codex subscription:" "codex: a mode change → 💡 event"
+contains "$out" "TIGHT: treat Codex as low" "codex: the event names TIGHT"
+out=$(echo '{"session_id":"s-cx"}' | $ORCH hook user-prompt); grep -q "Codex subscription" <<<"$out" && bad "codex: event repeated" || ok "codex: a mode change is announced once"
+
+# the cache is keyed per account (CODEX_HOME)
+rm -rf "$T/cx8a" "$T/cx8b"; mkdir -p "$T/cx8a/sessions/2026/11/02" "$T/cx8b/sessions/2026/11/02"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx8a/sessions/2026/11/02/rollout-0001.jsonl")" 81 2 20 168
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx8b/sessions/2026/11/02/rollout-0001.jsonl")" 30 2 40 168
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx8a")"; cxA=$(cx_status)
+CODEX_HOME="$(native "$T/cx8b")"; cxB=$(cx_status)
+contains "$cxA" "codex 5h 81%" "codex: account A numbers"
+contains "$cxB" "codex 5h 30%" "codex: account B numbers"
+$PY - "$(native "$ORCH_HOME/codex_usage.json")" "$(native "$T/cx8a")" "$(native "$T/cx8b")" <<'EOF' && ok "codex: cache keyed per account" || bad "codex: cache not per account"
+import json, sys
+d = {k.replace("\\", "/"): v for k, v in json.load(open(sys.argv[1], encoding="utf-8")).items()}
+a, b = sys.argv[2], sys.argv[3]
+assert isinstance(d.get(a), dict) and isinstance(d.get(b), dict), list(d)
+assert d[a]["five_hour"]["used"] == 81.0 and d[b]["five_hour"]["used"] == 30.0, d
+EOF
+
+# Codex profile off → no line even with data
+rm -rf "$T/cxoff"; mkdir -p "$T/cxoff/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cxoff")"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxoff/sessions/2026/11/02/rollout-0001.jsonl")" 81 2 20 168
+out=$(cx_status); contains "$out" "codex 5h 81%" "codex: data present before switching off"
+$ORCH profile use codex off >/dev/null
+out=$(cx_status); grep -q "codex" <<<"$out" && bad "codex: line shown while the profile is off: $out" || ok "codex: profile off → no line"
+out=$($ORCH status); grep -q "Codex subscription" <<<"$out" && bad "codex: status line while the profile is off" || ok "codex: profile off → no Codex status line"
+rm -f "$ORCH_HOME/profiles.json"
+
+echo "── session tokens per provider (their own status line)"
+rm -rf "$T/cx9"; mkdir -p "$T/cx9/sessions/2026/11/02"
+export CODEX_HOME; CODEX_HOME="$(native "$T/cx9")"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx9/sessions/2026/11/02/rollout-0001.jsonl")" 81 2 20 168
+TCFG="$T/claude-cfg/projects/$(native "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"; mkdir -p "$TCFG"
+$PY - "$(native "$TCFG/sess-tok.jsonl")" <<'EOF'
+import json, sys
+c = lambda o: json.dumps(o, separators=(",", ":"))
+def a(mid, inp, cw, cr, out):
+    return c({"type": "assistant", "timestamp": "2026-11-02T10:00:00.000Z",
+              "message": {"id": mid, "model": "claude-opus-5-5",
+                          "usage": {"input_tokens": inp, "cache_creation_input_tokens": cw,
+                                    "cache_read_input_tokens": cr, "output_tokens": out}}})
+open(sys.argv[1], "w", encoding="utf-8").write(
+    a("t1", 1000, 200, 5000, 100) + "\n" + a("t2", 300, 0, 1000, 50) + "\n")
+EOF
+$PY - "$(native "$ORCH_HOME/usage.jsonl")" <<'EOF'
+import json, sys
+def rec(prov, model, inp, out):
+    return json.dumps({"kind": "run", "session": "sess-tok", "provider": prov, "model": model,
+                       "usage": {"input_tokens": inp, "cached_input_tokens": 0, "output_tokens": out}})
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(rec("codex", "gpt-6.1-terra", 400, 40) + "\n")
+    f.write(rec("deepseek", "deepseek-v4-pro", 500, 60) + "\n")
+EOF
+out=$(printf '{"session_id":"sess-tok","transcript_path":"%s","workspace":{"current_dir":"%s"}}' \
+      "$(native "$TCFG/sess-tok.jsonl")" "$(native "$REPO")" | $ORCH statusline)
+contains "$out" "codex 5h 81%" "status line: codex limits part"
+contains "$out" "week 20%" "status line: codex week part"
+contains "$out" "session in/out: claude 1.5k/150 · codex 400/40 · deepseek 500/60" "session tokens: claude from the transcript, runs from the ledger"
+[[ "$(sed -n 2p <<<"$out")" == "codex 5h 81%"* && "$(sed -n 3p <<<"$out")" == "session in/out: "* ]] \
+  && ok "Codex limits and session tokens are on lines of their own" || bad "status line layout: $out"
+out=$(printf '{"session_id":"sess-tok","transcript_path":"%s","workspace":{"current_dir":"%s"}}' \
+      "$(native "$TCFG/sess-tok.jsonl")" "$(native "$REPO")" | $ORCH statusline --then "echo mine")
+contains "$out" "^mine  " "statusline --then: the operator's own line stays first"
+contains "$out" "session in/out: claude 1.5k/150" "statusline --then keeps the Codex and session lines"
+$ORCH usage --session sess-tok --json > "$T/usage-tok.json"
+$PY - "$(native "$T/usage-tok.json")" <<'EOF' && ok "session tokens agree with orch usage --session" || bad "session tokens disagree with orch usage"
+import json, sys
+rows = json.load(open(sys.argv[1], encoding="utf-8"))["rows"]
+by = {}
+for r in rows:
+    u = r.get("usage") or {}
+    by[r["who"]] = (int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0))
+assert by["orchestrator"] == (1500, 150), by
+assert by["codex"] == (400, 40), by
+assert by["deepseek"] == (500, 60), by
+EOF
+INCF="$TCFG/sess-inc.jsonl"
+$PY - "$(native "$INCF")" <<'EOF'
+import json, sys
+c = lambda o: json.dumps(o, separators=(",", ":"))
+open(sys.argv[1], "w", encoding="utf-8").write(c({"type": "assistant", "timestamp": "2026-11-02T10:00:00.000Z",
+    "message": {"id": "i1", "model": "claude-opus-5-5",
+                "usage": {"input_tokens": 1000, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 5000, "output_tokens": 100}}}) + "\n")
+EOF
+out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
+contains "$out" "session in/out: claude 1.2k/100" "first run counts the transcript once"
+$PY - "$(native "$INCF")" <<'EOF'
+import json, sys
+c = lambda o: json.dumps(o, separators=(",", ":"))
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(c({"type": "assistant", "timestamp": "2026-11-02T10:05:00.000Z",
+               "message": {"id": "i2", "model": "claude-opus-5-5",
+                           "usage": {"input_tokens": 300, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 1000, "output_tokens": 50}}}) + "\n")
+EOF
+out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
+contains "$out" "session in/out: claude 1.5k/150" "appended lines are counted once (not re-read)"
+$PY - "$(native "$INCF")" <<'EOF'
+import json, sys
+c = lambda o: json.dumps(o, separators=(",", ":"))
+open(sys.argv[1], "w", encoding="utf-8").write(c({"type": "assistant", "timestamp": "2026-11-02T10:06:00.000Z",
+    "message": {"id": "i3", "model": "claude-opus-5-5",
+                "usage": {"input_tokens": 500, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 30}}}) + "\n")
+EOF
+out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
+contains "$out" "session in/out: claude 500/30" "a shrunken transcript restarts from scratch"
+out=$(printf '{"session_id":"sess-empty","workspace":{"current_dir":"%s"}}' "$(native "$REPO")" | $ORCH statusline)
+grep -q "session in/out:" <<<"$out" && bad "session line shown with no tokens" || ok "no session line with no tokens"
+
+echo "── rounding"
+now=$($PY -c "import time; print(int(time.time()))")
+out=$(sl 82.6 $((now + 7200))); contains "$out" "5h 83%" "Claude status line rounds 82.6 → 83"
+out=$($ORCH status); contains "$out" "Claude subscription: 5-hour window 83% used" "Claude subscription line rounds 82.6 → 83"
+$PY "$(native "$T/gen_rollout.py")" "$(native "$T/cx9/sessions/2026/11/02/rollout-0001.jsonl")" 82.6 2 20 168
+$PY - "$(native "$ORCH_HOME/codex_usage.json")" "$(native "$T/cx9")" <<'EOF'
+import datetime as dt, json, sys
+p, home = sys.argv[1], sys.argv[2]
+d = json.load(open(p, encoding="utf-8"))
+for entry in d.values():                  # let the once-a-minute refresh run again (keys are native paths)
+    if isinstance(entry, dict) and entry.get("updated"):
+        entry["updated"] = (dt.datetime.now().astimezone() - dt.timedelta(minutes=5)).isoformat(timespec="seconds")
+json.dump(d, open(p, "w", encoding="utf-8"))
+EOF
+out=$(cx_status); contains "$out" "codex 5h 83%" "codex status line rounds 82.6 → 83"
+CODEX_HOME="$(native "$T/no-codex")"
 
 echo "── review regressions (isolated processes and deterministic snapshots)"
 review=$($PY -B - "$(native "$PLUGIN/bin/orch")" "$(native "$T/review")" <<'EOF'

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+- **Codex limits in routing**: `orch status` reads the Codex account's rate limits from its session logs
+  (`$CODEX_HOME/sessions/…/rollout-*.jsonl`, parsed defensively — the format is undocumented) and shows a
+  `Codex subscription: 5-hour window … week …` line next to the Claude one, with `TIGHT: treat Codex as low`
+  when a window or its projection reaches the reserve. The mode is announced as a `💡` event on change, like the
+  Claude budget. No line when there is no current snapshot or the `codex` profile is `off`.
+- **Status line**: two more lines, each left out when it has no data. The Codex limits, and `session in/out:` with
+  the current session's cumulative tokens per provider (claude from the transcript, codex/deepseek from the usage
+  ledger), in compact `k`/`M` form and without cache reads, agreeing with `orch usage`. Reads are incremental and
+  cached per session. With `--then`, your own line stays first and these lines still follow.
+- **Rounding**: percentages in the status line and `Claude subscription:` line are rounded to the nearest
+  integer instead of truncated.
+- **Worker write scope**: the write permission of DeepSeek and Claude executors no longer shrinks after they
+  `cd` to another directory.
+
 ## 0.7.0
 
 - **Recovery**: corrupt rebuildable state is preserved before reset; damaged task records are skipped in reports,

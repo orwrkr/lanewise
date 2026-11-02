@@ -163,6 +163,12 @@ sessions with the plugin seen in the last 15 minutes and running `orch run claud
 DeepSeek doesn't count. The thresholds live in the `claude` profile: `--opt reserve=25` (keep more for other
 sessions), `week_reserve=15`, `surplus=50`, or `surplus=off` to switch the mode off.
 
+Codex's limits are read the same way from its own session logs (`$CODEX_HOME/sessions/…`, an undocumented format
+parsed defensively) and shown as a `Codex subscription: …` line next to the Claude one, with `TIGHT: treat Codex
+as low` when a window or its projection reaches the reserve — see the `codex` profile's `reserve`/`week_reserve`.
+The status line gets two more lines: the Codex limits, and `session in/out: claude 370k/111k · codex 450k/84k`, the
+current session's tokens per provider, without cache reads, which agrees with `orch usage`.
+
 ## DeepSeek as the lead
 
 When Claude limits run out, to save Claude quota, or for a setup without Claude at all, start the session with
@@ -342,6 +348,8 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `~/.orchestra/profiles.json` | executor profiles, defaults and project bindings (`orch profile …`) |
 | `~/.orchestra/usage.jsonl` | usage log: runs, manual tasks, session snapshots (`orch usage`) |
 | `~/.orchestra/claude_usage.json` | the Claude subscription's last known window usage and its recent history, for the budget mode (`orch budget`) |
+| `~/.orchestra/codex_usage.json` | the Codex account's last known limits, per `CODEX_HOME` (the `Codex subscription:` line) |
+| `~/.orchestra/session_tokens.json` | per-session byte offsets and running token totals, for the status line's session part |
 | `~/.orchestra/sessions.json` | active orchestrator sessions and Claude executor runs: the budget's consumer count |
 | `~/.orchestra/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
 | `<project>/.orchestra/runs/` | executor runs: prompt, role, project rules, response, log, tokens |

@@ -23,7 +23,8 @@ files `reference/*.md` next to this one) — read one when you reach its topic.
    model there; Claude is reachable only as `orch run claude`, if its profile allows).
    `Claude subscription: … SURPLUS` (or a `💡` event) — the 5-hour window would expire with a lot unused beyond the
    reserve: give Claude what would go to API-billed executors (DeepSeek, API-key profiles), within your session's
-   share; `TIGHT` — treat Claude as `low`. `orch guide budget`.
+   share; `TIGHT` — treat Claude as `low`. A `Codex subscription: … TIGHT` line (or its `💡` event) — treat Codex
+   as `low` and offload to other providers. `orch guide budget`.
 2. Registry — once per session (and whenever the operator changed it): `orch registry show`. It holds slots
    (provider × model × effort), cost, `max_difficulty`, `good_for`, operator parameters, routes (`routing`).
 3. A slot is unavailable if `orch status` shows a restriction on its key or on its provider's key

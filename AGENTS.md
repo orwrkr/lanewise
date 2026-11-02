@@ -46,8 +46,9 @@ Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry
 
 - `orch` and the adapters — Python standard library only, compatible with 3.8 (`vermin -t=3.8- bin/orch
   adapters/codex adapters/deepseek adapters/claude adapters/_claude_headless.py`).
-- No machine-specific content: no absolute paths, user names, distro names or personal settings in code, docs or
-  tests (examples use `/path/to/…`, `<you>`); the repository works from any location.
+- No machine-specific content: no absolute paths, user names, distro names or personal settings in code, docs,
+  tests or commit messages (examples use `/path/to/…`, `<you>`; test data, the user `me`); the repository works from any
+  location. `tests/check_portable.py` enforces this in the self-test and in the git hooks (`.githooks`); don't bypass it.
 - Cross-platform: paths — via `pathlib`, output — UTF-8 (`utf8_stdio`), shell adapters on Windows run through
   Git Bash (`find_bash`, not `System32\bash.exe` — that is WSL), the executor's process tree — a Job Object on
   Windows, a process group on POSIX.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.15.0
+
+- **A settings guide, so any project's session can discuss the plugin's settings** (`orch guide settings`): one
+  place that says what can be configured, where it is stored and what it reaches, starting with the split between
+  what is scoped to this project and what is personal (`~/.orchestra/`). It maps each topic — executor profiles,
+  API keys, spend limits, subscription budgets, availability, the registry, the status line — to its command and
+  points to the deeper guides instead of repeating them, and ends with how a project's own process takes precedence.
+- **The `orchestrate` skill now loads for configuration and spend-limit questions**: its `description` names "how to
+  configure the plugin" and "spend limits", the guide list includes `settings`, and the profiles section points
+  setup questions to `orch guide settings`. The two places that still called a spend limit "monthly" now say what it
+  is — a manual counter for a prepaid key, not a monthly one.
+- **`/orchestra:profile` points broader setup questions at the settings guide**.
+- The self-test covers the new guide: it is served as a topic, names `secrets.env` and `orch registry show`, and the
+  skill's description names configuration.
+
 ## 0.14.0
 
 - **The weekly TIGHT alarm no longer fires on a stale burst**: the weekly projection used to be the whole week's

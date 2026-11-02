@@ -119,6 +119,10 @@ Out of balance (HTTP 402) → exit 75, and DeepSeek is blocked until `orch quota
 
 Usually there is nothing special to do: give it a task and the skill kicks in on its own. To invoke it explicitly:
 
+Configuring the plugin is done in the session, in plain words; "how do I set this up here?" is answered by the
+[`settings` guide](skills/orchestrate/reference/settings.md) (`orch guide settings`), which maps every setting to its
+command, storage and scope.
+
 | Command | What it does |
 |---|---|
 | `/orchestra:run <task>` | split → assign models and effort → execute |

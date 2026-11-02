@@ -1,0 +1,129 @@
+# Settings — what is configurable, where it lives, what it reaches
+
+This is the map for "how do I set this plugin up here?". Each topic names its command and points to the deeper
+guide; check the exact flags with `--help`. Almost everything is configured in the session, in plain words.
+
+## This project vs. every project
+
+Every setting is either scoped to **this project** (a path binding, a project file) or **personal, for every
+project** (files under `~/.orchestra/`). Personal data never goes into a repository.
+
+**This project only:**
+
+| Setting | Command / file | Stored |
+|---|---|---|
+| Project registry | `orch registry init --project` → `<project>/.orchestra/providers.yaml` | in the project, git-excluded |
+| Profile for this project | `orch profile use <provider> <profile|off>` | `~/.orchestra/profiles.json`, keyed by path |
+| Profile for a directory above it | `orch profile use <provider> <profile> --path /path/to/dir` | same file |
+| This project's own spend limit / mode | `orch spend limit <scope> N --project` | `~/.orchestra/spend_limits.json`, keyed by path |
+| Claude key profile's `apiKeyHelper` | written by `orch profile use claude <key-profile>` | `.claude/settings.local.json`, git-excluded |
+
+**Every project (personal, under `~/.orchestra/`):**
+
+| Setting | Command / file |
+|---|---|
+| API key values | `~/.orchestra/secrets.env` (edited by hand) |
+| Personal registry | `orch registry init` → `~/.orchestra/providers.yaml` |
+| Profile definitions and provider defaults | `orch profile set …`, `orch profile use … --default` → `profiles.json` |
+| Spend limits, modes, price table | `orch spend …` → `spend_limits.json`; `prices.json` |
+| Availability ("away", "out until …") | `orch quota set|clear` → `availability.json` |
+| Status line | `"statusLine": { … "orch statusline" }` in Claude Code settings |
+
+Bindings and spend limits sit in the shared files but are **path-keyed**, so a project keeps its own effective
+values while the file is shared. `ORCH_HOME` relocates all of `~/.orchestra/` (separate per OS unless shared).
+
+## Executor profiles — `orch guide profiles`
+
+A profile is one executor's settings: which key or account, which models and efforts, whether it may write, which
+tasks to use it for, free-form rules.
+
+- Change: `orch profile set <provider> <name> …` (create/edit) and `orch profile use <provider> <profile|off|inherit>`
+  (bind), or `/orchestra:profile`.
+- Fields (`orch profile set --help`): `--key NAME`, `--home` / `--codex-profile` (a second Codex account),
+  `--models`, `--max-effort`, `--write yes|no`, `--use-for`, `--prefer-for`, `--rules`, `--max-open` (manual lane),
+  and adapter extras via `--opt FIELD=VALUE` (the Claude budget's `surplus`, `reserve`, `week_reserve`; Codex's
+  `reserve`, `week_reserve`).
+- Scope: no qualifier = this project; `--default` = every project; `--path /path/to/dir` = a directory above this
+  project; `inherit` removes the binding; `off` disables the provider.
+- Precedence: `--profile` on a run → session choice (`ORCH_PROFILES`, `orch launch --no-claude` / `--use`) →
+  project / directory binding → provider default → the built-in `default`.
+- `orch` enforces `off`, `models`, the effort ceiling, the write ban and `max_open`; you honour `use_for`,
+  `prefer_for` and `rules` when routing. A broken `profiles.json` refuses runs rather than silently re-enabling.
+
+## API keys
+
+A profile stores **only the variable name** (`--key DEEPSEEK_API_KEY_WORK`); the value is a line
+`DEEPSEEK_API_KEY_WORK=sk-…` in `~/.orchestra/secrets.env` — the one place keys live, and only adapters that declare
+`# orch-secrets: …` ever receive a value. A session **never asks for a key's value, never prints it and never reads
+that file**; it only ever says "add `NAME=sk-…` to `~/.orchestra/secrets.env`". `orch doctor` reports whether each
+declared key is set (`✔` / missing) without showing the value. A profile's `key` is explicit-only: a stray `NAME=…`
+line alone never switches a login profile to API billing.
+
+## Spend limits — `orch guide spend`
+
+Caps what API-billed executors spend (DeepSeek always; Codex/Claude only on a `key` profile), enforced by `orch`
+(`--force` does not bypass it). Two reset kinds: **manual** for a prepaid key, **month** for a periodic bill.
+
+- Limit: `orch spend limit <scope> N` (or `off`); scope is `default`, a provider, or `<provider>@<profile>`;
+  `--reset month|manual`; `--project` for this project's own counter.
+- Mode: `orch spend mode <scope> stop|evaluate|continue [--lead] [--overrun PCT]`.
+- After a top-up: `orch spend reset <scope> [--limit N]` (counts from zero from now).
+- Personal price table: `~/.orchestra/prices.json` overrides the built-in `registry/prices.json`.
+- Stored in `~/.orchestra/spend_limits.json`; a broken file refuses runs and writes.
+
+## Subscription budgets — `orch guide budget`
+
+The Claude (and Codex) subscription's 5-hour window and weekly limit, projected to warn of a surplus or a squeeze.
+
+- Thresholds live in the profile: `orch profile set claude <name> --opt reserve=25 --opt week_reserve=15
+  --opt surplus=40` (Codex: `reserve`, `week_reserve` only, no surplus).
+- `orch budget` shows the numbers, the active consumers and the thresholds; without the status line, report them with
+  `orch budget set --used 40 --resets 18:00`.
+- The numbers come from the status line (below) and are account-wide.
+
+## Availability — `orch guide quota`
+
+"Codex is out until 18:00", "topped up DeepSeek", "I'm away" → `orch quota set|clear`.
+
+- Keys: a provider (`codex`), provider/model (`codex/gpt-6.1-sol`), a profile (`deepseek@work` — its own key), or
+  `operator` (the whole manual lane). Statuses: `low`, `exhausted`, `disabled`, `away`.
+- "I'm away" → `orch quota set operator away --until 19:00`; "I'm back" → `orch quota clear operator`.
+- Stored in `~/.orchestra/availability.json`, shared by all projects; `--until` lifts on its own.
+
+## The registry — `orch registry show`
+
+The built-in `providers.yaml` plus your personal copy. What is in effect for this project: `orch registry show`
+(the file) / `orch registry path` (its path). Precedence: `<project>/.orchestra/providers.yaml`, then
+`~/.orchestra/providers.yaml`, then the built-in one. Make a copy to edit: `orch registry init` (personal) or
+`--project` (this project).
+
+It holds the **slots** (provider × model × effort, with cost, `max_difficulty`, `good_for`), the **routes**
+(`routing`), `policy.never_auto` (slots that need explicit permission), and the **`operator`** manual-lane parameters
+(`min_task_minutes`, `max_open_handoffs`, `max_offers`, `pool_check_min`, `pickup_reminder_min`, `reassign_after_min`,
+`batch_small_tasks`). `orch doctor` checks the whole setup (keys, logins, profiles, registry, PATH).
+
+## The status line
+
+One line in Claude Code's settings, set once (or ask `/statusline`):
+
+```json
+"statusLine": {"type": "command", "command": "orch statusline"}
+```
+
+It feeds the budget mode and the session count from every session that shows it, and prints the limits, the mode and
+`Session in/out` tokens; it never reaches the model, so it costs nothing. Keep your own: `orch statusline --then
+"<your command>"`.
+
+## What is not a setting
+
+Some rules hold everywhere and are not configurable: manual agents are never automated (no `agy`, computer use, text
+pasting or OAuth — a ToS ban); keys never go into the repository; executors don't delegate; a worker never sees the
+operator's Anthropic credentials. These are fixed for safety, not knobs.
+
+## Projects with their own process
+
+A project's own workflow and commit rules come **first** — the plugin is a tool inside that process, not above it.
+When the operator records a decision, do it where the project asks; `.orchestra/` is local and outside git, so it is
+the place for plugin state, not for the project's own notes. The project's `CLAUDE.md` and `AGENTS.md` reach every
+executor on their own, exactly once, so a constraint on all work there belongs in them. A profile's `rules` are for
+you, the orchestrator: `orch` only shows them, and you follow them when routing and writing the task.

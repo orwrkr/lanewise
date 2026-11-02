@@ -2394,10 +2394,13 @@ contains "$out" "Codex login *Logged in" "doctor checks the codex login"
 
 echo "── guide, footprint, plugin wiring"
 out=$($ORCH guide); contains "$out" "manual" "guide lists the reference parts"
-for t in manual profiles quota usage spend; do
+for t in manual profiles quota usage spend settings; do
   out=$($ORCH guide $t); [[ -n "$out" ]] && ok "guide $t" || bad "guide $t empty"
 done
 $ORCH guide nope >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "unknown guide topic refused" || bad "guide nope accepted"
+out=$($ORCH guide settings); contains "$out" "secrets.env" "settings guide names secrets.env"
+contains "$out" "orch registry show" "settings guide names orch registry show"
+grep -q 'description:.*config' "$PLUGIN/skills/orchestrate/SKILL.md" && ok "skill description names configuration" || bad "skill description does not name configuration"
 out=$($ORCH footprint); contains "$out" "$ORCH_HOME" "footprint names ORCH_HOME"
 contains "$out" "  project .*proj.*\.orchestra" "footprint lists project state"
 contains "$out" "claude plugin uninstall orchestra@orchestra " "footprint shows the standard uninstall"

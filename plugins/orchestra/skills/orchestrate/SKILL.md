@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Distributes tasks and subtasks among Claude models (subagents), OpenAI Codex CLI, DeepSeek (API key) and manual agents (Antigravity and similar, via a task pool) — picking model and effort by difficulty, accounting for subscription limits, balance, operator availability and the project's executor profiles (which DeepSeek key, which Codex account, whether the manual lane is allowed). Use when planning and executing any multi-step task, when choosing a model/effort for a subtask, when the user reports a limit/balance exhausted or restored, takes a task from the pool, reports a manual task finished/cancelled, says they are leaving or back, asks to enable/disable an executor or switch key/account/profile, asks about token usage, and when "Orchestra" events arrive.
+description: Distributes tasks and subtasks among Claude models (subagents), OpenAI Codex CLI, DeepSeek (API key) and manual agents (Antigravity and similar, via a task pool) — picking model and effort by difficulty, accounting for subscription limits, balance, operator availability and the project's executor profiles (which DeepSeek key, which Codex account, whether the manual lane is allowed). Use when planning and executing any multi-step task, when choosing a model/effort for a subtask, when the user reports a limit/balance exhausted or restored, takes a task from the pool, reports a manual task finished/cancelled, says they are leaving or back, asks to enable/disable an executor or switch key/account/profile, asks how to configure the plugin or about spend limits, asks about token usage, and when "Orchestra" events arrive.
 ---
 
 # Orchestra — multi-model orchestration
@@ -14,7 +14,7 @@ manual lane. Talk to the operator in their language, briefly.
 PowerShell — `orch.cmd`). Exit codes: `0` report available (read STATUS) · `75` limit/balance/capacity/profile/lane unavailable → take the fallback ·
 `124` timeout · `2` manual task ended with status BLOCKED/FAILED · `3` (`handoff wait --any`) a pool check is due.
 Detailed sections of this skill: `orch guide <section>` (`manual`, `quota`, `profiles`, `usage`, `lead`, `budget`,
-`spend`; files `reference/*.md` next to this one) — read one when you reach its topic.
+`spend`, `settings`; files `reference/*.md` next to this one) — read one when you reach its topic.
 
 ## 1. Before planning
 
@@ -86,7 +86,7 @@ the project rules (CLAUDE.md, AGENTS.md) itself — put only the task in the pro
    `[FAILED]/[QUOTA_EXHAUSTED]/[SPEND_LIMIT]/[TIMEOUT]`, tokens, the answer, paths to `output.md` and `log.txt`.
    On timeout or a spend limit `orch` stops the executor's whole process tree.
 6. Exit 75: limit/balance/capacity — take the fallback; `orch quota` records the block (a profile has its own key,
-   `deepseek@work`) — go straight to the fallback. `SPEND_LIMIT` — the scope hit its monthly USD cap (`orch spend`,
+   `deepseek@work`) — go straight to the fallback. `SPEND_LIMIT` — the scope hit its USD cap (`orch spend`,
    `orch guide spend`): route to a lane that doesn't bill that key. `PROFILE_OFF` / `PROFILE_DENIED` — the profile
    doesn't allow it: pick an allowed slot, don't work around it.
 7. **Always verify** the result (diff, tests, build), then cross-review if the code is significant.
@@ -121,7 +121,7 @@ The operator talks about limits in plain words ("Codex is out until 18:00", "top
 
 "Don't use DeepSeek in this project", "use the work key here", "Codex off by default", "second Codex account",
 "don't offer Antigravity here", "no Claude in this project" → `orch profile use|set …` per `orch guide profiles`. `/orchestra:profile` does the
-same.
+same. Questions about how to set the plugin up go to `orch guide settings`.
 
 ## 8. Verification, report, usage
 
@@ -141,5 +141,5 @@ same.
 - Don't run two writing executors on the same files in the same working tree.
 - Don't give DeepSeek broad permissions (`--allow 'Bash'`, `--allow 'Bash(*)'`) — only the task's specific commands.
 - Don't work around the profile: `--profile` and `--force` — only at the operator's direct request (`--force` does
-  not unlock a disabled manual lane, bypass a profile's `max_open` or a monthly spend limit).
+  not unlock a disabled manual lane, bypass a profile's `max_open` or a spend limit).
 - Don't ask for, post in chat or store API keys — the profile holds only the variable name.

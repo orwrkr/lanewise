@@ -16,3 +16,5 @@ Translate the request into `orch profile …` commands per `orch guide profiles`
    Codex account, give the operator the login command from the output (`! CODEX_HOME=… codex login`).
 4. Show the result of `orch profile show`. If the plan has unstarted subtasks on executors that are now disabled or
    restricted — replan them and say what changed.
+5. A broader "how do I set this plugin up here?" question (keys, spend limits, availability, the registry) →
+   `orch guide settings`.

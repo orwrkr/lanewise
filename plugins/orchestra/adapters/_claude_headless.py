@@ -95,8 +95,38 @@ def command(claude, model, run_dir, isolation, extra_args, say):
     return cmd
 
 
+def clean_live_usage(u, model):
+    """A message's usage → the ledger shape: uncached input (incl. cache writes), cache reads, output."""
+    return {"input_tokens": int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0),
+            "cached_input_tokens": int(u.get("cache_read_input_tokens") or 0),
+            "output_tokens": int(u.get("output_tokens") or 0), "model": model}
+
+
+def write_live(run_dir, live):
+    """The running total of a run's token usage → usage_live.json (for orch's mid-run spend check)."""
+    total = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
+    per_model = {}
+    for u in live.values():
+        total["input_tokens"] += u["input_tokens"]
+        total["cached_input_tokens"] += u["cached_input_tokens"]
+        total["output_tokens"] += u["output_tokens"]
+        t = per_model.setdefault(u["model"], {"input_tokens": 0, "output_tokens": 0})
+        t["input_tokens"] += u["input_tokens"]
+        t["output_tokens"] += u["output_tokens"]
+    if per_model:
+        total["model"] = max(per_model, key=lambda m: per_model[m]["output_tokens"])
+        if len(per_model) > 1:
+            total["models"] = per_model
+    try:
+        (Path(run_dir) / "usage_live.json").write_text(json.dumps(total), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def run(cmd, env):
     """Run the worker on ORCH_PROMPT_FILE; condense stream-json into the run log. → (result event or None, rc)."""
+    run_dir = Path(os.environ["ORCH_RUN_DIR"])
+    live = {}                      # message id → usage, so the running total never double-counts a resend
     with open(os.environ["ORCH_PROMPT_FILE"], "rb") as prompt:
         proc = subprocess.Popen(cmd, cwd=os.environ["ORCH_CWD"], env=env, stdin=prompt, stdout=subprocess.PIPE)
         result = None
@@ -110,6 +140,12 @@ def run(cmd, env):
                 print(line, flush=True)
                 continue
             kind = ev.get("type")
+            if kind == "assistant":
+                msg = ev.get("message") or {}
+                mid, model, u = msg.get("id"), msg.get("model"), msg.get("usage") or {}
+                if mid and model and isinstance(u, dict) and not str(model).startswith("<"):
+                    live[mid] = clean_live_usage(u, model)
+                    write_live(run_dir, live)
             content = (ev.get("message") or {}).get("content") if kind in ("assistant", "user") else None
             for block in content if isinstance(content, list) else []:
                 if block.get("type") == "tool_use":

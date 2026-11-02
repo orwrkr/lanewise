@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "note": "USD per 1,000,000 tokens, used by `orch spend` to estimate API-billed spend (DeepSeek always; Codex/Claude when a profile has `key`). input = uncached input (the ledger folds cache writes into input, priced at the input rate); cache_read = cache hits; output. cache_write is informational only (the estimate never uses it). A personal copy at ~/.orchestra/prices.json overrides entries. DeepSeek prices are its peak rates, halved outside the peak windows (`off_peak_multiplier` 0.5): 01:00-04:00 and 06:00-10:00 UTC Monday-Friday; weekends are off-peak. Chinese public holidays are also off-peak on DeepSeek's page but are not modelled here — on those days the estimate errs high, which is accepted. DeepSeek's cache-write rate is not listed; its 5-minute cache-write rate matches Claude's, and using it (folded into input) is accepted over Anthropic's higher 1-hour rate. A dated entry (`from`/`to`) prices a promotion that ends; an entry with only `from` is the current price. Verify against the official pages before relying on the numbers.",
+  "default": { "input": 3.00, "cache_read": 0.30, "output": 15.00 },
+  "sources": {
+    "claude":   { "as_of": "2026-11-02", "source": "platform.claude.com/docs/en/about-claude/pricing" },
+    "codex":    { "as_of": "2026-11-02", "source": "developers.openai.com/api/docs/pricing" },
+    "deepseek": { "as_of": "2026-11-02", "source": "api-docs.deepseek.com/quick_start/pricing" }
+  },
+  "usd_per_1m_tokens": {
+    "fable":   { "input": 10.00, "cache_read": 0.25, "cache_write": 12.50, "output": 50.00 },
+    "opus":    { "input": 4.00, "cache_read": 0.20, "cache_write": 5.00, "output": 20.00 },
+    "sonnet":  { "input": 2.00, "cache_read": 0.10, "cache_write": 2.50, "output": 10.00 },
+    "haiku":   { "input": 0.10, "cache_read": 0.01, "cache_write": 0.125, "output": 0.50 },
+    "gpt-6.1-sol":   { "input": 2.00, "cache_read": 0.10, "output": 10.00 },
+    "gpt-6.1-terra": { "input": 1.00, "cache_read": 0.05, "output": 5.00 },
+    "gpt-6-luna":    { "input": 0.10, "cache_read": 0.01, "output": 0.50 },
+    "gpt-6-astra": [
+      { "from": "2026-08-01", "to": "2026-11-01", "input": 5.00, "cache_read": 0.50, "output": 25.00 },
+      { "from": "2026-11-01", "input": 10.00, "cache_read": 1.00, "output": 50.00 }
+    ],
+    "gpt-5.6-sol":   { "input": 4.00, "cache_read": 0.40, "output": 20.00 },
+    "gpt-5.6-terra": { "input": 2.00, "cache_read": 0.20, "output": 12.00 },
+    "gpt-5.6-luna":  { "input": 0.20, "cache_read": 0.02, "output": 1.20 },
+    "deepseek-v4-pro": {
+      "input": 1.32, "cache_read": 0.044, "output": 3.96,
+      "off_peak_multiplier": 0.5,
+      "peak_days": ["mon", "tue", "wed", "thu", "fri"],
+      "peak_windows_utc": [["01:00", "04:00"], ["06:00", "10:00"]]
+    },
+    "deepseek-flash": {
+      "input": 0.30, "cache_read": 0.006, "output": 1.20,
+      "off_peak_multiplier": 0.5,
+      "peak_days": ["mon", "tue", "wed", "thu", "fri"],
+      "peak_windows_utc": [["01:00", "04:00"], ["06:00", "10:00"]]
+    }
+  }
+}

@@ -140,7 +140,14 @@ def handle(raw, state):
         state["errors"].append(line)
         return
     kind = ev["type"]
-    if kind.startswith("item."):
+    if kind == "thread.started":
+        tid = ev.get("thread_id")
+        if tid:
+            try:
+                Path(os.environ["ORCH_RUN_DIR"], "thread_id").write_text(str(tid), encoding="utf-8")
+            except OSError:
+                pass
+    elif kind.startswith("item."):
         err = log_item(ev)
         if err:
             state["errors"].append(err)

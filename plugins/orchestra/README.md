@@ -7,7 +7,7 @@ Claude Code stays in charge: it breaks the task down and decides on its own who 
 - **DeepSeek** — with an API key (paid from your balance), automatically, in the background, with the same tools Claude has;
 - **the manual task pool** — you pick a task yourself and hand it to Antigravity (or Cursor, etc.) with a single pasted line.
 
-It takes into account subscription limits and balance (which you report in plain words or which executors report themselves), your availability and the project's executor profiles. It keeps the manual channel off the critical path so you don't become the bottleneck, and for every session it keeps a log: which model did what and how many tokens it spent.
+It takes into account subscription limits and balance (which you report in plain words or which executors report themselves), your availability and the project's executor profiles, and it caps API-billed spend with a **spend limit** (`orch spend`, default $10 — a manual counter for prepaid keys, a monthly budget otherwise) so DeepSeek or a key profile cannot run up the bill. It keeps the manual channel off the critical path so you don't become the bottleneck, and for every session it keeps a log: which model did what and how many tokens it spent.
 
 Claude doesn't have to be the lead: `orch launch deepseek` starts the same setup with DeepSeek as the orchestrator, and `--no-claude` keeps Claude models out of it entirely (see [DeepSeek as the lead](#deepseek-as-the-lead)).
 

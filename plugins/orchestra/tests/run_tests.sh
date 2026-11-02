@@ -141,6 +141,15 @@ elif mode == "quota-text":      # failure whose log mentions limits: must not bl
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "quota.py has a rate limit bug (429)"}]}})
     emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "boom"})
     sys.exit(1)
+elif mode == "stream":          # reports a large usage mid-run, then keeps working (spend-limit stop tests)
+    import time
+    emit({"type": "assistant", "message": {"id": "stream-1", "model": opt("--model") or "deepseek-v4-pro",
+          "usage": {"input_tokens": int(os.environ.get("FAKE_STREAM_INPUT", "1000000")),
+                    "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0}}})
+    time.sleep(int(os.environ.get("FAKE_STREAM_SLEEP", "60")))
+    emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 2, "duration_ms": 1,
+          "result": "STATUS: DONE\nstreamed", "usage": {"input_tokens": 100, "cache_creation_input_tokens": 50,
+          "cache_read_input_tokens": 400, "output_tokens": 25}})
 EOF
 export FAKE_CLAUDE_LOG; FAKE_CLAUDE_LOG="$(native "$T/claude.json")"
 # check '<python expr over r (record) and a (argv)>' 'name'
@@ -1060,6 +1069,165 @@ contains "$out" "bills to the profile key" "status says the Claude profile bills
 rm -f "$ORCH_HOME/profiles.json" "$ORCH_HOME/sessions.json"
 rm -rf "$REPO/.claude"
 
+echo "── spend limits"
+SDIR="$T/spend-home"; SH="$(native "$SDIR")"
+SA="$(native "$T/spend-a")"; SB="$(native "$T/spend-b")"; SS="$(native "$T/spend-surf")"
+mkdir -p "$SDIR" "$T/spend-a" "$T/spend-b" "$T/spend-surf"
+printf 'DEEPSEEK_API_KEY=sk-spend\n' > "$SDIR/secrets.env"
+# a personal price with no peak windows keeps the checks deterministic (peak/off-peak are unit-tested in the
+# review): a fake deepseek run spends 150 input × $1.00/1M = $0.00015
+printf '{"usd_per_1m_tokens": {"deepseek-v4-pro": {"input": 1.0, "cache_read": 0.0, "output": 0.0}}}' > "$SDIR/prices.json"
+spend_run() { local d="$1"; shift; FAKE_CLAUDE=ok ORCH_HOME="$SH" ORCH_PROJECT_DIR="$d" $ORCH run deepseek --model deepseek-v4-pro "$@"; }
+spend_reset() { rm -f "$SDIR/spend_limits.json" "$SDIR/spend_cache.json" "$SDIR/spend_events.json" "$SDIR/usage.jsonl"; }
+
+# defaults ($10, evaluate) — show is read-only
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
+contains "$out" "deepseek" "spend show lists the API-billed scope"
+contains "$out" "10.00" "spend show default limit \$10"
+contains "$out" "evaluate" "spend show default executor mode"
+[[ -f "$SDIR/spend_limits.json" ]] && bad "spend show created state" || ok "spend show does not create state"
+
+# reset kinds: a key scope (deepseek) is manual, a keyless scope (codex) is month
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit codex 10 >/dev/null
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
+contains "$out" "manual" "a key scope (deepseek) defaults to a manual counter"
+contains "$out" "this month" "a keyless scope (codex) defaults to a monthly counter"
+spend_reset
+
+# limit/mode set, global by default and per project; the per-project limit wins, the global mode still applies
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 5)
+contains "$out" "global" "spend limit is global by default"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek stop)
+contains "$out" "executor mode: stop" "spend mode global"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 6 --project)
+contains "$out" "project" "spend limit per project"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
+contains "$out" "6.00" "per-project limit overrides the global one"
+contains "$out" "stop" "global mode still applies to the project"
+spend_reset
+
+# stop: a run already at the limit refuses before starting (exit 75); --force does not bypass
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek stop >/dev/null
+spend_run "$SA" "first" >/dev/null; expect_rc 0 $? "first run under the limit"
+out=$(spend_run "$SA" "second"); expect_rc 75 $? "stop mode: at the limit → refused"
+contains "$out" "SPEND_LIMIT" "stop refusal named SPEND_LIMIT"
+contains "$out" "orch spend reset deepseek" "a blocked manual scope names the reset that clears it"
+out=$(spend_run "$SA" --force "forced"); expect_rc 75 $? "--force does not bypass a spend limit"
+spend_reset
+
+# evaluate: refuses a new run at the limit like stop (the overrun only matters mid-run)
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
+spend_run "$SA" "one" >/dev/null; expect_rc 0 $? "evaluate: first run"
+out=$(spend_run "$SA" "two"); expect_rc 75 $? "evaluate: at the limit → refused"
+contains "$out" "SPEND_LIMIT" "evaluate refusal named SPEND_LIMIT"
+spend_reset
+
+# a run in progress is killed when it crosses the threshold: stop at 100%, evaluate past the overrun
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek stop >/dev/null
+out=$(FAKE_CLAUDE=stream FAKE_STREAM_INPUT=1000000 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH run deepseek --model deepseek-v4-pro "x"); rc=$?
+expect_rc 75 $rc "stop: a run crossing the limit mid-run is killed"
+contains "$out" "SPEND_LIMIT" "stop mid-run named SPEND_LIMIT"
+spend_reset
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek evaluate --overrun 20 >/dev/null
+out=$(FAKE_CLAUDE=stream FAKE_STREAM_INPUT=110 FAKE_STREAM_SLEEP=20 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH run deepseek --model deepseek-v4-pro "x"); rc=$?
+expect_rc 0 $rc "evaluate: a run past 100% but under the overrun finishes"
+spend_reset
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek evaluate --overrun 20 >/dev/null
+out=$(FAKE_CLAUDE=stream FAKE_STREAM_INPUT=1000000 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH run deepseek --model deepseek-v4-pro "x"); rc=$?
+expect_rc 75 $rc "evaluate: a run crossing the overrun mid-run is killed"
+contains "$out" "SPEND_LIMIT" "evaluate mid-run named SPEND_LIMIT"
+spend_reset
+
+# continue: warn only, never refuses
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek continue >/dev/null
+spend_run "$SA" "one" >/dev/null; expect_rc 0 $? "continue: first run"
+out=$(spend_run "$SA" "two"); expect_rc 0 $? "continue: a run at/over the limit still runs"
+contains "$out" "executor mode continue" "continue: warns instead of refusing"
+spend_reset
+
+# global vs per-project counters: a project with its own limit does not consume the global counter
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0003 --project >/dev/null   # $SA: its own counter
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0002 >/dev/null             # others share the global one
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek stop >/dev/null
+spend_run "$SB" "g1" >/dev/null; expect_rc 0 $? "global counter: first run"
+spend_run "$SB" "g2" >/dev/null; expect_rc 0 $? "global counter: second run"
+out=$(spend_run "$SB" "g3"); expect_rc 75 $? "global counter: at the global limit → refused"
+out=$(spend_run "$SA" "own"); expect_rc 0 $? "a project's own counter is unaffected by the global one"
+spend_reset
+
+# reset zeroes the counter at once; --limit sets a new limit in the same step
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek stop >/dev/null
+spend_run "$SA" "one" >/dev/null; expect_rc 0 $? "reset: first run"
+out=$(spend_run "$SA" "two"); expect_rc 75 $? "reset: at the limit → refused"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend reset deepseek)
+contains "$out" "manual counter" "reset names the counter kind"
+spend_run "$SA" "three" >/dev/null; expect_rc 0 $? "after a reset the same limit allows a run again"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend reset deepseek --limit 1)
+contains "$out" "1.00" "reset --limit sets a new limit in the same step"
+spend_reset
+
+# raising the limit above the spend unblocks (a manual counter keeps growing)
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 0.0001 >/dev/null
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend mode deepseek stop >/dev/null
+spend_run "$SA" "one" >/dev/null; expect_rc 0 $? "raise: first run"
+out=$(spend_run "$SA" "two"); expect_rc 75 $? "raise: blocked at the limit"
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 1 >/dev/null
+spend_run "$SA" "three" >/dev/null; expect_rc 0 $? "raising the limit above the spend unblocks"
+spend_reset
+
+# corrupt spend_limits.json: reads keep defaults, writes refuse, the file is left unchanged
+printf '{broken' > "$SDIR/spend_limits.json"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend limit deepseek 5 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "corrupt spend_limits.json: writes refused" || bad "corrupt spend_limits.json: write accepted (rc=$rc)"
+contains "$out" "unreadable" "corrupt spend_limits.json: error named"
+[[ "$(cat "$SDIR/spend_limits.json")" == "{broken" ]] && ok "corrupt spend_limits.json left unchanged" || bad "corrupt spend_limits.json modified"
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SA" $ORCH spend)
+contains "$out" "defaults shown" "corrupt spend_limits.json: defaults shown"
+contains "$out" "10.00" "corrupt spend_limits.json: default \$10 kept"
+rm -f "$SDIR/spend_limits.json"
+
+# surfaces at ≥ 80%: status, the status line, and a once-per-baseline 💡 event
+spend_ledger() { $PY - "$SH/usage.jsonl" "$1" <<'EOF'
+import datetime as dt, json, sys
+rec = {"kind": "run", "provider": "deepseek", "label": "deepseek", "model": "deepseek-v4-pro",
+       "billing": "api", "project": "spend-surf",
+       "usage": {"input_tokens": int(sys.argv[2]), "cached_input_tokens": 0, "output_tokens": 0},
+       "ts": dt.datetime.now().astimezone().isoformat(timespec="microseconds")}   # as ledger_append writes it
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(json.dumps(rec) + "\n")
+EOF
+}
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend reset deepseek >/dev/null   # baseline for the manual counter
+spend_ledger 8100000      # $8.10 of the default $10 → 81%
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH status)
+contains "$out" "API spend: deepseek" "status: spend line at ≥ 80%"
+contains "$out" "8.10" "status: spend amount"
+contains "$out" "81%" "status: spend percentage"
+out=$(printf '{"session_id":"s-spend","workspace":{"current_dir":"%s"}}' "$SS" | ORCH_HOME="$SH" $ORCH statusline)
+contains "$out" "8.10" "status line: spend fragment at ≥ 80%"
+out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook user-prompt)
+contains "$out" "80%" "spend event: 80% announced"
+contains "$out" "deepseek" "spend event: names the scope"
+out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook user-prompt)
+[[ -z "$out" ]] && ok "spend event: announced once" || bad "spend event: 80% repeated: $out"
+spend_ledger 2700000      # +$2.70 → $10.80, past the limit
+out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook user-prompt)
+contains "$out" "is at its spend limit" "spend event: 100% announced"
+contains "$out" "orch spend reset deepseek" "spend event: names the manual way out"
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend reset deepseek >/dev/null
+spend_ledger 8100000      # $8.10 again against the new baseline
+out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook user-prompt)
+contains "$out" "80%" "spend event: a reset re-arms the 80% event for the new baseline"
+spend_ledger 2700000      # $10.80 against the new baseline: the same event, through the other hook
+out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook post-tool)
+contains "$out" "is at its spend limit" "spend event: reaches the model through PostToolUse too"
+
 echo "── session tokens per provider (their own status line)"
 rm -rf "$T/cx9"; mkdir -p "$T/cx9/sessions/2026/11/02"
 export CODEX_HOME; CODEX_HOME="$(native "$T/cx9")"
@@ -1564,6 +1732,154 @@ def report_reclaimed():
         assert meta(hid)["reclaim"]["finished"]
     clear_tasks()
 
+def spend_limits():
+    peak = dt.datetime(2026, 11, 2, 2, 0, tzinfo=dt.timezone.utc)       # Monday 02:00 UTC — DeepSeek peak
+    offpeak = dt.datetime(2026, 11, 2, 12, 0, tzinfo=dt.timezone.utc)   # Monday 12:00 UTC — off-peak
+    u = {"input_tokens": 1_000_000, "cached_input_tokens": 0, "output_tokens": 0}
+
+    # prices: claude alias and codex prefix matching, default fallback
+    assert m.price_for("claude-sonnet-5-5-2026", "claude")["output"] == 10.0
+    assert m.price_for("gpt-6.1-terra-something", "codex")["input"] == 1.0
+    d = m.price_for("no-such-model", "deepseek")
+    assert d["input"] == 3.0 and d["output"] == 15.0
+    # DeepSeek peak vs off-peak (off_peak_multiplier 0.5 outside the weekday UTC windows)
+    assert m.price_for("deepseek-v4-pro", "deepseek", peak)["input"] == 1.32
+    assert m.price_for("deepseek-v4-pro", "deepseek", offpeak)["input"] == 0.66
+    assert m.price_for("deepseek-v4-pro", "deepseek", offpeak)["output"] == 1.98
+    assert abs(m.usage_cost(u, "deepseek", "deepseek-v4-pro", peak) - 1.32) < 1e-9
+    assert abs(m.usage_cost(u, "deepseek", "deepseek-v4-pro", offpeak) - 0.66) < 1e-9
+    # a dated price (gpt-6-astra): cheaper before the promo ends, higher after
+    assert m.price_for("gpt-6-astra", "codex", dt.datetime(2026, 10, 15, tzinfo=dt.timezone.utc))["input"] == 5.0
+    assert m.price_for("gpt-6-astra", "codex", dt.datetime(2026, 11, 5, tzinfo=dt.timezone.utc))["input"] == 10.0
+    # a personal ~/.orchestra/prices.json overrides per model, leaves the rest alone
+    (home / "prices.json").write_text(json.dumps(
+        {"usd_per_1m_tokens": {"deepseek-v4-pro": {"input": 1.0, "cache_read": 0.1, "output": 2.0}}}), encoding="utf-8")
+    assert m.price_for("deepseek-v4-pro", "deepseek", peak)["input"] == 1.0
+    assert m.price_for("deepseek-flash", "deepseek", peak)["input"] == 0.30
+    (home / "prices.json").unlink()
+    # staleness: prices older than 30 days warn and name the source; a fresh list doesn't
+    with mock.patch.object(m, "now", return_value=dt.datetime(2026, 11, 2, tzinfo=dt.timezone.utc)):
+        assert m.price_staleness("deepseek") is None
+    with mock.patch.object(m, "now", return_value=dt.datetime(2027, 1, 15, tzinfo=dt.timezone.utc)):
+        assert "api-docs.deepseek.com" in m.price_staleness("deepseek")
+
+    # cost_usd is frozen in the ledger and preferred over the table; sessions freeze spend_usd
+    assert abs(m._run_cost({"kind": "run", "provider": "codex", "model": "gpt-6.1-terra", "usage": u}) - 1.0) < 1e-9
+    assert m._run_cost({"kind": "run", "provider": "codex", "model": "gpt-6.1-terra", "usage": u, "cost_usd": 0.5}) == 0.5
+    assert m._session_cost({"kind": "session", "lead": "deepseek", "spend_usd": 0.75, "rows": []}) == 0.75
+
+    # counter key and effective settings: project → global → defaults
+    for p in (home / "spend_limits.json", home / "spend_cache.json", home / "spend_events.json", home / "usage.jsonl"):
+        if p.exists(): p.unlink()
+    cfg = m.load_spend_limits()[0]
+    canon = m.canon_path(proj)
+    cfg["projects"][canon] = {"deepseek": {"limit": 5}}
+    assert m.counter_key(cfg, "deepseek", canon)[0] == canon
+    assert m.counter_key(cfg, "deepseek", canon + "/sub")[0] == canon
+    assert m.counter_key(cfg, "codex", canon)[0] == "global"
+    eff = m.resolve_spend(cfg, "deepseek", proj)
+    assert eff["limit"] == 5 and eff["mode"] == "evaluate" and eff["lead_mode"] == "continue"
+    assert m.spend_kill_at({"limit": 10, "mode": "stop"}) == 10
+    assert m.spend_kill_at({"limit": 10, "mode": "evaluate", "overrun": 20}) == 12
+    assert m.spend_kill_at({"limit": 10, "mode": "continue"}) is None
+
+    # reset kinds: a key scope is manual, a keyless one is month; --reset overrides both ways
+    assert m.scope_has_key("deepseek", proj) is True
+    assert m.scope_has_key("codex", proj) is False
+    assert m.resolve_reset(cfg, "deepseek", proj) == "manual"
+    assert m.resolve_reset(cfg, "codex", proj) == "month"
+    cfg["global"]["deepseek"] = {"reset": "month"}
+    cfg["global"]["codex"] = {"reset": "manual"}
+    assert m.resolve_reset(cfg, "deepseek", proj) == "month"
+    assert m.resolve_reset(cfg, "codex", proj) == "manual"
+    # each message names the right way out per kind
+    assert "orch spend reset codex" in m._way_out(cfg, "codex", proj)          # manual → top up and reset
+    assert "orch spend limit deepseek" in m._way_out(cfg, "deepseek", proj)    # month → raise or wait
+
+    # baselines: a manual scope never rolls over, a month scope does
+    for p in (home / "spend_limits.json", home / "spend_cache.json", home / "spend_events.json", home / "usage.jsonl"):
+        if p.exists(): p.unlink()
+    t0 = dt.datetime(2026, 11, 15, 12, 0, tzinfo=dt.timezone.utc)
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["deepseek"] = {"limit": 10}
+    cfg["global"]["codex"] = {"limit": 10}
+    m.save_spend_limits(cfg)
+    with mock.patch.object(m, "now", return_value=t0):
+        assert m.ensure_baseline("deepseek", proj) == t0    # first seen: the baseline is written now
+    def mk(label, cost, ts):
+        return {"label": label, "project": canon, "cost": cost, "ts": m.iso(ts)}
+    manual = [mk("deepseek", 2.0, t0 + dt.timedelta(hours=1))]
+    month = [mk("codex", 3.0, t0 + dt.timedelta(hours=1))]
+    with mock.patch.object(m, "now", return_value=t0 + dt.timedelta(hours=2)):
+        assert abs(m.current_spend("deepseek", proj, manual) - 2.0) < 1e-9
+        assert abs(m.current_spend("codex", proj, month) - 3.0) < 1e-9
+    later = t0 + dt.timedelta(days=40)                      # the next calendar month
+    with mock.patch.object(m, "now", return_value=later):
+        assert abs(m.current_spend("deepseek", proj, manual) - 2.0) < 1e-9   # manual: never rolls over
+        assert m.current_spend("codex", proj, month) == 0.0                  # month: cleared
+
+    # a first-seen manual scope ignores spending from before it was seen; a reset zeroes it at once
+    for p in (home / "spend_limits.json", home / "spend_cache.json", home / "spend_events.json", home / "usage.jsonl"):
+        if p.exists(): p.unlink()
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["deepseek"] = {"limit": 10}
+    m.save_spend_limits(cfg)
+    with mock.patch.object(m, "now", return_value=t0):
+        m.ensure_baseline("deepseek", proj)                 # first seen at t0
+    old = [mk("deepseek", 5.0, t0 - dt.timedelta(days=1)), mk("deepseek", 2.0, t0 + dt.timedelta(hours=1))]
+    with mock.patch.object(m, "now", return_value=t0 + dt.timedelta(hours=2)):
+        assert abs(m.current_spend("deepseek", proj, old) - 2.0) < 1e-9   # the pre-baseline entry is ignored
+    cfg, _ = m.load_spend_limits()                          # a reset moves the baseline to now
+    m._baseline_section(cfg, "global")["deepseek"] = (t0 + dt.timedelta(hours=3)).isoformat()
+    m.save_spend_limits(cfg)
+    with mock.patch.object(m, "now", return_value=t0 + dt.timedelta(hours=4)):
+        assert m.current_spend("deepseek", proj, old) == 0.0                # reset zeroes the counter at once
+
+    # within one second: what ended just before a baseline stays out, what ended just after counts
+    base = t0.replace(microsecond=0) + dt.timedelta(hours=5, microseconds=500000)
+    cfg, _ = m.load_spend_limits()
+    m._baseline_section(cfg, "global")["deepseek"] = m.iso_precise(base)
+    m.save_spend_limits(cfg)
+    same_second = [{"label": "deepseek", "project": canon, "cost": 4.0,
+                    "ts": m.iso_precise(base - dt.timedelta(microseconds=400000))},
+                   {"label": "deepseek", "project": canon, "cost": 1.0,
+                    "ts": m.iso_precise(base + dt.timedelta(microseconds=1000))}]
+    with mock.patch.object(m, "now", return_value=base + dt.timedelta(hours=1)):
+        assert abs(m.current_spend("deepseek", proj, same_second) - 1.0) < 1e-9
+    usage_file = home / "usage.jsonl"
+    usage_file.unlink() if usage_file.exists() else None
+    m.ledger_append({"kind": "probe"})                      # the real writer keeps that resolution
+    assert "." in json.loads(usage_file.read_text(encoding="utf-8").splitlines()[-1])["ts"]
+
+    # the cache builds incrementally and restarts on a shrunken ledger (records keep ts, so resets apply at read time)
+    for p in (home / "spend_cache.json", home / "spend_limits.json", home / "spend_events.json", home / "usage.jsonl"):
+        if p.exists(): p.unlink()
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["codex"] = {"limit": 10}                  # a month scope needs no baseline
+    m.save_spend_limits(cfg)
+    def led(label, tokens, ts):
+        return json.dumps({"kind": "run", "provider": "codex", "label": label, "model": "gpt-6.1-terra",
+                           "billing": "api", "project": canon,
+                           "usage": {"input_tokens": tokens, "cached_input_tokens": 0, "output_tokens": 0},
+                           "ts": m.iso(ts)}, separators=(",", ":"))
+    ledger = home / "usage.jsonl"
+    fixed2 = dt.datetime(2026, 11, 15, 12, 0, tzinfo=dt.timezone.utc)
+    ledger.write_text(led("codex", 1_000_000, fixed2) + "\n", encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=fixed2):
+        records, _ = m.spend_cache_update()
+        assert abs(m.current_spend("codex", proj, records) - 1.0) < 1e-9
+        cache = m.read_json(home / "spend_cache.json", {})
+        assert cache["format"] == 2 and cache["offset"] > 0 and len(cache["records"]) == 1
+    with open(ledger, "a", encoding="utf-8") as f:          # appending reads only the new bytes
+        f.write(led("codex", 500_000, fixed2) + "\n")
+    with mock.patch.object(m, "now", return_value=fixed2):
+        records, _ = m.spend_cache_update()
+        assert abs(m.current_spend("codex", proj, records) - 1.5) < 1e-9
+    ledger.write_text(led("codex", 250_000, fixed2) + "\n", encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=fixed2):  # a shrunken ledger recomputes from zero
+        records, _ = m.spend_cache_update()
+        assert abs(m.current_spend("codex", proj, records) - 0.25) < 1e-9
+
 failed = 0
 for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", parallel_state),
                    ("1 atomic I/O failures, rollback, nested lock and crash release", state_failures),
@@ -1578,7 +1894,8 @@ for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", pa
                    ("10 blocked/partial ledger and model-only capacity fallback", run_outcomes),
                    ("review corrupt state recovery and operator protection", corruption_recovery),
                    ("review stale claims, late finishers and assignment failures", assignment_recovery),
-                   ("review report first status and reclaimed slot", report_reclaimed)]:
+                   ("review report first status and reclaimed slot", report_reclaimed),
+                   ("review monthly spend: prices, counters, cache restart", spend_limits)]:
     try:
         test()
         print("PASS " + name)
@@ -1607,7 +1924,7 @@ contains "$out" "codex login *Logged in" "doctor checks the codex login"
 
 echo "── guide, footprint, plugin wiring"
 out=$($ORCH guide); contains "$out" "manual" "guide lists the reference parts"
-for t in manual profiles quota usage; do
+for t in manual profiles quota usage spend; do
   out=$($ORCH guide $t); [[ -n "$out" ]] && ok "guide $t" || bad "guide $t empty"
 done
 $ORCH guide nope >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "unknown guide topic refused" || bad "guide nope accepted"

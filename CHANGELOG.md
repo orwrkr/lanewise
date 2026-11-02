@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.10.0
+
+- **Spend limits for API-billed executors**: `orch spend` caps how much DeepSeek (always) and Codex/Claude on a key
+  profile may spend — default $10, per scope (a profile label), with a global counter and a separate counter per
+  project that sets its own limit. `stop` refuses a new run at the limit and kills a running one that crosses it;
+  `evaluate` (the executor default) refuses at the start but lets a running one finish until the limit plus an
+  overrun (default 20%); `continue` (the lead default) only warns. `--force` does not bypass it, like profile
+  `max_open`. A refused or killed run exits 75 (`SPEND_LIMIT`); a killed run logs the partial usage it spent.
+- **Two kinds of limit**: a profile with an API key (prepaid — DeepSeek, Codex/Claude/Gemini on a key) has a
+  **manual** counter that never rolls over; it stays blocked until the operator tops up and `orch spend reset
+  <scope> [--limit N]` (the reset can also raise the limit). Everything else API-billed has a **monthly** counter
+  that clears on the 1st. `--reset month|manual` overrides the default per scope; `--project [PATH]` sets a
+  project's own counter; `orch spend limit default 20` sets the fallback.
+- **Lead spend**: the orchestrator itself on a key is governed by a separate lead mode — `orch launch` refuses at the
+  limit under `stop`/`evaluate`, and `orch key` (the apiKeyHelper) refuses past the threshold, which fails a Claude
+  session's requests. A DeepSeek lead has no per-request hook, so only `orch launch` refuses at the start.
+- **Live cost during a run**: headless adapters (DeepSeek, Claude) write `usage_live.json` per message; Codex's
+  mid-run usage is read from its rollout `token_count` (best-effort). `orch run` polls every ~15 s and stops the
+  whole process tree at the limit.
+- **Counting**: spend is estimated from the usage ledger (tokens × `registry/prices.json`, overridden by a personal
+  `~/.orchestra/prices.json`). The cost is frozen into each run's ledger entry as `cost_usd` (with the price
+  `as_of`), so later price changes don't rewrite history; entries without it are priced when read. Counters are
+  cached incrementally in `~/.orchestra/spend_cache.json` and restart on a shrunken ledger; a reset takes effect
+  at once. `prices.json` now holds dated entries (promotions that end) and DeepSeek peak windows — the peak rate
+  applies 01:00–04:00 and 06:00–10:00 UTC Mon–Fri and is halved otherwise. `orch spend` warns when a provider's
+  prices are older than 30 days.
+- **Surfaces**: `orch status` shows a line at ≥ 80%, the status line's `session in/out:` gains `deepseek $8.10/$10`,
+  and a `💡` event fires once per counter period (per month or per baseline) at 80% and 100%. New guide section
+  `orch guide spend`.
+
 ## 0.9.0
 
 - **Codex on an API key**: `orch profile set codex <name> --key VAR` now works like DeepSeek — the profile's key is

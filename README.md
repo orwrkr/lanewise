@@ -13,7 +13,9 @@ task down and decides who does each subtask, and at what effort:
 
 Routing follows a model registry (difficulty, cost, strengths, cross-review between model families), subscription
 limits and balance, your availability and per-project **executor profiles** (which key or account, which models,
-which rules — or `off`). Every session gets a **usage log**: which model did what and how many tokens it spent.
+which rules — or `off`). **Spend limits** cap what API-billed executors (DeepSeek, Codex/Claude on a key) may
+spend — a manual counter for prepaid keys, a monthly budget otherwise — `orch spend`. Every session gets a
+**usage log**: which model did what and how many tokens it spent.
 A **budget mode** watches the Claude subscription's 5-hour window: when it would expire largely unused, Claude takes
 the work that would otherwise cost money on API keys. Projections use each measurement's time; numbers older
 than 20 minutes cannot enable SURPLUS, and a weekly overrun raises TIGHT even without five-hour numbers.

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0
+
+- **Manual tasks survive a moved project folder and a Windows↔WSL switch**: `meta.json` no longer stores
+  absolute paths. `workdir`, `task_path` and `result_path` are written relative to the project root (forward
+  slashes), and a worktree task keeps its `../Project.wt/<id>` sibling path; only a path with no relative form
+  (a different drive on Windows, or one written by the other OS) stays absolute. In memory the same fields are
+  still absolute native paths — one conversion on load and one on save — so the board, the handoff card and
+  `orch handoff` output keep printing a full path for the current environment. The base is taken from where
+  `meta.json` lives, so the same commands work from a subdirectory. Old metas with absolute paths still load;
+  one under the current root becomes relative on the next save, one that isn't is left alone. `workdir_win` is
+  no longer stored — it is derived from the resolved workdir for display.
+
 ## 0.11.0
 
 - **One status line format for every provider**: Claude and Codex build their status-line part with the same

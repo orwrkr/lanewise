@@ -608,6 +608,54 @@ for i in 1 2 3 4 5; do printf 'x' | $ORCH handoff offer --title "bulk $i" --chec
 printf 'x' | $ORCH handoff offer --title "too many" >/dev/null; expect_rc 75 $? "pool size limited (max_offers)"
 git -C "$REPO" rm -q CLAUDE.md && git -C "$REPO" commit -qm "drop rules"
 
+echo "── handoff paths: relative on disk, absolute in output, move-safe"
+out=$(printf 'task' | $ORCH handoff new --title "paths" --max-open 99); HID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
+$PY - "$(native "$REPO/.orchestra/handoffs/$HID/meta.json")" "$HID" <<'EOF' && ok "meta.json stores paths relative to the project root" || bad "meta.json has absolute paths"
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf-8")); hid = sys.argv[2]
+assert m["workdir"] == "." and m["task_path"] == ".orchestra/handoffs/%s/TASK.md" % hid, m
+assert m["result_path"] == ".orchestra/handoffs/%s/RESULT.md" % hid, m
+EOF
+out=$($ORCH handoff show "$HID")
+contains "$out" "$(native "$REPO")/.orchestra/handoffs/$HID/RESULT.md" "show prints the absolute result path"
+$PY - "$(native "$REPO/.orchestra/MANUAL.md")" "$(native "$REPO")" <<'EOF' && ok "board shows the absolute folder" || bad "board folder not absolute"
+import sys
+text = open(sys.argv[1], encoding="utf-8").read().replace("\\", "/")
+proj = sys.argv[2].replace("\\", "/").rstrip("/")
+assert ("folder: `" + proj + "`") in text, text
+EOF
+out=$(printf 'x' | $ORCH handoff offer --title "wt rel" --worktree --max-offers 99); WID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
+$ORCH handoff take "$WID" --max-open 99 >/dev/null
+$PY - "$(native "$REPO/.orchestra/handoffs/$WID/meta.json")" "$WID" <<'EOF' && ok "worktree task keeps a relative sibling path" || bad "worktree path not relative"
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf-8")); hid = sys.argv[2]
+assert m["workdir"] == "../proj.wt/" + hid, m["workdir"]
+assert m["result_path"] == "../proj.wt/%s/.orchestra/handoffs/%s/RESULT.md" % (hid, hid), m["result_path"]
+EOF
+mkdir -p "$REPO/sub"
+out=$(cd "$REPO/sub" && $ORCH handoff list); rc=$?
+[[ $rc -eq 0 ]] && contains "$out" "$HID" "list works from a subdirectory" || bad "list from subdirectory: rc=$rc"
+out=$(cd "$REPO/sub" && $ORCH handoff show "$HID")
+contains "$out" "$(native "$REPO")/.orchestra/handoffs/$HID/RESULT.md" "show from a subdirectory prints the absolute path"
+$ORCH handoff cancel "$HID" >/dev/null; $ORCH handoff cancel "$WID" >/dev/null
+
+# a taken task whose project folder was moved still works; a RESULT.md at the new place is detected
+MV="$T/mvproj"; mkdir -p "$MV" && cd "$MV" || die "mv repo"
+git init -q && git config user.email t@t && git config user.name t
+echo hi > f.txt && git add . && git commit -qm init
+MA=$(printf 'task' | $ORCH handoff new --title "moved A" --max-open 99 | grep -o 'AG-[0-9]*' | head -1)
+MB=$(printf 'task' | $ORCH handoff new --title "moved B" --max-open 99 | grep -o 'AG-[0-9]*' | head -1)
+cd "$REPO" || die "back from mv repo"
+MV2="$T/mvproj-new"; mv "$MV" "$MV2" && cd "$MV2" || die "enter moved repo"
+out=$($ORCH handoff list); contains "$out" "$MA" "list after the project folder moved"
+contains "$out" "$MB" "list after the move names the second task"
+out=$($ORCH status); contains "$out" "Open manual tasks" "status after the move"
+printf 'STATUS: DONE\nmoved result\n' > "$MV2/.orchestra/handoffs/$MA/RESULT.md"
+out=$($ORCH handoff check); contains "$out" "$MA finished: STATUS DONE" "RESULT.md at the new place is detected"
+out=$($ORCH handoff done "$MB" --note "marked after the move"); contains "$out" "DONE" "done after the move"
+out=$($ORCH handoff show "$MB"); contains "$out" "DONE" "show after the move"
+cd "$REPO" || die "back from moved repo"
+
 echo "── hooks"
 out=$(echo '{}' | $ORCH hook session-start); contains "$out" "executor registry" "session-start prints registry path"
 contains "$out" "Open manual tasks" "session-start lists open handoffs"
@@ -1702,7 +1750,7 @@ def hard_cap():
 
 def existing_result():
     hid = re.search(r"AG-\d+", good(["handoff", "new", "--title", "ready"])).group()
-    Path(meta(hid)["result_path"]).write_text("STATUS: DONE\nfinished\n", encoding="utf-8")
+    Path(m.load_meta(hid)["result_path"]).write_text("STATUS: DONE\nfinished\n", encoding="utf-8")
     assert "STATUS DONE" in good(["handoff", "wait", "--any", "--timeout", "1s"])
     assert "No manual tasks" in good(["handoff", "wait", "--any", "--timeout", "1s"])
     clear_tasks()
@@ -1846,6 +1894,42 @@ def report_reclaimed():
             assert "slot stays busy" in out and not meta(hid)["reclaim"]["finished"], out
             good(["handoff", "done", hid])
         assert meta(hid)["reclaim"]["finished"]
+    clear_tasks()
+
+def meta_paths():
+    proj_str = str(proj.resolve())
+    base = m.meta_base(m.handoffs_root() / "X-0001" / "meta.json")
+    assert Path(str(base)) == Path(proj_str), (base, proj_str)
+    # relative → absolute in memory, absolute → relative on save (round-trip)
+    assert Path(m.abs_path(".orchestra/handoffs/X-0001/RESULT.md", base)) == proj / ".orchestra/handoffs/X-0001/RESULT.md"
+    assert Path(m.abs_path(".", base)) == Path(proj_str)
+    assert Path(m.abs_path("../proj.wt/X-0001", base)) == Path(proj_str).parent / "proj.wt" / "X-0001"
+    assert m.rel_path(proj_str, base) == "."
+    assert m.rel_path(str(Path(proj_str).parent / "proj.wt" / "X-0001"), base) == "../proj.wt/X-0001"
+    # a path of the other OS is kept verbatim: no cross-OS guessing
+    assert m.abs_path("C:\\Users\\Me\\Proj", base) == "C:\\Users\\Me\\Proj"
+    assert m.abs_path("/mnt/c/Users/Me/Proj", base) == "/mnt/c/Users/Me/Proj"
+    assert m.rel_path("D:\\Users\\me\\x", base) == "D:/Users/me/x"
+    # no relative form (a different drive on Windows) → stay absolute
+    with mock.patch.object(m.os.path, "relpath", side_effect=ValueError("different drive")):
+        assert m.rel_path(str(Path(proj_str) / "x"), base) == str(Path(proj_str) / "x").replace("\\", "/")
+    # a real task: on-disk relative, in-memory absolute, the card prints the full path
+    hid = re.search(r"AG-\d+", good(["handoff", "new", "--title", "paths"])).group()
+    raw = meta(hid)
+    assert raw["workdir"] == "." and raw["task_path"].startswith(".orchestra/handoffs/"), raw
+    task = m.load_meta(hid)
+    assert Path(task["workdir"]) == Path(proj_str), task
+    assert Path(task["result_path"]) == proj / ".orchestra/handoffs" / hid / "RESULT.md", task
+    assert task["workdir"] in good(["handoff", "show", hid])
+    # an old meta with absolute paths loads, works, and becomes relative after a save
+    old = dict(raw)
+    for f in ("workdir", "task_path", "result_path"):
+        old[f] = str(Path(task[f]))
+    m.write_json(m.handoffs_root() / hid / "meta.json", old)
+    assert Path(m.load_meta(hid)["workdir"]) == Path(proj_str)
+    m.save_meta(m.load_meta(hid))
+    after = meta(hid)
+    assert after["workdir"] == "." and after["task_path"].startswith(".orchestra/handoffs/"), after
     clear_tasks()
 
 def spend_limits():
@@ -2011,6 +2095,7 @@ for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", pa
                    ("review corrupt state recovery and operator protection", corruption_recovery),
                    ("review stale claims, late finishers and assignment failures", assignment_recovery),
                    ("review report first status and reclaimed slot", report_reclaimed),
+                   ("review handoff path storage and old metas", meta_paths),
                    ("review monthly spend: prices, counters, cache restart", spend_limits)]:
     try:
         test()

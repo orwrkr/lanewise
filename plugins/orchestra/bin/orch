@@ -464,12 +464,21 @@ def rand_suffix(n=4):
     return "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(n))
 
 
+_win_path_cache = {}
+
+
 def win_path(p):
+    """Windows form of a path for display; only meaningful under WSL (wslpath), None elsewhere."""
+    key = str(p)
+    if key in _win_path_cache:
+        return _win_path_cache[key]
+    result = None
     if shutil.which("wslpath"):
         r = subprocess.run(["wslpath", "-w", str(p)], capture_output=True, text=True)
         if r.returncode == 0:
-            return r.stdout.strip()
-    return None
+            result = r.stdout.strip()
+    _win_path_cache[key] = result
+    return result
 
 
 def copy_to_clipboard(text):
@@ -3847,6 +3856,80 @@ def agent_name(provider):
     return AGENT_NAMES.get((provider or "").lower(), provider or "manual agent")
 
 
+# ───────────────────────── handoff path storage ─────────────────────────
+#
+# meta.json stores path fields relative to the project root (forward slashes), so a moved project folder or a
+# switch between Windows and WSL keeps them valid. In memory the same fields stay absolute native paths: convert
+# on load (abs_path) and on save (rel_path); callers never see the on-disk form. An absolute path of the *other*
+# OS (a Windows path read under WSL, a /mnt/c/… path read on Windows) is kept verbatim — no guessing at
+# conversions; an absolute path under the current root becomes relative on the next save.
+
+META_PATH_FIELDS = ("workdir", "task_path", "result_path")
+WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def meta_base(meta_path):
+    """Project root that owns a meta.json: <proj>/.orchestra/handoffs/<hid>/meta.json → <proj>."""
+    return meta_path.resolve().parents[3]
+
+
+def _looks_absolute(v):
+    """Absolute in either OS: /…, \\…, C:\\…, \\\\server\\…. Stored-relative paths never start that way."""
+    return v.startswith(("/", "\\")) or bool(WINDOWS_ABS_RE.match(v))
+
+
+def abs_path(v, base):
+    """meta.json value → absolute native path for callers. An absolute path (either OS) is kept verbatim; only a
+    stored-relative path is resolved against base."""
+    if not v:
+        return v
+    v = str(v)
+    if _looks_absolute(v):
+        return v
+    return os.path.normpath(str(Path(base) / v))
+
+
+def _foreign_abs(v):
+    """An absolute path of the other OS, not valid here: keep it verbatim on save."""
+    if IS_WINDOWS:
+        return v.startswith("/")            # /mnt/c/… or any POSIX absolute path
+    return bool(WINDOWS_ABS_RE.match(v)) or v.startswith("\\\\")
+
+
+def rel_path(v, base):
+    """in-memory absolute path → meta.json form: relative to base with forward slashes when reachable, else
+    absolute as-is (a different drive, or a path of the other OS)."""
+    if not v:
+        return v
+    v = str(v)
+    if _foreign_abs(v):
+        return v.replace("\\", "/")
+    if not Path(v).is_absolute():
+        return v.replace("\\", "/")         # already relative (defensive)
+    try:
+        rel = os.path.relpath(v, str(base))
+    except ValueError:
+        return v.replace("\\", "/")         # different drive on Windows: no relative form
+    return rel.replace("\\", "/")
+
+
+def meta_abs(m, base):
+    """Absolute view of a raw meta dict (a copy; the on-disk form is left untouched)."""
+    out = dict(m)
+    for f in META_PATH_FIELDS:
+        if out.get(f):
+            out[f] = abs_path(out[f], base)
+    return out
+
+
+def workdir_win(m):
+    """Windows form of the workdir for display, derived from the resolved workdir (never stored)."""
+    w = m.get("workdir")
+    if not w or IS_WINDOWS:
+        return None
+    return win_path(w)
+
+
 def handoffs_root():
     return state_dir() / "handoffs"
 
@@ -3878,12 +3961,18 @@ def load_meta(hid):
     m = read_json(p, None, object_required=True)
     if m is None:
         raise SystemExit("orch: handoff %s not found" % hid)
-    return m
+    return meta_abs(m, meta_base(p))
 
 
 @locked("project")
 def save_meta(m):
-    write_json(handoffs_root() / m["id"] / "meta.json", m)
+    path = handoffs_root() / m["id"] / "meta.json"
+    out = dict(m)
+    base = meta_base(path)
+    for f in META_PATH_FIELDS:
+        if f in out:
+            out[f] = rel_path(out[f], base)
+    write_json(path, out)
     try:
         write_board()
     except Exception:
@@ -3896,13 +3985,14 @@ def all_metas():
         return []
     out = []
     for d in sorted(root.iterdir()):
+        p = d / "meta.json"
         try:
-            m = read_json(d / "meta.json", None, object_required=True) if d.is_dir() else None
+            m = read_json(p, None, object_required=True) if d.is_dir() else None
         except StateError as ex:
-            warn_state(d / "meta.json", str(ex))
+            warn_state(p, str(ex))
             continue
         if m:
-            out.append(m)
+            out.append(meta_abs(m, meta_base(p)))
     return out
 
 
@@ -3998,8 +4088,9 @@ def operator_card(m):
     agent = agent_name(m.get("provider"))
     lines = ["┌ %s · %s" % (m["id"], m["title"])]
     lines.append("│ Open in %s: %s" % (agent, m["workdir"]))
-    if m.get("workdir_win"):
-        lines.append("│   (Windows path:      %s)" % m["workdir_win"])
+    ww = workdir_win(m)
+    if ww:
+        lines.append("│   (Windows path:      %s)" % ww)
     if m.get("branch"):
         lines.append("│ Branch: %s" % m["branch"])
     model = m.get("model") or "your choice"
@@ -4083,7 +4174,7 @@ def create_handoff(a, body, offered):
         "id": hid, "title": a.title, "provider": a.provider.lower(), "profile": None, "model": a.model,
         "effort": a.effort, "model_key": a.model_key, "created": iso(now()),
         "offered": iso(now()) if offered else None, "taken": None, "worktree": bool(a.worktree), "base": a.base,
-        "workdir": None, "workdir_win": None, "branch": None, "task_path": None,
+        "workdir": None, "branch": None, "task_path": None,
         "result_path": str(handoffs_root() / hid / "RESULT.md"), "paste": None, "fallback": a.fallback,
         "pickup_min": a.pickup_min, "reassign_min": a.reassign_min,
         "session": session_id(), "notified": {}, "manual_status": None, "reclaim": None,
@@ -4126,7 +4217,7 @@ def assign_handoff(m, prof):
         ensure_git_exclude(proj, (".orchestra/", AG_RULE_PATH))
     m.update({
         "taken": iso(now()), "profile": prof.name if prof.explicit else None, "workdir": str(workdir),
-        "workdir_win": win_path(workdir), "branch": branch, "task_path": str(task_dir / "TASK.md"),
+        "branch": branch, "task_path": str(task_dir / "TASK.md"),
         "result_path": str(task_dir / "RESULT.md"),
         "paste": "Execute the task described in %s/TASK.md. Follow the execution protocol at the end of that "
                  "file exactly (RESULT.md status markers)." % rel,
@@ -4259,7 +4350,7 @@ def materialize_handoff(claim, prof):
         if current.get("assigning") != token or result_status(current) in TERMINAL or current.get("archived"):
             raise SystemExit("orch: %s changed while being assigned; no task handed out" % claim["id"])
         # Merge only assignment fields, preserving notification marks and other concurrent updates.
-        for field in ("taken", "profile", "workdir", "workdir_win", "branch", "task_path", "result_path", "paste",
+        for field in ("taken", "profile", "workdir", "branch", "task_path", "result_path", "paste",
                       "activity_baseline"):
             current[field] = assigned[field]
         current.pop("assigning", None)
@@ -4421,7 +4512,8 @@ def write_board():
     lines += ([] if pool else ["_empty_"]) + ["", "## Handed out (%d)" % len(out)]
     for m in out:
         lines.append("- **%s** · %s — %s · %s" % (m["id"], m["title"], states[m["id"]], agent_reported(m) or suggestion(m)))
-        lines.append("  - folder: `%s`%s" % (m["workdir"], " (Windows: `%s`)" % m["workdir_win"] if m.get("workdir_win") else ""))
+        ww = workdir_win(m)
+        lines.append("  - folder: `%s`%s" % (m["workdir"], " (Windows: `%s`)" % ww if ww else ""))
         lines.append("  - paste: `%s`" % m["paste"])
     lines += ([] if out else ["_none_"]) + ["", "## Recently finished"]
     for m in done:

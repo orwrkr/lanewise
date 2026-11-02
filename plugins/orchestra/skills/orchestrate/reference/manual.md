@@ -122,3 +122,13 @@ At each check:
 Cursor, Windsurf, Jules, Kiro, etc. — the same lane: `orch handoff take <id> --agent cursor` (or
 `--provider cursor` on `offer`/`new`). TASK.md is self-contained for any agent; profile and quota are kept under
 the agent's name (`orch profile use cursor off`, `orch quota set cursor exhausted`).
+
+## Moving the project or switching Windows/WSL
+
+A task's `meta.json` stores its paths relative to the project root, not absolute, so the `.orchestra/` state
+survives a moved project folder and the same folder opened from native Windows or from WSL. The board, the
+handoff card and `orch handoff` output still print absolute paths for the environment they run in.
+
+Out of scope: a git worktree's own links. Git stores absolute paths in `.git` and `worktrees/`, so moving the
+project breaks a task's worktree until `git worktree repair`, and a worktree created on Windows does not work
+from WSL. Recreate or repair the worktree yourself; the manual lane does not automate that.

@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.15.1
+
+- **A flat day no longer trips the weekly TIGHT alarm**: once the last-changed sample ages out of the 24-hour recent
+  window, the weekly projection fell back to the week's average — so after an idle day a 70%-used week with the reset
+  two days away projected ~98% and went TIGHT again, the exact false alarm 0.14.0 removed. When no sample qualifies,
+  `week_base_sample` now takes the newest older sample with the same reset: if its `used` equals the current one, the
+  recent pace is zero and the basis reads `the last 24 h` instead of the week's average.
+- **`worker_env` no longer drops declared keys while leaking others**: a declared secret that isn't
+  `# orch-secrets-explicit` again takes its value from the real environment ("real environment wins"), so an adapter
+  declaring `# orch-secrets: OPENAI_API_KEY` with the key only in the shell keeps it. Every variable named as some
+  profile's `key` and every `ANTHROPIC_*` ending in `_API_KEY` or `_AUTH_TOKEN` is now dropped from every worker
+  unless this run's profile or adapter supplies that name. A Claude worker on a login profile therefore no longer sees
+  `ANTHROPIC_AUTH_TOKEN` — someone authenticating through a gateway needs a profile key.
+- **A BOM no longer silently drops a project's deny rules**: `settings_deny` reads with `utf-8-sig` (PowerShell 5
+  writes such files), and when a settings file exists but can't be parsed the worker names it instead of continuing as
+  if there were no deny rules.
+- **A transient read error on `spend_limits.json` no longer refuses a run**: `load_spend_limits` retries a
+  `PermissionError` the way `_read_json` already did (they share the same helper), so a parallel `orch spend` or
+  `ensure_baseline` no longer fails another run or a Claude key fetch on Windows.
+- **`orch spend limit <provider>@default` is refused** unless a profile named `default` really exists; the built-in
+  profile's label is just the provider, so the limit used to add a second row that silently did nothing.
+- **A `.orchestra` symlink no longer breaks handoff paths**: `meta_base` uses path arithmetic instead of `.resolve()`,
+  so it still maps `meta.json` to the project (not the symlink target), and `all_metas` computes the base once per
+  load instead of resolving every file.
+- **The surplus gate uses the effective weekly reserve**, so a 95% weekly projection close to the reset no longer
+  blocks surplus mode that is about to expire.
+- **A corrupt usage file no longer loses a run's ledger line**: the post-run usage read and cost are guarded — a
+  corrupt `usage_live.json` or bad price data keeps whatever tokens were read, prices them at 0, and notes
+  "cost not priced" on the run's output line instead of raising before `ledger_append`. A `Ctrl-C` during the mid-run
+  spend poll now stops the run rather than escaping the handler.
+- The settings guide now gives the full pair for budget thresholds (`orch profile set …` **and**
+  `orch profile use …`), and its "what is not a setting" line says a worker receives only the key its own profile
+  names.
+
 ## 0.15.0
 
 - **A settings guide, so any project's session can discuss the plugin's settings** (`orch guide settings`): one

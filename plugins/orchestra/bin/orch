@@ -355,35 +355,43 @@ def read_json(path, default, recover_corrupt=False, object_required=False):
     return _read_json(path, default, False, object_required)
 
 
-def _read_json(path, default, recover_corrupt, object_required):
+def _read_text_retry(path, encoding="utf-8"):
+    """Path.read_text that retries a PermissionError — os.replace in write_json races a reader on Windows."""
     for attempt in range(5):
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-            if (isinstance(default, dict) or object_required) and not isinstance(data, dict):
-                raise ValueError("expected a JSON object")
-            return data
-        except FileNotFoundError:
-            return default
-        except PermissionError as ex:
+            return Path(path).read_text(encoding=encoding)
+        except PermissionError:
             if attempt == 4:
-                raise StateError("cannot read %s: %s" % (path, ex))
+                raise
             time.sleep(0.01 * (2 ** attempt))
-        except ValueError as ex:
-            if recover_corrupt:
-                backup = Path(str(path) + ".corrupt")
-                n = 1
-                while backup.exists():
-                    backup = Path(str(path) + ".corrupt.%d" % n)
-                    n += 1
-                try:
-                    Path(path).rename(backup)
-                except OSError as rename_error:
-                    raise StateError("cannot preserve %s: %s" % (path, rename_error))
-                warn_state(path, "corrupt state preserved as %s; starting fresh" % backup)
-                return default
-            raise StateError("cannot read %s: %s" % (path, ex))
-        except OSError as ex:
-            raise StateError("cannot read %s: %s" % (path, ex))
+
+
+def _read_json(path, default, recover_corrupt, object_required):
+    try:
+        data = json.loads(_read_text_retry(path))
+        if (isinstance(default, dict) or object_required) and not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+        return data
+    except FileNotFoundError:
+        return default
+    except PermissionError as ex:
+        raise StateError("cannot read %s: %s" % (path, ex))
+    except ValueError as ex:
+        if recover_corrupt:
+            backup = Path(str(path) + ".corrupt")
+            n = 1
+            while backup.exists():
+                backup = Path(str(path) + ".corrupt.%d" % n)
+                n += 1
+            try:
+                Path(path).rename(backup)
+            except OSError as rename_error:
+                raise StateError("cannot preserve %s: %s" % (path, rename_error))
+            warn_state(path, "corrupt state preserved as %s; starting fresh" % backup)
+            return default
+        raise StateError("cannot read %s: %s" % (path, ex))
+    except OSError as ex:
+        raise StateError("cannot read %s: %s" % (path, ex))
 
 
 def write_json(path, data):
@@ -779,14 +787,16 @@ def projected_at_reset(used, reset, rate, measured):
     return used + rate * (reset - measured).total_seconds() / 60
 
 
-def week_base_sample(history, reset, measured):
+def week_base_sample(history, reset, measured, used=None):
     """The earliest week_history sample from the last 24 hours with the same reset (within 10 minutes) and at
-    least 6 hours before the measurement — the longest recent baseline; None without one. Malformed entries
-    are skipped, never fatal."""
+    least 6 hours before the measurement — the longest recent baseline. Without one, the newest older sample with
+    the same reset stands in for a flat week: if its used equals the current one, the recent pace is zero and the
+    base is (measured - 24 h, used), so the basis reads 'the last 24 h'. Malformed entries are skipped, never fatal."""
     if reset is None or measured is None:
         return None
     lo = measured - dt.timedelta(hours=WEEK_PACE_MAX_AGE)
     best = None
+    newest_older = None
     for h in history or []:
         if not (isinstance(h, list) and len(h) == 3):
             continue
@@ -794,14 +804,18 @@ def week_base_sample(history, reset, measured):
         r = parse_iso(str(h[2] or ""))
         if not (ts and r) or abs((r - reset).total_seconds()) >= 600:
             continue
-        if not (lo <= ts <= measured) or (measured - ts).total_seconds() < WEEK_PACE_MIN_GAP * 3600:
-            continue
         try:
             u0 = float(h[1])
         except (TypeError, ValueError):
             continue
+        if ts < lo and (newest_older is None or ts > newest_older[0]):
+            newest_older = (ts, u0)
+        if not (lo <= ts <= measured) or (measured - ts).total_seconds() < WEEK_PACE_MIN_GAP * 3600:
+            continue
         if best is None or ts < best[0]:
             best = (ts, u0)
+    if best is None and newest_older is not None and used is not None and newest_older[1] == used:
+        return (measured - dt.timedelta(hours=WEEK_PACE_MAX_AGE), used)
     return best
 
 
@@ -820,7 +834,7 @@ def week_rate(history, used, reset, measured, window_minutes=10080):
     """(%/min, basis) of the week: the recent pace from week_history when a base sample exists, else the
     window average; (None, None) when neither is computable. The recent pace is used when it is available,
     not the higher of the two — the weekly alarm must not stay on because of an old burst."""
-    base = week_base_sample(history, reset, measured)
+    base = week_base_sample(history, reset, measured, used)
     if base is not None:
         ts0, u0 = base
         mins = (measured - ts0).total_seconds() / 60.0
@@ -991,7 +1005,7 @@ def claude_budget(where=None):
     spare = cap - projected
     if rate is None or stale or cfg["surplus"] <= 0 or spare < cfg["surplus"]:
         return "normal", line + "."
-    if weekly is not None and weekly >= 100 - cfg["week_reserve"]:
+    if weekly is not None and weekly >= 100 - eff:
         return "normal", line + ". Weekly projection %d%%: no surplus mode yet." % pct(weekly)
     each = " — ≈%d%% for each of the %d sessions" % (pct(spare / sessions), sessions) if sessions > 1 else ""
     return "surplus", line + (". SURPLUS: at the current pace (%s) about %d%% of the window would expire unused beyond "
@@ -1712,6 +1726,21 @@ def load_profiles():
     data.setdefault("providers", {})
     data.setdefault("projects", {})
     return data, None
+
+
+def profile_key_vars():
+    """Every variable named as some profile's `key` in profiles.json — names the operator may have exported in
+    their shell that must not leak into a worker. A broken file → {} (the run is refused earlier anyway)."""
+    data, err = load_profiles()
+    if err:
+        return set()
+    out = set()
+    for sec in (data.get("providers") or {}).values():
+        profs = sec.get("profiles") if isinstance(sec, dict) else None
+        for prof in (profs.values() if isinstance(profs, dict) else []):
+            if isinstance(prof, dict) and prof.get("key"):
+                out.add(prof["key"])
+    return out
 
 
 def save_profiles(data):
@@ -2708,7 +2737,7 @@ def valid_scope(scope):
     if err:
         return True                          # a broken profiles file cannot answer; the provider part already passed
     _, profs = provider_section(data, provider)
-    return name in {p.lower() for p in profs} or name == "default"
+    return name in {p.lower() for p in profs}
 
 
 def scope_has_key(scope, where=None):
@@ -2840,7 +2869,7 @@ def load_spend_limits():
     """(data, error). A broken file is an error (writes refuse; reads keep the defaults) — never fail-open."""
     empty = {"defaults": dict(DEFAULT_SPEND), "global": {}, "projects": {}, "baselines": {}}
     try:
-        data = json.loads(SPEND_FILE.read_text(encoding="utf-8-sig"))
+        data = json.loads(_read_text_retry(SPEND_FILE, encoding="utf-8-sig"))
     except FileNotFoundError:
         return empty, None
     except (OSError, ValueError) as ex:
@@ -3443,6 +3472,11 @@ KEEP_CLAUDE_VARS = ("CLAUDE_CODE_GIT_BASH_PATH", "CLAUDE_CONFIG_DIR")
 WORKER_LEAK_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY")
 
 
+def anthropic_key_var(name):
+    """An operator Anthropic credential beyond the four in WORKER_LEAK_VARS (a gateway/foundry key, a token)."""
+    return name.startswith("ANTHROPIC_") and (name.endswith("_API_KEY") or name.endswith("_AUTH_TOKEN"))
+
+
 def lead_vars():
     """Variables a non-Claude lead (orch launch) set for its own session: endpoint, token, models."""
     return {v for v in os.environ.get("ORCH_LEAD_ENV", "").split(",") if v}
@@ -3450,8 +3484,19 @@ def lead_vars():
 
 def worker_env(extra, secrets=()):
     lead = lead_vars()          # a DeepSeek lead's endpoint and token are not the worker's business
-    env = {k: v for k, v in os.environ.items() if k not in lead and k not in WORKER_LEAK_VARS and
-           (k in KEEP_CLAUDE_VARS or not (k == "CLAUDECODE" or k.startswith("CLAUDE_")))}
+    keep = set(secrets)         # names the adapter declares (# orch-secrets, not explicit): the real env wins
+    drop = set(WORKER_LEAK_VARS) | profile_key_vars()
+    env = {}
+    for k, v in os.environ.items():
+        if k in lead:
+            continue
+        if k in KEEP_CLAUDE_VARS:
+            env[k] = v
+            continue
+        if k == "CLAUDECODE" or k.startswith("CLAUDE_"):
+            continue
+        if k in keep or not (k in drop or anthropic_key_var(k)):
+            env[k] = v
     stored = load_secrets() if secrets else {}
     for name in secrets:          # only the keys the adapter declares (# orch-secrets: …), real environment wins
         if name in stored and not env.get(name):
@@ -3690,17 +3735,22 @@ def cmd_run(a):
                     kill_tree(proc, job)   # reap what the worker left behind (e.g. codex's Windows sandbox helper)
                     break
                 except subprocess.TimeoutExpired:
-                    if scope and spend_kill is not None:
-                        try:
-                            live = live_usage(run_dir, provider, cwd, prof)
-                        except Exception:
-                            continue      # a half-written usage_live.json / unreadable rollout skips one poll
-                        if live and spend_base + usage_cost(live, provider, model) >= spend_kill:
-                            kill_tree(proc, job)
-                            rc = EXIT_QUOTA
-                            spend_killed = True
-                            log.write("\n[orch] killed: spend limit reached (%s)\n" % scope)
-                            break
+                    try:
+                        if scope and spend_kill is not None:
+                            try:
+                                live = live_usage(run_dir, provider, cwd, prof)
+                            except Exception:
+                                continue      # a half-written usage_live.json / unreadable rollout skips one poll
+                            if live and spend_base + usage_cost(live, provider, model) >= spend_kill:
+                                kill_tree(proc, job)
+                                rc = EXIT_QUOTA
+                                spend_killed = True
+                                log.write("\n[orch] killed: spend limit reached (%s)\n" % scope)
+                                break
+                    except KeyboardInterrupt:      # a Ctrl-C during the poll must stop the run, not escape the handler
+                        kill_tree(proc, job)
+                        state["interrupted"] = "keyboard"
+                        break
                 except KeyboardInterrupt:
                     kill_tree(proc, job)
                     state["interrupted"] = "keyboard"
@@ -3757,9 +3807,25 @@ def cmd_run(a):
     if rc == EXIT_TIMEOUT:
         status = "TIMEOUT"
 
-    usage = read_usage(run_dir) or live_usage(run_dir, provider, cwd, prof)
-    # the cost is frozen at run time (peak/off-peak and dated prices as of now); later price changes don't rewrite it
-    run_cost = usage_cost(usage, provider, (usage or {}).get("model") or model) if usage else 0.0
+    usage = None
+    try:
+        usage = read_usage(run_dir)
+    except Exception:
+        usage = None
+    if not usage:
+        try:
+            usage = live_usage(run_dir, provider, cwd, prof)
+        except Exception:
+            usage = None
+    # the cost is frozen at run time (peak/off-peak and dated prices as of now); later price changes don't rewrite it.
+    # A corrupt usage file or bad price data must not lose the ledger line: keep the tokens, price 0, and say so.
+    run_cost = 0.0
+    cost_note = ""
+    if usage:
+        try:
+            run_cost = usage_cost(usage, provider, usage.get("model") or model)
+        except Exception:
+            cost_note = " (cost not priced)"
     run_cost_as_of = price_as_of(provider)
     meta.update({"finished": iso(now()), "elapsed_s": elapsed, "exit": rc, "status": status, "usage": usage,
                  "billing": billing})
@@ -3779,9 +3845,9 @@ def cmd_run(a):
         output = log_text[-a.max_chars:]
     shown = display_name(model) or ("(default: %s)" % display_name(usage["model"])
                                     if usage and usage.get("model") else "(default)")
+    usage_note = (" · " + usage_brief(usage) + cost_note) if usage else cost_note
     print("[%s] %s · %s %s effort=%s mode=%s · %ds%s" % (status, run_id, scope_name(prof.label), shown,
-                                                       effort or "(default)", a.mode, elapsed,
-                                                       " · " + usage_brief(usage) if usage else ""))
+                                                       effort or "(default)", a.mode, elapsed, usage_note))
     if prof.explicit:
         print("profile %s (%s)%s" % (scope_name(prof.label), prof.source, ("; " + "; ".join(notes)) if notes else ""))
     if status == "QUOTA_EXHAUSTED":
@@ -4034,8 +4100,9 @@ WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def meta_base(meta_path):
-    """Project root that owns a meta.json: <proj>/.orchestra/handoffs/<hid>/meta.json → <proj>."""
-    return meta_path.resolve().parents[3]
+    """Project root that owns a meta.json: <proj>/.orchestra/handoffs/<hid>/meta.json → <proj>. Path arithmetic
+    only (no .resolve(): a .orchestra symlink must not redirect the project), so it never depends on the cwd."""
+    return meta_path.parents[3]
 
 
 def _looks_absolute(v):
@@ -4148,6 +4215,7 @@ def all_metas():
     root = handoffs_root()
     if not root.exists():
         return []
+    base = meta_base(root / "x" / "meta.json")     # the project the handoffs root belongs to, computed once
     out = []
     for d in sorted(root.iterdir()):
         p = d / "meta.json"
@@ -4157,7 +4225,7 @@ def all_metas():
             warn_state(p, str(ex))
             continue
         if m:
-            out.append(meta_abs(m, meta_base(p)))
+            out.append(meta_abs(m, base))
     return out
 
 

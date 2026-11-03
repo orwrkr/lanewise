@@ -85,7 +85,7 @@ def tool_policy():
     return "Read,Grep,Glob,Bash", allowed
 
 
-def settings_deny():
+def settings_deny(say):
     """The target project's permissions.deny Read/Bash rules. `--setting-sources user` skips the project's
     settings, so orch forwards the deny rules the worker would otherwise lose."""
     deny = []
@@ -94,8 +94,11 @@ def settings_deny():
         for name in ("settings.json", "settings.local.json"):
             p = d / ".claude" / name
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                data = json.loads(p.read_text(encoding="utf-8-sig"))
+            except FileNotFoundError:
+                continue
             except (OSError, ValueError):
+                say("cannot read the deny rules from %s — the project's deny rules are not forwarded" % p)
                 continue
             perms = data.get("permissions") if isinstance(data, dict) else None
             rules = perms.get("deny") if isinstance(perms, dict) else None
@@ -111,8 +114,8 @@ def settings_deny():
     return list(dict.fromkeys(deny))
 
 
-def disallowed_tools():
-    return SECRET_DENY + settings_deny()
+def disallowed_tools(say):
+    return SECRET_DENY + settings_deny(say)
 
 
 def command(claude, model, run_dir, isolation, extra_args, say):
@@ -127,7 +130,7 @@ def command(claude, model, run_dir, isolation, extra_args, say):
         cmd += ["--effort", effort]
     elif effort:
         say("effort %r is not supported (%s) — keeping the default" % (effort, "|".join(EFFORTS)))
-    disallowed = disallowed_tools()
+    disallowed = disallowed_tools(say)
     cmd += shlex.split(extra_args or "")
     cmd += ["--disallowedTools"] + disallowed + ["--allowedTools"] + allowed    # variadic options: allowed last
     say("model=%s mode=%s tools=%s allow=%s deny=%s" % (model, os.environ.get("ORCH_MODE"), tools,

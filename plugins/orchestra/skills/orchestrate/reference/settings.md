@@ -76,7 +76,8 @@ Caps what API-billed executors spend (DeepSeek always; Codex/Claude only on a `k
 The Claude (and Codex) subscription's 5-hour window and weekly limit, projected to warn of a surplus or a squeeze.
 
 - Thresholds live in the profile: `orch profile set claude <name> --opt reserve=25 --opt week_reserve=15
-  --opt surplus=40` (Codex: `reserve`, `week_reserve` only, no surplus).
+  --opt surplus=40` (Codex: `reserve`, `week_reserve` only, no surplus), then
+  `orch profile use claude <name>` for a project or `--default` (the budget reads only the bound profile).
 - `orch budget` shows the numbers, the active consumers and the thresholds; without the status line, report them with
   `orch budget set --used 40 --resets 18:00`.
 - The numbers come from the status line (below) and are account-wide.
@@ -118,7 +119,8 @@ It feeds the budget mode and the session count from every session that shows it,
 
 Some rules hold everywhere and are not configurable: manual agents are never automated (no `agy`, computer use, text
 pasting or OAuth — a ToS ban); keys never go into the repository; executors don't delegate; a worker never sees the
-operator's Anthropic credentials. These are fixed for safety, not knobs.
+operator's Anthropic credentials — it receives only the key its own profile names, never `ANTHROPIC_AUTH_TOKEN` or
+any other credential. These are fixed for safety, not knobs.
 
 ## Projects with their own process
 

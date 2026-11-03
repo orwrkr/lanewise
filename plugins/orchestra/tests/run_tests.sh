@@ -1590,6 +1590,8 @@ subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "init"], c
 os.environ.update(env)
 loader = importlib.machinery.SourceFileLoader("review_orch", orch)
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("review_orch", loader)); loader.exec_module(m)
+_h = importlib.machinery.SourceFileLoader("review_headless", str(Path(orch).parent.parent / "adapters" / "_claude_headless.py"))
+H = importlib.util.module_from_spec(importlib.util.spec_from_loader("review_headless", _h)); _h.exec_module(H)
 
 def run(args, data="task\n", extra=None):
     r = subprocess.run([sys.executable, orch] + args, input=data, text=True, encoding="utf-8",
@@ -1689,6 +1691,17 @@ def state_failures():
             raise AssertionError("unreadable state treated as empty")
         except m.StateError:
             pass
+    # load_spend_limits retries the same sharing violation (it shares _read_text_retry, not a bare read_text).
+    reads = []
+    def flaky_read(*a, **k):
+        reads.append(a)
+        if len(reads) < 3:
+            raise PermissionError("sharing violation")
+        return '{"global": {}}'
+    with mock.patch.object(m.Path, "read_text", side_effect=flaky_read), mock.patch.object(m.time, "sleep"):
+        cfg, err = m.load_spend_limits()
+        assert err is None and isinstance(cfg, dict) and cfg["global"] == {}, (cfg, err)
+    assert len(reads) == 3
     hid = offered(worktree=True, base="missing-review-ref")
     rc, out = run(["handoff", "take", hid])
     assert rc != 0 and m.result_status(meta(hid)) == "OFFERED", (rc, out, meta(hid))
@@ -1837,6 +1850,14 @@ def weekly_pace():
     old = reset - dt.timedelta(days=7)                 # a sample from the previous week
     assert m.week_base_sample([[m.iso(fixed - dt.timedelta(hours=8)), 50.0, m.iso(old)]], reset, fixed) is None
     assert m.week_base_sample([[m.iso(fixed - dt.timedelta(hours=5)), 82.0, m.iso(reset)]], reset, fixed) is None
+    # After an idle day, the newest older sample with the same reset stands in for a flat week: zero pace,
+    # basis "the last 24 h" — only while the used value is unchanged (a change means the recent pace is unknown).
+    rr2 = fixed + dt.timedelta(hours=48)
+    idle = [[m.iso(fixed - dt.timedelta(hours=26)), 70.0, m.iso(rr2)]]
+    assert m.week_base_sample(idle, rr2, fixed, 70.0) == (fixed - dt.timedelta(hours=24), 70.0)
+    assert m.week_base_sample(idle, rr2, fixed, 71.0) is None
+    rate, basis = m.week_rate(idle, 70.0, rr2, fixed)
+    assert basis == "the last 24 h" and rate == 0.0, (rate, basis)
 
     def week_snap(used, hours_left, hist=None):
         r = fixed + dt.timedelta(hours=hours_left)
@@ -1875,6 +1896,17 @@ def weekly_pace():
         assert m.claude_budget()[0] != "tight"
         week_snap(100, 1)
         assert m.claude_budget()[0] == "tight"
+    # The surplus gate reads the effective weekly reserve, not the flat setting: with week_reserve=20 but the
+    # reserve shrunk to eff=10, a 80% weekly projection still allows surplus (the flat 20 would block at 100-20=80).
+    burn = [[m.iso(fixed - dt.timedelta(hours=8)), 40.0, m.iso(fixed + dt.timedelta(hours=24))]]
+    m.write_json(m.USAGE_SNAPSHOT, {"updated": m.iso(fixed), "source": "test",
+                                    "five_hour": window(10, 2), "seven_day": window(50, 24), "week_history": burn})
+    with mock.patch.object(m, "budget_settings",
+                           return_value={"surplus": 40, "reserve": 10, "week_reserve": 20}), \
+         mock.patch.object(m, "week_reserve", return_value=10.0), \
+         mock.patch.object(m, "now", return_value=fixed):
+        mode, line = m.claude_budget()
+        assert mode == "surplus", (mode, line)
 
 def codex_weekly():
     cx = root / "cx-week"
@@ -1979,6 +2011,18 @@ def run_outcomes():
     notes = (Path(orch).parent.parent / "registry/providers.yaml").read_text(encoding="utf-8")
     assert "ORCH_CODEX_EXTRA_ARGS" in notes and "TMPDIR" in notes and "C:/Users/Public/" in notes
 
+def run_cost_fallback():
+    # A corrupt personal price table must not lose the ledger line: keep the tokens, price 0, and say so.
+    (home / "prices.json").write_text(json.dumps(
+        {"usd_per_1m_tokens": {"pricing-model": {"input": "not-a-number"}}}), encoding="utf-8")
+    try:
+        out = good(["run", "codex", "--model", "pricing-model", "review"], extra={"FAKE_CODEX": "ok"})
+        assert "cost not priced" in out, out
+        rec = [x for x in m.ledger_read() if x.get("kind") == "run"][-1]
+        assert rec["usage"]["input_tokens"] == 200 and rec["cost_usd"] == 0.0, rec
+    finally:
+        (home / "prices.json").unlink()
+
 def corruption_recovery():
     hid = offered()
     broken = m.handoffs_root() / "BAD" / "meta.json"
@@ -2082,6 +2126,11 @@ def meta_paths():
     proj_str = str(proj.resolve())
     base = m.meta_base(m.handoffs_root() / "X-0001" / "meta.json")
     assert Path(str(base)) == Path(proj_str), (base, proj_str)
+    # meta_base is pure path arithmetic: it never calls .resolve(), so a symlinked .orchestra can't redirect the
+    # project, and the result does not depend on the cwd.
+    fake = m.handoffs_root() / "X-9999" / "meta.json"
+    with mock.patch.object(m.Path, "resolve", side_effect=AssertionError("meta_base resolved the path")):
+        assert Path(str(m.meta_base(fake))) == Path(proj_str)
     # relative → absolute in memory, absolute → relative on save (round-trip)
     assert Path(m.abs_path(".orchestra/handoffs/X-0001/RESULT.md", base)) == proj / ".orchestra/handoffs/X-0001/RESULT.md"
     assert Path(m.abs_path(".", base)) == Path(proj_str)
@@ -2286,11 +2335,14 @@ def spend_limits():
     assert m.display_name("claude-opus-6-0") == "claude-opus-6-0"
     assert m.display_name("deepseek-v4-pro") == "DeepSeek V4 Pro"
 
-    # valid_scope: lowercased, and provider@profile must name a real profile
+    # valid_scope: lowercased, and provider@profile must name a real profile (not the built-in "default")
     good(["profile", "set", "deepseek", "work", "--key", "DUMMY_A"])
     assert m.valid_scope("DEEPSEEK") is True and m.valid_scope("deepseek") is True
-    assert m.valid_scope("deepseek@work") is True and m.valid_scope("deepseek@default") is True
+    assert m.valid_scope("deepseek@work") is True
+    assert m.valid_scope("deepseek@default") is False       # "default" isn't a real profile → refused
     assert m.valid_scope("deepseek@nope") is False and m.valid_scope("nosuch@work") is False
+    good(["profile", "set", "deepseek", "default", "--key", "DUMMY_B"])
+    assert m.valid_scope("deepseek@default") is True        # a profile literally named "default" is a valid scope
     (home / "profiles.json").unlink()
 
     # session snapshots are deduplicated: two snapshots of one session count only the last
@@ -2339,6 +2391,55 @@ def worker_env_leak():
         env = m.worker_env({"ANTHROPIC_API_KEY": "sk-profile"})  # a profile's own key re-enters via extra
         assert env.get("ANTHROPIC_API_KEY") == "sk-profile"
 
+def worker_env_declared():
+    # A declared secret that isn't explicit takes its value from the real environment ("real env wins"), and any
+    # ANTHROPIC_*_API_KEY / _AUTH_TOKEN beyond the four in WORKER_LEAK_VARS never leaks.
+    with mock.patch.dict(os.environ, {"ANTHROPIC_FOUNDRY_API_KEY": "foundry-leak",
+                                      "OPENAI_API_KEY": "shell-key"}, clear=True):
+        env = m.worker_env({}, secrets=["OPENAI_API_KEY"])
+        assert "ANTHROPIC_FOUNDRY_API_KEY" not in env      # any ANTHROPIC_*_API_KEY never leaks
+        assert env.get("OPENAI_API_KEY") == "shell-key"    # declared, non-explicit → the real environment wins
+    # A key named in profiles.json is dropped even though it isn't a hardcoded leak var; the run's own key re-enters.
+    m.save_profiles({"providers": {"deepseek": {"profiles": {"work": {"key": "DEEPSEEK_API_KEY_WORK"}}}},
+                     "projects": {}})
+    try:
+        assert m.profile_key_vars() == {"DEEPSEEK_API_KEY_WORK"}
+        with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY_WORK": "work-leak"}, clear=True):
+            assert "DEEPSEEK_API_KEY_WORK" not in m.worker_env({})
+            assert m.worker_env({"DEEPSEEK_API_KEY_WORK": "work-val"})["DEEPSEEK_API_KEY_WORK"] == "work-val"
+    finally:
+        (home / "profiles.json").unlink()
+    # From secrets.env only when the real environment lacks it (real env wins).
+    (home / "secrets.env").write_text("OPENAI_API_KEY=from-file\n", encoding="utf-8")
+    try:
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "shell-key"}, clear=True):
+            assert m.worker_env({}, secrets=["OPENAI_API_KEY"]).get("OPENAI_API_KEY") == "shell-key"
+        with mock.patch.dict(os.environ, {}, clear=True):
+            assert m.worker_env({}, secrets=["OPENAI_API_KEY"]).get("OPENAI_API_KEY") == "from-file"
+    finally:
+        (home / "secrets.env").unlink()
+
+def settings_deny_bom():
+    sd = root / "denyproj"
+    (sd / ".claude").mkdir(parents=True)
+    (sd / ".git").mkdir()                              # stop the walk right here
+    rules = {"permissions": {"deny": ["Read(**/.env)", "Bash(git push:*)", "Edit(**/*)"]}}
+    # A UTF-8 BOM (as PowerShell 5 writes) must still yield the deny rules.
+    (sd / ".claude" / "settings.json").write_bytes(b"\xef\xbb\xbf" + json.dumps(rules).encode("utf-8"))
+    with mock.patch.dict(os.environ, {"ORCH_CWD": str(sd)}):
+        warned = []
+        deny = H.settings_deny(warned.append)
+        assert "Read(**/.env)" in deny and "Bash(git push:*)" in deny, deny
+        assert "Edit(**/*)" not in deny                # only Read/Bash rules are forwarded
+        assert warned == []
+    # A settings file that exists but isn't JSON is named, not silently dropped.
+    (sd / ".claude" / "settings.json").write_text("{broken", encoding="utf-8")
+    with mock.patch.dict(os.environ, {"ORCH_CWD": str(sd)}):
+        warned = []
+        deny = H.settings_deny(warned.append)
+        assert deny == []
+        assert any("settings.json" in w for w in warned), warned
+
 def codex_home_profile():
     prof = m.Profile("codex", "work", {"home": str(home / "cx-work")}, "test", True)
     with mock.patch.dict(os.environ, {"CODEX_HOME": str(home / "no-codex")}):
@@ -2359,12 +2460,15 @@ for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", pa
                    ("8 inferred activity gets one overdue warning; fast check never scans", overdue_activity),
                    ("9 lead drops OAuth token; Claude executor works without it", token_hygiene),
                    ("10 blocked/partial ledger and model-only capacity fallback", run_outcomes),
+                   ("10b corrupt price data keeps the ledger line, priced 0", run_cost_fallback),
                    ("review corrupt state recovery and operator protection", corruption_recovery),
                    ("review stale claims, late finishers and assignment failures", assignment_recovery),
                    ("review report first status and reclaimed slot", report_reclaimed),
                    ("review handoff path storage and old metas", meta_paths),
                    ("review monthly spend: prices, counters, cache restart", spend_limits),
                    ("review worker env strips login/API keys", worker_env_leak),
+                   ("review worker env: declared secrets, profile keys, anthropic key vars", worker_env_declared),
+                   ("review settings deny survives a BOM and names a broken file", settings_deny_bom),
                    ("review --profile honoured by codex account lookups", codex_home_profile)]:
     try:
         test()
@@ -2400,6 +2504,8 @@ done
 $ORCH guide nope >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "unknown guide topic refused" || bad "guide nope accepted"
 out=$($ORCH guide settings); contains "$out" "secrets.env" "settings guide names secrets.env"
 contains "$out" "orch registry show" "settings guide names orch registry show"
+contains "$out" "orch profile use claude <name>" "settings guide pairs the budget thresholds with their use"
+contains "$out" "ANTHROPIC_AUTH_TOKEN" "settings guide: a worker never sees the operator's Anthropic credentials"
 grep -q 'description:.*config' "$PLUGIN/skills/orchestrate/SKILL.md" && ok "skill description names configuration" || bad "skill description does not name configuration"
 out=$($ORCH footprint); contains "$out" "$ORCH_HOME" "footprint names ORCH_HOME"
 contains "$out" "  project .*proj.*\.orchestra" "footprint lists project state"

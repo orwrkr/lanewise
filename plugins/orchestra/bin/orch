@@ -1495,8 +1495,18 @@ def parse_append(path, state):
     return True
 
 
+def tok_int(v):
+    """A token count from untrusted JSON: 0 for anything that is not a number."""
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def parse_ledger_append(offset, sid):
-    """(new_offset, {provider: {input, output}}, changed) from run records of sid appended to the ledger."""
+    """(new_offset, {label: {input, output}}, changed) from run records of sid appended to the ledger. The key is the
+    record's profile label (deepseek@work, codex, …), the provider for a record without one: usage on different
+    accounts stays apart."""
     out = {}
     try:
         size = USAGE_FILE.stat().st_size
@@ -1523,21 +1533,46 @@ def parse_ledger_append(offset, sid):
             rec = json.loads(line)
         except ValueError:
             continue
-        if rec.get("kind") != "run" or rec.get("session") != sid:
+        if not isinstance(rec, dict) or rec.get("kind") != "run" or rec.get("session") != sid:
             continue
         u = rec.get("usage")
         if not isinstance(u, dict):
             continue
-        prov = str(rec.get("provider") or "?").lower()
-        t = out.setdefault(prov, {"input": 0, "output": 0})
-        t["input"] += int(u.get("input_tokens") or 0)
-        t["output"] += int(u.get("output_tokens") or 0)
+        acct = str(rec.get("label") or rec.get("provider") or "?").lower()
+        t = out.setdefault(acct, {"input": 0, "output": 0})
+        t["input"] += tok_int(u.get("input_tokens"))
+        t["output"] += tok_int(u.get("output_tokens"))
     return offset + consumed, out, True
 
 
+# Version of the cached ledger part. 2 = keyed by the run record's profile label; an entry without it was keyed by
+# provider, so its ledger part restarts from offset 0 (transcript offsets stay).
+SESSION_TOKENS_FORMAT = 2
+
+
+def account_sort_key(label):
+    """Provider, then the plain account first, then the labels alphabetically."""
+    provider, _, name = str(label).partition("@")
+    return (provider, bool(name), name)
+
+
+def native_account(where):
+    """The account this session's own thread (Claude) bills to: the label of a key profile (claude@work), else
+    `claude` - the default login, the same account as `orch run claude` there. Any error or unknown directory: claude."""
+    if not where:
+        return "claude"
+    try:
+        prof = resolve_profile("claude", Path(where))
+        return prof.label if prof.explicit and prof.data.get("key") else "claude"
+    except Exception:
+        return "claude"
+
+
 @locked("home")
-def session_tokens(sid, transcript_path):
-    """Update the per-session token cache and return {provider: {input, output}} for this session."""
+def session_tokens(sid, transcript_path, native="claude"):
+    """Update the per-session token cache and return {account: {input, output}} for this session: account is a
+    profile label (deepseek@work, codex), so one provider's separate accounts stay separate. The session's own
+    Claude thread counts under `native`."""
     cache = read_json(SESSION_TOKENS_FILE, {}, recover_corrupt=True)
     if not isinstance(cache, dict):
         cache = {}
@@ -1547,12 +1582,14 @@ def session_tokens(sid, transcript_path):
     changed = len(keep) != len(cache)
     entry = dict(keep.get(sid) or {})
     entry.setdefault("files", {})
-    entry.setdefault("ledger", {})
-    entry.setdefault("ledger_offset", 0)
     if not isinstance(entry["files"], dict):
         entry["files"] = {}
-    if not isinstance(entry["ledger"], dict):
+    if entry.get("format") != SESSION_TOKENS_FORMAT or not isinstance(entry.get("ledger"), dict)             or not isinstance(entry.get("ledger_offset"), int):
+        if sid in keep:
+            changed = True                  # an old-format (or damaged) entry: rebuild its ledger part by label
         entry["ledger"] = {}
+        entry["ledger_offset"] = 0
+        entry["format"] = SESSION_TOKENS_FORMAT
     files = []
     if transcript_path and Path(transcript_path).is_file():
         files.append(Path(transcript_path))
@@ -1569,39 +1606,45 @@ def session_tokens(sid, transcript_path):
     offset, ledg, ledger_changed = parse_ledger_append(entry["ledger_offset"], sid)
     entry["ledger_offset"] = offset
     advanced = advanced or ledger_changed
-    for prov, d in ledg.items():
-        tt = entry["ledger"].setdefault(prov, {"input": 0, "output": 0})
-        tt["input"] += d["input"]
-        tt["output"] += d["output"]
+    for acct, d in ledg.items():
+        tt = entry["ledger"].get(acct)
+        if not isinstance(tt, dict):
+            tt = entry["ledger"][acct] = {"input": 0, "output": 0}
+        tt["input"] = tok_int(tt.get("input")) + d["input"]
+        tt["output"] = tok_int(tt.get("output")) + d["output"]
     if advanced or changed:
         entry["updated"] = iso(t)
         keep[sid] = entry
         write_json(SESSION_TOKENS_FILE, keep)
     totals = {}
+
+    def add(acct, inp, out):
+        tt = totals.setdefault(acct, {"input": 0, "output": 0})
+        tt["input"] += tok_int(inp)
+        tt["output"] += tok_int(out)
+
     for f in entry["files"].values():
-        if not isinstance(f, dict):
-            continue
-        tt = totals.setdefault(f.get("provider") or "claude", {"input": 0, "output": 0})
-        tt["input"] += int(f.get("in") or 0)
-        tt["output"] += int(f.get("out") or 0)
-    for prov, d in entry["ledger"].items():
-        tt = totals.setdefault(prov, {"input": 0, "output": 0})
-        tt["input"] += int(d.get("input") or 0)
-        tt["output"] += int(d.get("output") or 0)
+        if isinstance(f, dict):
+            prov = f.get("provider") or "claude"
+            add(native if prov == "claude" else prov, f.get("in"), f.get("out"))
+    for acct, d in entry["ledger"].items():
+        if isinstance(d, dict):
+            add(acct, d.get("input"), d.get("output"))
     return totals
 
 
-def session_status_part(sid, transcript_path):
-    """'Session in/out: Claude 370k/111k · Codex 450k/84k', or None with no tokens yet (or on any error)."""
+def session_status_part(sid, transcript_path, where=None):
+    """'Session in/out: Claude 370k/111k · Codex 450k/84k · DeepSeek@work 90k/9k', or None with no tokens yet (or
+    on any error). One counter per account (profile label), never a sum over a provider's accounts."""
     if not sid:
         return None
     try:
-        totals = session_tokens(sid, transcript_path)
+        totals = session_tokens(sid, transcript_path, native_account(where))
     except Exception:
         return None
-    parts = ["%s %s/%s" % (display_name(prov), fmt_tok(d["input"]), fmt_tok(d["output"]))
-             for prov, d in sorted(totals.items())
-             if int(d.get("input") or 0) + int(d.get("output") or 0) > 0]
+    parts = ["%s %s/%s" % (scope_name(acct), fmt_tok(d["input"]), fmt_tok(d["output"]))
+             for acct, d in sorted(totals.items(), key=lambda kv: account_sort_key(kv[0]))
+             if d["input"] + d["output"] > 0]
     return ("Session in/out: " + " · ".join(parts)) if parts else None
 
 
@@ -1655,7 +1698,7 @@ def cmd_statusline(a):
         sid = data.get("session_id")
         where = Path(cwd) if cwd else None
         refresh_codex(where)
-        session_line = session_status_part(str(sid) if sid else None, data.get("transcript_path"))
+        session_line = session_status_part(str(sid) if sid else None, data.get("transcript_path"), where)
         spend_frag = spend_status_fragment(where) if where else None
         if session_line and spend_frag:               # at ≥ 80% the spend joins the session in/out line
             session_line += " · " + spend_frag
@@ -3522,6 +3565,8 @@ Rules:
 - If permissions deny an action, you may do the same thing by allowed means (e.g. search with a tool
   instead of a command), but do not work around the restriction itself. If you need a command (tests, build),
   name it under "Blockers" and the orchestrator will grant it.
+- You already run in the working directory. Run an allowed command on its own, without `cd`, `&&`, `;` or pipes
+  around it: a permission rule matches the command as written, and a wrapped command is denied.
 - Verify the result yourself (build, tests) if the task and your permissions allow it.
 
 Reply to the orchestrator (your last message) — brief, strictly in this form:

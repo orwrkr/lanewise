@@ -261,6 +261,8 @@ contains "$out" "\[OK\]" "status OK printed"
 contains "$out" "add a function" "final output returned"
 contains "$out" "Prompt was: # Role: Orchestra executor" "executor role goes before the task"
 contains "$out" "STATUS: DONE | PARTIAL | BLOCKED" "role defines the report format"
+contains "$out" 'Run an allowed command on its own, without `cd`, `&&`, `;` or pipes' "role: run an allowed command unwrapped"
+contains "$out" "a permission rule matches the command as written" "role: says why a wrapped command is denied"
 contains "$(cat "$FAKE_ENV_LOG")" "msg=none claudecode=none worker=cod-" "orchestrator session vars stripped, ORCH_WORKER set"
 args=$(tail -1 "$FAKE_LOG")
 contains "$args" "-m gpt-5.6-terra" "model passed"
@@ -1541,6 +1543,109 @@ out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"curr
 contains "$out" "Session in/out: Claude 500/30" "a shrunken transcript restarts from scratch"
 out=$(printf '{"session_id":"sess-empty","workspace":{"current_dir":"%s"}}' "$(native "$REPO")" | $ORCH statusline)
 grep -q "Session in/out:" <<<"$out" && bad "session line shown with no tokens" || ok "no session line with no tokens"
+
+echo "── session tokens per account (a profile label, never a sum over a provider)"
+AH="$(native "$T/acct-home")"; mkdir -p "$AH"
+acct() { ORCH_HOME="$AH" $ORCH "$@"; }
+acct_sl() {      # acct_sl <session> [extra env…]: the status line of that session, run in the test repository
+  local sid=$1; shift
+  printf '{"session_id":"%s","transcript_path":"%s","workspace":{"current_dir":"%s"}}' \
+    "$sid" "$(native "$TCFG/$sid.jsonl")" "$(native "$REPO")" | env "$@" ORCH_HOME="$AH" $ORCH statusline
+}
+cp "$TCFG/sess-tok.jsonl" "$TCFG/sess-acct.jsonl"       # the native thread: 1500 in / 150 out
+$PY - "$AH/usage.jsonl" <<'EOF'
+import json, sys
+def rec(sid, prov, label, inp, out):
+    r = {"kind": "run", "session": sid, "provider": prov, "model": "m",
+         "usage": {"input_tokens": inp, "cached_input_tokens": 0, "output_tokens": out}}
+    if label is not None:
+        r["label"] = label
+    return json.dumps(r)
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    for line in (rec("sess-acct", "deepseek", "deepseek@client", 500, 60),
+                 rec("sess-acct", "deepseek", "deepseek@personal", 100, 10),
+                 rec("sess-acct", "deepseek", "deepseek@client", 20, 5),
+                 rec("sess-acct", "codex", None, 400, 40),               # an old record: no label
+                 rec("sess-acct", "codex", "codex", 100, 10),
+                 rec("sess-acct", "codex", "codex@work", 90, 10),        # a non-default login profile
+                 rec("sess-acct", "claude", "claude", 200, 20),          # orch run claude on the default login
+                 rec("sess-other", "deepseek", "deepseek@other", 7, 7)):
+        f.write(line + "\n")
+EOF
+out=$(acct_sl sess-acct)
+contains "$out" "Session in/out: Claude 1.7k/170 · Codex 500/50 · Codex@work 90/10 · DeepSeek@client 520/65 · DeepSeek@personal 100/10" \
+  "session tokens: one counter per account, plain account first, labels alphabetical"
+grep -qE "DeepSeek [0-9]|DeepSeek@other" <<<"$out" && bad "session tokens: a sum over the keys, or another session's run: $out" \
+  || ok "session tokens: two keys of one provider are not added up"
+contains "$out" "Codex 500/50 · Codex@work" "a run without a label counts under its provider, with the plain codex runs"
+contains "$out" "Claude 1.7k/170" "orch run claude on the default login adds up with the native thread"
+out2=$(acct_sl sess-acct); [[ "$out2" == "$out" ]] && ok "session tokens: a second refresh changes nothing" || bad "session tokens drifted on refresh: $out2"
+# a native session billed to a key profile counts under that profile's label, the default-login run stays apart
+acct profile set claude work --key ANTHROPIC_API_KEY_WORK >/dev/null
+out=$(acct_sl sess-acct ORCH_PROFILES=claude=work)
+contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 · Codex" "a native session on a key profile shows its label"
+out=$(acct_sl sess-acct)
+contains "$out" "Session in/out: Claude 1.7k/170 · Codex" "the same session on the default login adds up again"
+# an old-format cache entry (keyed by provider, no format mark) is rebuilt from the ledger with labels
+$PY - "$AH" <<'EOF'
+import json, os, sys, time
+home = sys.argv[1]
+size = os.path.getsize(os.path.join(home, "usage.jsonl"))
+with open(os.path.join(home, "usage.jsonl"), "a", encoding="utf-8") as f:
+    for label, i, o in (("deepseek@client", 500, 60), ("deepseek@personal", 100, 10)):
+        f.write(json.dumps({"kind": "run", "session": "sess-old", "provider": "deepseek", "label": label,
+                            "usage": {"input_tokens": i, "output_tokens": o}}) + "\n")
+cache = os.path.join(home, "session_tokens.json")
+data = json.load(open(cache, encoding="utf-8"))
+data["sess-old"] = {"files": {}, "ledger": {"deepseek": {"input": 600, "output": 70}},
+                    "ledger_offset": size + 1000000, "updated": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}
+json.dump(data, open(cache, "w", encoding="utf-8"))
+EOF
+out=$(acct_sl sess-old)
+contains "$out" "Session in/out: DeepSeek@client 500/60 · DeepSeek@personal 100/10" "an old-format cache entry is rebuilt with labels"
+grep -qE "DeepSeek [0-9]" <<<"$out" && bad "old cache: the stale provider sum survived: $out" || ok "old cache: no stale provider sum next to the keys"
+out2=$(acct_sl sess-old); [[ "$out2" == "$out" ]] && ok "a rebuilt entry is not read twice" || bad "rebuilt entry drifted: $out2"
+$PY - "$AH" <<'EOF' && ok "the rebuilt entry carries the format mark" || bad "the rebuilt entry has no format mark"
+import json, os, sys
+e = json.load(open(os.path.join(sys.argv[1], "session_tokens.json"), encoding="utf-8"))["sess-old"]
+assert e.get("format") == 2 and "deepseek" not in e["ledger"] and set(e["ledger"]) == {"deepseek@client", "deepseek@personal"}, e
+EOF
+# a malformed cache entry and malformed ledger lines never break the status line
+$PY - "$AH" <<'EOF'
+import json, os, sys, time
+home = sys.argv[1]
+with open(os.path.join(home, "usage.jsonl"), "a", encoding="utf-8") as f:
+    f.write("[1, 2]\n")
+    f.write(json.dumps({"kind": "run", "session": "sess-bad", "provider": "codex", "label": "codex@work",
+                        "usage": {"input_tokens": "many", "output_tokens": 1}}) + "\n")
+    f.write(json.dumps({"kind": "run", "session": "sess-bad", "provider": "codex", "label": "codex@work",
+                        "usage": {"input_tokens": 10, "output_tokens": 1}}) + "\n")
+    for prov, i in (("deepseek", 3), ("codex", 4)):        # land on the damaged cache values below
+        f.write(json.dumps({"kind": "run", "session": "sess-bad", "provider": prov,
+                            "usage": {"input_tokens": i, "output_tokens": 1}}) + "\n")
+cache = os.path.join(home, "session_tokens.json")
+data = json.load(open(cache, encoding="utf-8"))
+data["sess-bad"] = {"format": 2, "files": {"x": "junk", "y": {"in": "a", "out": None, "provider": 5}},
+                    "ledger": {"deepseek": "junk", "codex": {"input": "x", "output": None}, "claude": [1]},
+                    "ledger_offset": 0, "updated": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}
+json.dump(data, open(cache, "w", encoding="utf-8"))
+EOF
+out=$(acct_sl sess-bad); rc=$?
+[[ $rc -eq 0 ]] && contains "$out" "Session in/out: Codex 4/1 · Codex@work 10/2 · DeepSeek 3/1" "the status line survives a malformed cache entry and ledger lines" \
+  || bad "malformed entry: rc=$rc out=$out"
+# end to end: the labels `orch run` writes (two deepseek keys, the default claude login) reach the status line
+acct profile set deepseek client --key DEEPSEEK_KEY_CLIENT >/dev/null
+acct profile set deepseek personal --key DEEPSEEK_KEY_PERSONAL >/dev/null
+cp "$TCFG/sess-tok.jsonl" "$TCFG/sess-e2e.jsonl"
+e2e() { CLAUDE_CODE_SESSION_ID=sess-e2e FAKE_CLAUDE=ok DEEPSEEK_KEY_CLIENT=sk-a DEEPSEEK_KEY_PERSONAL=sk-b ORCH_HOME="$AH" $ORCH run "$@" >/dev/null; }
+e2e deepseek --profile client "x"; expect_rc 0 $? "run on the first deepseek key"
+e2e deepseek --profile personal "x"; expect_rc 0 $? "run on the second deepseek key"
+e2e claude "x"; expect_rc 0 $? "run claude on the default login"
+line=$(acct_sl sess-e2e | grep "^Session in/out:")
+grep -qE "^Session in/out: Claude 1\.[0-9]k/[0-9]+ · DeepSeek@client [0-9]+/[0-9]+ · DeepSeek@personal [0-9]+/[0-9]+$" <<<"$line" \
+  && ok "end to end: two keys and the native login, three counters" || bad "end to end session line: $line"
+[[ "$line" == *"Claude 1.5k/150"* ]] && bad "end to end: the claude run did not add to the native thread: $line" \
+  || ok "end to end: orch run claude adds to the native Claude counter"
 
 echo "── rounding"
 now=$($PY -c "import time; print(int(time.time()))")

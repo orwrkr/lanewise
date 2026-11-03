@@ -89,7 +89,9 @@ while the `codex` profile isn't `off`; `orch run codex` itself is not blocked by
 adapter's exit 75).
 
 The status line shows the limits on a line of their own, and a further `Session in/out:` line with this session's
-tokens per provider, without cache reads. None of this costs tokens: the status line never reaches the model.
+tokens per account, without cache reads: one counter per profile label (`Codex`, `Codex@work`, `DeepSeek@client`,
+`DeepSeek@personal`), never a sum over a provider's accounts. The session's own Claude thread counts as `Claude`, or
+under its key profile's label when it bills to a key. None of this costs tokens: the status line never reaches the model.
 
 ## The status line format
 

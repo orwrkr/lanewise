@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.17.0
+
+- **The status line counts tokens per account**: `Session in/out:` keyed each run by its provider, so `DeepSeek@client`
+  and `DeepSeek@personal` came out as one `DeepSeek` figure. It now has one counter per profile label (`Codex`,
+  `Codex@work`, `DeepSeek@client`, a subscription login next to API keys), for every provider, never a sum over a
+  provider's accounts. A run record without a label falls back to its provider. The session's own Claude thread counts
+  under its key profile's label when it bills to a key, else as `Claude`, together with `orch run claude` on the same
+  default login. Within a provider the plain account comes first, then the labels alphabetically. The cache
+  `session_tokens.json` marks the new format: an entry without the mark restarts its ledger part from the start, so
+  old sessions get correct labels, and malformed cache entries or ledger lines no longer blank the line. `orch usage`
+  and the ledger format are unchanged.
+- **Executors are told not to wrap commands**: the executor role says to run an allowed command on its own, without
+  `cd`, `&&`, `;` or pipes around it. A permission rule such as `Bash(node scripts/test.mjs:*)` does not match
+  `cd <dir> && node scripts/test.mjs; echo $?`, so an executor that wrapped its test run was denied and ended PARTIAL.
+  The line is general; Codex runs under its own sandbox and has no such rules, so for it the line is only harmless.
+
 ## 0.16.0
 
 - **Subscriptions before API keys**: among the slots that suit a task, the orchestrator now takes subscription slots

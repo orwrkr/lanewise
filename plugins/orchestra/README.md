@@ -91,7 +91,7 @@ A Claude subagent (Agent tool) is an agent loop inside the same Claude Code sess
 - **Codex** has one (`codex exec`), with a `read-only` / `workspace-write` sandbox;
 - **DeepSeek** has none — over the API it only answers with text. The loop comes from headless Claude Code (`claude -p`) pointed at DeepSeek's Anthropic-compatible API (`https://api.deepseek.com/anthropic`). The DeepSeek model gets Read/Grep/Glob/Edit/Write/Bash and works like a Sonnet subagent. You pay from your DeepSeek balance; subscription limits are not consumed.
 
-To the orchestrator both look the same: `orch run <provider> … ` in the background → a `STATUS: DONE | PARTIAL | BLOCKED` report with the sections "Done / Changed files / Verification / Blockers", plus the paths to `output.md` and `log.txt`. `orch` adds the executor role to the task itself: who the executor is, that another Claude Code instance is directing it, the rules and the report format. For DeepSeek the role goes into the system prompt, for Codex at the top of the prompt.
+To the orchestrator both look the same: `orch run <provider> … ` in the background → a `STATUS: DONE | PARTIAL | BLOCKED` report with the sections "Done / Changed files / Verification / Blockers", plus the paths to `output.md` and `log.txt`. `orch` adds the executor role to the task itself: who the executor is, that another Claude Code instance is directing it, the rules and the report format. For DeepSeek the role goes into the system prompt, for Codex at the top of the prompt. The role also tells the executor to run an allowed command on its own, without `cd`, `&&`, `;` or pipes around it, because a permission rule matches the command as written.
 
 Reports beginning `STATUS: BLOCKED` or `PARTIAL` keep that outcome in the run header and usage ledger even
 when the adapter exits 0; the orchestrator reads and handles the report.
@@ -173,7 +173,12 @@ Codex's limits are read the same way from its own session logs (`$CODEX_HOME/ses
 parsed defensively) and shown as a `Codex subscription: …` line next to the Claude one, with `TIGHT: treat Codex
 as low` when a window or its projection reaches the reserve — see the `codex` profile's `reserve`/`week_reserve`.
 The status line gets two more lines: the Codex limits, and `Session in/out: Claude 370k/111k · Codex 450k/84k`, the
-current session's tokens per provider, without cache reads, which agrees with `orch usage`.
+current session's tokens per account, without cache reads, which agrees with `orch usage`. An account is a profile
+label, so a provider whose usage goes to different accounts shows one counter each, never a sum: with a subscription
+login and two DeepSeek keys, `Session in/out: Claude 1.5k/150 · Codex 400/40 · DeepSeek@client 500/60 ·
+DeepSeek@personal 100/10`. The plain account (the built-in profile) comes first within a provider, then the labels
+alphabetically. This session's own Claude thread counts under its key profile's label when it bills to a key, else as
+`Claude`, together with `orch run claude` on the same default login.
 
 ## DeepSeek as the lead
 
@@ -367,7 +372,7 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `~/.orchestra/usage.jsonl` | usage log: runs, manual tasks, session snapshots (`orch usage`) |
 | `~/.orchestra/claude_usage.json` | the Claude subscription's last known window usage and its recent history, for the budget mode (`orch budget`) |
 | `~/.orchestra/codex_usage.json` | the Codex account's last known limits, per `CODEX_HOME` (the `Codex subscription:` line) |
-| `~/.orchestra/session_tokens.json` | per-session byte offsets and running token totals, for the status line's session part |
+| `~/.orchestra/session_tokens.json` | per-session byte offsets and running token totals per account, for the status line's session part |
 | `~/.orchestra/sessions.json` | active Claude Code sessions and Claude executor runs: the budget's consumer count |
 | `~/.orchestra/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
 | `<project>/.orchestra/runs/` | executor runs: prompt, role, project rules, response, log, tokens |

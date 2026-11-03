@@ -22,9 +22,8 @@ Detailed sections of this skill: `orch guide <section>` (`manual`, `quota`, `pro
    If it starts with `Lead: …`, you are not Claude: read `orch guide lead` first (orch-* subagents run on your own
    model there; Claude is reachable only as `orch run claude`, if its profile allows).
    `Claude subscription: … SURPLUS` (or a `💡` event) — the 5-hour window would expire with a lot unused beyond the
-   reserve: give Claude what would go to API-billed executors (DeepSeek, API-key profiles), within your session's
-   share; `TIGHT` — treat Claude as `low`. A `Codex subscription: … TIGHT` line (or its `💡` event) — treat Codex
-   as `low` and offload to other providers. `orch guide budget`.
+   reserve: Claude goes first, also ahead of Codex on a tie, within your session's share; `TIGHT` — treat Claude as
+   `low`. A `Codex subscription: … TIGHT` line (or its `💡` event) — treat Codex as `low`. `orch guide budget`.
 2. Registry — once per session (and whenever the operator changed it): `orch registry show`. It holds slots
    (provider × model × effort), cost, `max_difficulty`, `good_for`, operator parameters, routes (`routing`).
 3. A slot is unavailable if `orch status` shows a restriction on its key or on its provider's key
@@ -48,9 +47,10 @@ steps wait on it), the **files** it changes, **dependencies**. With ≥ 3 subtas
    `max_difficulty ≥ difficulty`.
 2. Drop slots that are unavailable, not allowed by the profile, or in `policy.never_auto` (without explicit
    permission), and the manual lane if the subtask fails its rules (section 5).
-3. Take the **cheapest slot that can handle the difficulty**; on a tie — the pool less loaded in this session
-   (alternate Claude ↔ Codex ↔ DeepSeek). DeepSeek spends balance, not subscription limits — it is the offload pool,
-   except in a Claude SURPLUS, when Claude goes first.
+3. What is left all suits the task. Among it, **subscription slots before API-billed ones** (DeepSeek, any profile
+   with a key): what stays unused at a reset is lost, a balance is money. A subscription that is `TIGHT` or `low` goes
+   after them. `prefer for:` and required cross-review outrank this order. Then the **cheapest slot that can handle
+   the difficulty**; on a tie — the pool less loaded in this session.
 4. Effort — the minimum sufficient: 1 → low, 2 → low/medium, 3 → medium/high, 4 → high, 5 → xhigh/max or the main
    thread. Go higher only after a failure or when a mistake is costly (security, data, migrations).
 5. **Cross-review** significant code with a different family: Claude · OpenAI (Codex) · DeepSeek (`review_of_*` in

@@ -16,10 +16,10 @@ version: 1
 policy:
   # cost — relative load on subscription limits (1 cheap … 5 expensive); for DeepSeek —
   # relative price of tokens paid from the balance (it doesn't spend subscription limits).
-  # Rule: the cheapest slot that can handle the difficulty; on a tie — the
-  # pool that is less loaded today (alternate claude ↔ codex ↔ deepseek).
   # billing (per provider): subscription — limits that reset (unused remainder expires); api — paid per token.
-  # A Claude SURPLUS (orch status, orch guide budget) moves work from billing: api (and API-key profiles) to Claude.
+  # Rule, among slots that suit the task: billing: subscription before billing: api and API-key profiles, unless the
+  # subscription is TIGHT or low (orch status, orch guide budget); then the cheapest slot that can handle the
+  # difficulty; on a tie — the pool that is less loaded today.
   cross_review: true           # code from one model family is reviewed by another (claude · openai · deepseek)
   parallel_write_isolation: worktree   # parallel writing tasks — each in its own worktree
   codex_timeout: 45m

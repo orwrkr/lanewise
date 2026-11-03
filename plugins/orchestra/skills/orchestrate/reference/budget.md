@@ -15,12 +15,15 @@ has its own measurement time; projections are anchored to it and do not improve 
 the week a reserve that shrinks with the time left to the reset — `reserve × (time left / 7 days)`, floored at
 1 point and never below a reserve of 0. So a 10% weekly reserve is 10 at the start of the week, 5 at mid-week,
 about 1.85 with 31 hours left, and 1 (the floor) in the last hour. The mode is in `orch status` / SessionStart (the
-line `Claude subscription: …`) and arrives as a `💡` event when it changes:
+line `Claude subscription: …`) and arrives as a `💡` event when it changes.
+
+By default, among the slots that suit a task, subscriptions go before API-billed executors (DeepSeek, any profile with
+a key): what stays unused at a reset is lost, and a balance is money. The modes adjust that order:
 
 - **SURPLUS** — at least N % of the window (N = the `claude` profile's `surplus`, default 30) would expire unused
   beyond the reserve, and the weekly limit has room beyond its reserve. The line names the active orchestrator
   sessions and each one's share of the surplus: plan for your share, not for the whole. Until the reset shown:
-  - a subtask you would give to an API-billed executor goes to the cheapest Claude slot that handles its difficulty
+  - a subtask still headed for an API-billed executor goes to the cheapest Claude slot that handles its difficulty
     (a subagent; in a session led by another model — `orch run claude`);
   - Codex and the manual pool keep their tasks; on a tie between Claude and Codex, take Claude;
   - cross-review of Claude's code stays with Codex (DeepSeek only if Codex is unavailable);
@@ -31,10 +34,10 @@ line `Claude subscription: …`) and arrives as a `💡` event when it changes:
   line names the weekly limit, the basis the projection used (`N% projected from the week's average` or `N% projected
   from the last 8 h`) and the effective reserve, shown with what it comes from when it has shrunk (`reserve 2% (10%
   at the start of the week)`). The status line's mode part says `tight: week N% projected` (or `tight: week over
-  reserve` for the used share, `tight: 5h` for a five-hour-only squeeze). Treat Claude as `low`: use the cheapest
-  Claude slots, offload the rest to Codex / DeepSeek. An earlier weekly projection still blocks SURPLUS but cannot by
-  itself raise TIGHT.
-- **no mode in the line / no line** — route as usual (too early in the window to tell, or no numbers).
+  reserve` for the used share, `tight: 5h` for a five-hour-only squeeze). Treat Claude as `low`: it goes after the
+  API-billed executors, so work moves to another subscription with room, then to them. An earlier weekly projection
+  still blocks SURPLUS but cannot by itself raise TIGHT.
+- **no mode in the line / no line** — the default order (too early in the window to tell, or no numbers).
 
 `orch budget` shows the numbers, the active consumers orch knows of (Claude Code sessions with this plugin active in
 the last 15 minutes, running `orch run claude` executors; sessions led by another model don't count) and the

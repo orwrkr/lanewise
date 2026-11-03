@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.0
+
+- **Subscriptions before API keys**: among the slots that suit a task, the orchestrator now takes subscription slots
+  before API-billed ones (DeepSeek, any profile with a key), since what stays unused at a reset is lost and a balance
+  is money. A subscription that is TIGHT or low goes after them. Before, the cheapest slot won whatever its billing, so
+  DeepSeek could take work while a subscription had plenty left. Suitability still comes first, and `prefer for` and
+  required cross-review outrank this order. In a SURPLUS, Claude also goes ahead of Codex on a tie.
+
 ## 0.15.1
 
 - **A flat day no longer trips the weekly TIGHT alarm**: once the last-changed sample ages out of the 24-hour recent

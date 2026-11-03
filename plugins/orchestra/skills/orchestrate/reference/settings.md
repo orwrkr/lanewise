@@ -74,6 +74,8 @@ Caps what API-billed executors spend (DeepSeek always; Codex/Claude only on a `k
 ## Subscription budgets — `orch guide budget`
 
 The Claude (and Codex) subscription's 5-hour window and weekly limit, projected to warn of a surplus or a squeeze.
+Among slots that suit a task, subscriptions go before API-billed executors unless they are TIGHT: a global routing
+rule in `SKILL.md`, with `prefer for` as the per-profile way to rank a provider first for a task type.
 
 - Thresholds live in the profile: `orch profile set claude <name> --opt reserve=25 --opt week_reserve=15
   --opt surplus=40` (Codex: `reserve`, `week_reserve` only, no surplus), then

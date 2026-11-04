@@ -6,8 +6,11 @@ when the window is going to expire with a lot unused, work that would go to them
 
 The numbers are account-wide: every session on the account — other orchestrators, other projects, the apps — is
 already in them. `orch` projects the 5-hour window at the **current pace**: the higher of the window average and the
-pace of the last 15–60 minutes, measured back from the same snapshot. The week is projected from its **recent
-pace**: the earliest of the week's own samples (`week_history`, at most one per 15 minutes, kept for 72 hours) from
+pace of the last 30–60 minutes, measured back from the same snapshot (the base sample is at least 30 minutes old, so a
+short burst is not extrapolated). A five-hour projection needs at least 60 minutes of the window behind it, at the
+measurement, for Claude and Codex alike: before that only a used share that has reached the reserve counts, and
+neither TIGHT nor SURPLUS is projected. The week is projected from its
+**recent pace**: the earliest of the week's own samples (`week_history`, at most one per 15 minutes, kept for 72 hours) from
 the last 24 hours with the same reset and at least 6 hours before the measurement; while there is no such sample
 (not enough history yet, or just after a reset) the week falls back to its window average, as before. Each window
 has its own measurement time; projections are anchored to it and do not improve merely as the numbers age. A
@@ -30,16 +33,18 @@ a key): what stays unused at a reset is lost, and a balance is money. The modes 
   - Codex and the manual pool keep their tasks; on a tie between Claude and Codex, take Claude;
   - cross-review of Claude's code stays with Codex (DeepSeek only if Codex is unavailable);
   - don't spend for the sake of spending: no extra subtasks, no effort above what the task needs.
-- **TIGHT** — the five-hour window reaches its (flat) reserve before reset, or the weekly used share has reached its
+- **TIGHT** — the five-hour window reaches its (flat) reserve before reset (projected only once 60 minutes of the
+  window have passed; a used share already at the reserve is TIGHT at once), or the weekly used share has reached its
   effective reserve, or the weekly projection reaches it after at least 24 hours of the week have been measured.
   Weekly TIGHT works even without current five-hour numbers; without a weekly reset only the used share counts. The
   line names the weekly limit, the basis the projection used (`N% projected from the week's average` or `N% projected
   from the last 8 h`) and the effective reserve, shown with what it comes from when it has shrunk (`reserve 2% (10%
   at the start of the week)`). The status line's mode part says `tight: week N% projected` (or `tight: week over
   reserve` for the used share, `tight: 5h` for a five-hour-only squeeze). Treat Claude as `low`: it goes after the
-  API-billed executors, so work moves to another subscription with room, then to them. An earlier weekly projection
-  still blocks SURPLUS but cannot by itself raise TIGHT.
-- **no mode in the line / no line** — the default order (too early in the window to tell, or no numbers).
+  API-billed executors, so work moves to another subscription with room, then to them. A weekly projection from the first
+  24 hours is too thin to count: it neither raises TIGHT nor blocks SURPLUS.
+- **no mode in the line / no line** — the default order (too early in the window to tell — the first 60 minutes of a
+  five-hour window — or no numbers).
 
 `orch budget` shows the numbers, the active consumers orch knows of (Claude Code sessions with this plugin active in
 the last 15 minutes, running `orch run claude` executors; sessions led by another model don't count) and the
@@ -84,8 +89,9 @@ Codex subscription: 5-hour window 81% used, resets 18:28, week 95%, resets Nov 4
 
 The mode reuses the Claude thresholds (`reserve`, `week_reserve` from the `codex` profile, default 10): **TIGHT**
 when a window's used share is at or above its cap, or its projection at reset is, with the same rule that a weekly
-projection counts only after 24 h of the week. Codex keeps its own `week_history` in its cached entry, so its weekly
-projection and the shrinking effective reserve work exactly as for Claude. Treat Codex as `low` then — offload to
+projection counts only after 24 h of the week and a five-hour projection only after 60 minutes of its window. Codex
+keeps its own `week_history` in its cached entry, so its weekly projection and the shrinking effective reserve work
+exactly as for Claude. Treat Codex as `low` then — offload to
 other providers. There is no SURPLUS mode for Codex. The line and its `💡` event only appear with current data and
 while the `codex` profile isn't `off`; `orch run codex` itself is not blocked by this (real exhaustion is still the
 adapter's exit 75).

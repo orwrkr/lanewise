@@ -748,16 +748,18 @@ def cmd_quota(a):
 # Claude Code hands the statusLine command `rate_limits` (5-hour and 7-day windows: % used, reset time). The numbers
 # are account-wide: every session on the account is already in them. `orch statusline`, running in every session,
 # adds them to a shared snapshot with a short history; the operator can report the same numbers (`orch budget set`).
-# The pace is the higher of the window average and the last 15–60 minutes, so the projection follows every instance
+# The pace is the higher of the window average and the last 30–60 minutes, so the projection follows every instance
 # consuming right now. A reserve is kept for other sessions and safety (profile claude: reserve, week_reserve):
 # SURPLUS — the window would expire with a lot left beyond the reserve (shared between the active sessions);
-# TIGHT — it would reach the reserve before the reset.
+# TIGHT — it would reach the reserve before the reset. A five-hour projection (either mode) needs at least
+# PROJECTION_MIN_ELAPSED minutes of the window behind it; a used share that has reached the reserve needs none.
 
 USAGE_SNAPSHOT = ORCH_HOME / "claude_usage.json"
 SESSIONS_FILE = ORCH_HOME / "sessions.json"
 BUDGET_DEFAULTS = {"surplus": 30, "reserve": 10, "week_reserve": 10}    # % — profile claude: --opt surplus=N|off, …
-PACE_MIN_ELAPSED = 30      # minutes into a window before its average pace is trusted
-RECENT_PACE = (15, 60)     # the recent pace: the oldest sample 15–60 minutes back
+PACE_MIN_ELAPSED = 30      # minutes into a week before its average pace is trusted
+PROJECTION_MIN_ELAPSED = 60    # minutes of a five-hour window that must have passed before a projection counts
+RECENT_PACE = (30, 60)     # the recent pace: the oldest sample 30–60 minutes back
 ACTIVE_MIN = 15            # a session seen within this many minutes is active
 HISTORY_KEEP_H = 6
 WEEK_HISTORY_KEEP_H = 72   # hours a weekly sample is kept
@@ -822,13 +824,16 @@ def measured_at(snap, name):
 
 
 def window_pace(snap, used, reset, hours):
-    """(%/min, basis): the higher of the window average and the recent pace of all sessions; (None, None) if unknown."""
+    """(%/min, basis): the higher of the window average and the recent pace of all sessions; (None, None) if unknown.
+    In a five-hour window both are unknown until PROJECTION_MIN_ELAPSED minutes of it have passed at the measurement."""
     if reset is None:
         return None, None
     t = measured_at(snap, "five_hour" if hours == 5 else "seven_day")
     if t is None:
         return None, None
     elapsed = (t - (reset - dt.timedelta(hours=hours))).total_seconds() / 60
+    if hours == 5 and elapsed < PROJECTION_MIN_ELAPSED:
+        return None, None
     rates = []
     if elapsed >= PACE_MIN_ELAPSED:
         rates.append((used / elapsed, "window average"))
@@ -1070,8 +1075,6 @@ def claude_budget(where=None):
     spare = cap - projected
     if rate is None or stale or cfg["surplus"] <= 0 or spare < cfg["surplus"]:
         return "normal", line + "."
-    if weekly is not None and weekly >= 100 - eff:
-        return "normal", line + ". Weekly projection %d%%: no surplus mode yet." % pct(weekly)
     each = " — ≈%d%% for each of the %d sessions" % (pct(spare / sessions), sessions) if sessions > 1 else ""
     exceptions = preferred_api_profiles(where)
     except_text = (", except the task types preferred for " + " and ".join(
@@ -1400,11 +1403,12 @@ def codex_window(entry, name):
 
 
 def codex_projected(used, reset, measured, window_minutes):
-    """Projected used % at the reset, from the window average; None when it cannot be computed."""
+    """Projected used % at the reset, from the window average; None when it cannot be computed or when fewer
+    than PROJECTION_MIN_ELAPSED minutes of the window have passed at the measurement (too early to tell)."""
     if reset is None or measured is None:
         return None
     elapsed = (measured - (reset - dt.timedelta(minutes=window_minutes))).total_seconds() / 60.0
-    if elapsed <= 0:
+    if elapsed < PROJECTION_MIN_ELAPSED:
         return None
     return used * window_minutes / elapsed
 

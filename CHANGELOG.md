@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.18.4
+
+- **No five-hour TIGHT from a few minutes of data**: a projection of the five-hour window now needs at least 60
+  minutes of the window behind it, for Claude and for Codex. Seen for real: Claude "TIGHT" at 5% used, 30 minutes in,
+  from one heavy step projected over hours (gone minutes later), and Codex "TIGHT" at 15% used a few minutes after its
+  reset, because the average of a young window was scaled up to the whole five hours. Before the hour, a used share
+  that has reached the reserve is still TIGHT at once; anything else shows no mode. SURPLUS reads the same pace, so it
+  cannot appear in that first hour either.
+- **The recent pace needs a longer baseline**: the Claude pace of all sessions is measured from a sample 30–60 minutes
+  old (it was 15–60), so it covers at least 30 minutes.
+- **A young week no longer blocks SURPLUS**: at week 5%, nine hours after a reset, "98% projected" held back SURPLUS
+  while TIGHT already ignored that projection for its first 24 hours. Now neither uses it. A used share over the
+  reserve still counts at once.
+
 ## 0.18.3
 
 Fixes from the first CI run. No change in how the plugin behaves.

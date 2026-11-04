@@ -141,7 +141,8 @@ You can also report limits without commands, in plain words: "Sol is out until 9
 A Claude subscription's 5-hour window expires at its reset, and whatever was not used is gone, while DeepSeek and
 other API-key executors cost money per token. Orchestra projects the window to its reset at the current pace. The
 usage numbers are account-wide, so every session on the account is included. The pace is the higher of the window
-average and the last 15–60 minutes, which tracks every instance that is consuming right now. A reserve (10% of the
+average and the last 30–60 minutes, which tracks every instance that is consuming right now (neither is projected
+during the first hour of the window; a used share already at the reserve counts at once). A reserve (10% of the
 window and 10% of the week by default) is kept for your other sessions and as a safety margin:
 
 - **surplus** — at least 30% of the window would expire unused beyond the reserve, and the weekly limit has room.

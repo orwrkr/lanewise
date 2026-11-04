@@ -169,6 +169,7 @@ elif mode == "bad_live":        # leaves a half-written usage_live.json behind, 
           "cache_read_input_tokens": 400, "output_tokens": 25}})
 EOF
 export FAKE_CLAUDE_LOG; FAKE_CLAUDE_LOG="$(native "$T/claude.json")"
+export ORCH_CLAUDE_BIN; ORCH_CLAUDE_BIN="$(native "$T/fakebin/fake_claude.py")"     # never the real claude, like codex above
 # check '<python expr over r (record) and a (argv)>' 'name'
 check() {
   $PY -c 'import json, os, sys
@@ -861,7 +862,7 @@ sl 10 $((now + 7200)) "$(week 95)" >/dev/null
 out=$($ORCH budget); contains "$out" "weekly limit is tight" "no surplus while the weekly limit is tight"
 $ORCH budget clear >/dev/null
 sl 10 $((now + 17400)) >/dev/null
-out=$($ORCH budget); grep -q "SURPLUS\|TIGHT" <<<"$out" && bad "projected too early: $out" || ok "no projection in the window's first 30 minutes"
+out=$($ORCH budget); grep -q "SURPLUS\|TIGHT" <<<"$out" && bad "projected too early: $out" || ok "no projection in the window's first hour"
 sl 10 $((now - 60)) >/dev/null
 out=$($ORCH budget); contains "$out" "No current Claude subscription numbers" "numbers of a window that has reset are ignored"
 sl 10 $((now + 7200)) >/dev/null
@@ -874,12 +875,13 @@ rm -f "$ORCH_HOME/profiles.json"
 $ORCH budget set --used 20 --resets +3h --week 50 >/dev/null
 out=$($ORCH budget); contains "$out" "20% used.*reported by the operator.*SURPLUS" "numbers reported by the operator"
 out=$(echo '{}' | $ORCH statusline --then "echo mine"); contains "$out" "^mine  " "statusline --then keeps your own status line first"
-# reserve and the pace of all sessions: snap USED [BASE_USED MINUTES_AGO] — window resets in 2 h, optional sample
+# reserve and the pace of all sessions: snap USED [BASE_USED MINUTES_AGO] — window resets in 2 h (SNAP_LEFT minutes),
+# optional sample
 snap() { $PY - "$(native "$ORCH_HOME/claude_usage.json")" "$@" <<'EOF'
-import datetime as dt, json, sys
+import datetime as dt, json, os, sys
 p, used = sys.argv[1], float(sys.argv[2])
 t = dt.datetime.now().astimezone()
-reset = (t + dt.timedelta(hours=2)).isoformat(timespec="seconds")
+reset = (t + dt.timedelta(minutes=int(os.environ.get("SNAP_LEFT", "120")))).isoformat(timespec="seconds")
 s = {"updated": t.isoformat(timespec="seconds"), "source": "statusline", "five_hour": {"used": used, "resets_at": reset}}
 if len(sys.argv) > 3:
     s["history"] = [[(t - dt.timedelta(minutes=int(sys.argv[4]))).isoformat(timespec="seconds"), float(sys.argv[3]), reset]]
@@ -896,6 +898,25 @@ snap 35
 out=$($ORCH budget); contains "$out" "SURPLUS: at the current pace (window average)" "35% after 3 h at the window average: surplus"
 snap 35 10 40
 out=$($ORCH budget); contains "$out" "TIGHT: at the current pace (last 4[0-9] min, all sessions)" "the recent pace of all sessions wins: 10% → 35% in 40 min is tight"
+# early in the window a projection is too thin to act on: a five-hour projection needs 60 minutes of the window
+# behind it, the recent pace a base sample at least 30 minutes old; a used share at the reserve is TIGHT at once
+SNAP_LEFT=270 snap 5 0 15
+out=$($ORCH budget); contains "$out" "5-hour window 5% used" "early window: the line is shown"
+grep -q "TIGHT\|SURPLUS" <<<"$out" && bad "5% used, a 15-min burst, 30 min in: $out" || ok "30 min in: a short burst is not projected over the window"
+SNAP_LEFT=241 snap 40
+out=$($ORCH budget); grep -q "TIGHT\|SURPLUS" <<<"$out" && bad "59 min in: $out" || ok "59 min in: the window average is not yet a projection"
+SNAP_LEFT=239 snap 40
+out=$($ORCH budget); contains "$out" "TIGHT: at the current pace (window average)" "61 min in: the window average projects, and 40% is tight"
+SNAP_LEFT=255 snap 1
+out=$($ORCH budget); grep -q "TIGHT\|SURPLUS" <<<"$out" && bad "45 min in, 1% used: $out" || ok "45 min in: no surplus from a window too young to project"
+SNAP_LEFT=225 snap 1
+out=$($ORCH budget); contains "$out" "SURPLUS: at the current pace (window average)" "75 min in: the same light use is a surplus"
+SNAP_LEFT=210 snap 20 5 15
+out=$($ORCH budget); grep -q "TIGHT" <<<"$out" && bad "a 15-min sample at 90 min in: $out" || ok "90 min in: a base sample under 30 min old gives no recent pace"
+SNAP_LEFT=210 snap 40 10 40
+out=$($ORCH budget); contains "$out" "TIGHT: at the current pace (last 4[0-9] min, all sessions) it reaches the reserve" "90 min in: a squeeze measured over 40 min is tight"
+SNAP_LEFT=290 snap 95
+out=$($ORCH budget); contains "$out" "TIGHT: at the current pace (used share) the reserve is already reached" "10 min in: a used share over the reserve is tight at once"
 # the consumers: Claude Code sessions (hooks, status line), Claude executor runs; a DeepSeek-led session doesn't count
 rm -f "$ORCH_HOME/sessions.json"
 echo '{"session_id": "s-a"}' | $ORCH hook user-prompt >/dev/null
@@ -1196,6 +1217,30 @@ CODEX_HOME="$(native "$T/cxmo2")"; out=$(cx_status)
 contains "$out" "tight: 5h" "codex: five-hour-tight mode text"
 CODEX_HOME="$(native "$T/cxmo3")"; out=$(cx_status)
 contains "$out" "tight: week 101% projected" "codex: projected week mode text"
+
+# a few minutes into a window its average is no projection: it needs 60 minutes of the window behind it, while a used
+# share at the reserve is TIGHT at once
+cx_early() {     # NAME USED_5H MINUTES_INTO_THE_WINDOW
+  rm -rf "$T/$1"; mkdir -p "$T/$1/sessions/2026/11/02"
+  export CODEX_HOME; CODEX_HOME="$(native "$T/$1")"
+  $PY "$(native "$T/gen_rollout.py")" "$(native "$T/$1/sessions/2026/11/02/rollout-0001.jsonl")" "$2"       "$($PY -c "print((300 - $3) / 60)")" 2 168
+}
+cx_early cxe1 15 5
+out=$($ORCH status); contains "$out" "Codex subscription: 5-hour window 15% used" "codex: 15% used 5 min after a reset is in the line"
+lacks "$out" "TIGHT" "codex: 15% used 5 min after a reset is not TIGHT"
+out=$(cx_status); contains "$out" "Codex · 5h 15%" "codex: 15% used 5 min after a reset in the compact text"
+lacks "$out" "tight" "codex: 15% used 5 min after a reset has no mode in the compact text"
+cx_early cxe2 50 55
+out=$($ORCH status); lacks "$out" "TIGHT" "codex: 50% used 55 min in is still too early to project"
+cx_early cxe3 50 65
+out=$($ORCH status); contains "$out" "TIGHT: treat Codex as low" "codex: 50% used 65 min in projects past the reserve → TIGHT"
+out=$(cx_status); contains "$out" "tight: 5h" "codex: the projection past the reserve in the compact text"
+cx_early cxe4 80 120
+out=$($ORCH status); contains "$out" "TIGHT: treat Codex as low" "codex: 80% used two hours in → TIGHT"
+out=$(cx_status); contains "$out" "tight: 5h" "codex: 80% used two hours in, compact text"
+cx_early cxe5 95 10
+out=$($ORCH status); contains "$out" "TIGHT: treat Codex as low" "codex: 95% used 10 min in → TIGHT at once"
+out=$(cx_status); contains "$out" "tight: 5h" "codex: 95% used 10 min in, compact text"
 
 # a measurement older than the freshness constant is marked stale on the codex line too
 rm -rf "$T/cxs"; mkdir -p "$T/cxs/sessions/2026/11/02"
@@ -2407,6 +2452,8 @@ import sys
 import traceback
 from unittest import mock
 
+if not (os.environ.get("ORCH_CODEX_BIN") and os.environ.get("ORCH_CLAUDE_BIN")):
+    sys.exit("This block runs inside run_tests.sh: without its fakes, its runs would call the real codex and claude.")
 orch, root = str(Path(sys.argv[1]).resolve()), Path(sys.argv[2])
 root.mkdir()
 root = root.resolve()      # a Windows short name in TEMP: orch compares and reports the long form
@@ -2653,7 +2700,7 @@ def weekly_budget():
     snapshot(None, {"used":95})
     assert m.claude_budget()[0] == "tight"
     snapshot(window(10, 2), window(15, 167))
-    assert m.claude_budget()[0] == "normal"    # early noisy projection blocks surplus, not TIGHT
+    assert m.claude_budget()[0] == "surplus"   # an early projection is noise: it neither raises TIGHT nor blocks SURPLUS
     snapshot(window(10, 2), window(95, 167))
     assert m.claude_budget()[0] == "tight"     # used share is sufficient even on day one
 

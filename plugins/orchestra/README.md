@@ -59,7 +59,7 @@ It is installed and removed **the standard way**: `install.sh` calls `claude plu
 Outside Claude Code the plugin creates only:
 - the launchers `~/.local/bin/orch` (plus `orch.cmd` on Windows);
 - personal data in `~/.orchestra/` (limits, profiles, keys, usage log, the isolated config of the DeepSeek executor);
-- in projects where you have used it: a `<project>/.orchestra/` folder, `<project>.wt/` worktrees and a `.orchestra/` line in `.git/info/exclude`. `.gitignore` is left alone; projects where the plugin was never used get nothing;
+- in projects where you have used it: a `<project>/.orchestra/` folder (with the worktrees of manual tasks that change files in `.orchestra/wt/`: if you delete it by hand, run `git worktree prune`), `<project>.wt/` worktrees (`orch worktree`), for Antigravity the rule `<project>/.agents/rules/orchestra-task.md` (it stays after a task closes), and their lines in `.git/info/exclude`. `.gitignore` is left alone; projects where the plugin was never used get nothing;
 - Codex account directories, if you created such profiles (`--home`).
 
 `orch footprint` shows the full list for the current environment. `bash uninstall.sh` removes the plugin and the launchers and lists what is left in projects; `--purge` also deletes `~/.orchestra/`.
@@ -285,17 +285,17 @@ binds a profile for `orch run claude` only and says so.
 Tasks that are worth doing by hand in Antigravity (UI checks in a browser, a broad review, a second opinion from another model family, long autonomous work) go **into a pool** instead of being dumped on you right away. You choose what to take and when.
 
 1. **Browse the pool:** `/orchestra:manual` (or "what's in the pool?"). The same list is in `<project>/.orchestra/MANUAL.md`, which you can keep open in your editor. It shows each task, the suggested agent and model, and how long it has been waiting.
-2. **Take a task:** "AG-0004 to Antigravity" (or "AG-0004 to Cursor"). The orchestrator runs `orch handoff take`: it creates a separate worktree and an `ag/ag-000N` branch, completes TASK.md and shows a card with the folder, the model and thinking level, and the line to paste (already on your clipboard).
-3. You open the folder in the agent, pick the model and paste the line. **That's it.** You don't need to report back when it's done: the agent writes `RESULT.md` itself.
+2. **Take a task:** "AG-0004 to Antigravity" (or "AG-0004 to Cursor"). The orchestrator runs `orch handoff take`: it completes TASK.md in the project folder and shows a card with the folder, the model and thinking level, and the line to paste (already on your clipboard).
+3. You keep the project folder open in the agent, pick the model and paste the line. **That's it.** You don't need to report back when it's done: the agent writes `RESULT.md` itself.
 
 The pool has a clock that runs from your last take (or from when the pool opened). Each time 5 minutes pass without a take, the orchestrator checks the pool. It takes back every task that is no longer worth waiting for — you are away, the task now blocks other work, or an automated executor would do it just as well — and runs them, in parallel where that is allowed. If there is no such task, it takes back only the next one, and only once the previous one it took this way has finished. So while you are picking tasks nothing is taken away, and an ignored pool drains one task at a time. A take restarts the clock. It hands a task straight to you, bypassing the pool, only when you ask (`orch handoff new`).
 
 **How the agent learns it is part of the system.** `orch` adds to TASK.md:
 - the role: you are an Orchestra executor, the task was set by the orchestrator (Claude Code), which will also review the result;
 - links to the project rules (`CLAUDE.md`, `AGENTS.md` — whichever exist);
-- the protocol: on start, `RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: product · model`, at the end `DONE`, `BLOCKED` or `FAILED` and a report; the scope; a ban on launching other agents; a note about the worktree (install dependencies, don't copy secrets).
+- the protocol: on start, `RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: product · model`, at the end `DONE`, `BLOCKED` or `FAILED` and a report; the scope; a ban on launching other agents. A task is **read-only** by default: the agent may write only its `RESULT.md` and is told to run no shell commands, since each one can stop and wait for your confirmation. A task that changes files (`--write`) works in a git worktree of its own that `orch` makes inside the project folder (`.orchestra/wt/<id>`, branch `ag/<id>`) when the task is taken; it leaves the changes uncommitted and the orchestrator reviews and commits them. Either way the agent keeps the project folder open and is never switched: you do not open the worktree. Several such tasks can be open at once, and the project folder may be dirty. A folder that is not a git repository takes read-only tasks only. Tools that walk hidden folders (jest, for one) may see an open nested worktree.
 
-For Antigravity, the task's worktree also gets the rule `.agents/rules/orchestra-task.md` with `trigger: always_on`. Antigravity injects it into every turn, so the protocol isn't lost in a long session. The rule is excluded from git and disappears with the worktree. Antigravity needs no extra setup. If you like, add a line to your global rules (`~/.gemini/GEMINI.md`): "follow tasks from `.orchestra/handoffs/*/TASK.md` strictly according to their protocol".
+For Antigravity, the project folder also gets one general rule, `.agents/rules/orchestra-task.md`, with `trigger: always_on`. Antigravity injects it into every turn, so the protocol isn't lost in a long session; it applies only when a message names a task id, so several open tasks do not mislead each other. The rule is excluded from git and stays after a task closes. Antigravity needs no extra setup. If you like, add a line to your global rules (`~/.gemini/GEMINI.md`): "follow tasks from `.orchestra/handoffs/*/TASK.md` strictly according to their protocol".
 
 The `AGENT:` line goes into the usage log, so you can see who completed a manual task and with which model.
 
@@ -307,7 +307,7 @@ How the orchestrator learns that a task is finished:
 
 If an assigned task hasn't been started within 30 minutes, you get a single reminder. If it hasn't been started within 180 minutes, the orchestrator reassigns it to a fallback. You have at most two tasks in hand at once, and the pool holds at most five. Small tasks are batched and handed out together. All these numbers are configurable in the registry, in the `operator` section. An `antigravity` profile (or `cursor`, etc.) lets you turn off the manual channel for a project and limit the models and the number of tasks.
 
-**Important (Google ToS):** the plugin does not control Antigravity programmatically. It doesn't run `agy`, doesn't use computer use, doesn't paste text and doesn't touch OAuth. It only writes and reads files in the task's working folder. Do not add such automation: Google bans accounts for it.
+**Important (Google ToS):** the plugin does not control Antigravity programmatically. It doesn't run `agy`, doesn't use computer use, doesn't paste text and doesn't touch OAuth. It only writes and reads files in the project folder (TASK.md, RESULT.md, the general rule and the task's own worktree). Do not add such automation: Google bans accounts for it.
 
 ## Usage log: who did what and how much it spent
 
@@ -381,9 +381,11 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `<project>/.orchestra/runs/` | executor runs: prompt, role, project rules, response, log, tokens |
 | `<project>/.orchestra/handoffs/AG-…/` | manual tasks: meta, BODY.md, TASK.md, RESULT.md |
 | `<project>/.orchestra/MANUAL.md` | the manual task board: pool, assigned, completed |
-| `<project>.wt/<name>/` | worktrees for isolated tasks (next to the repository); for Antigravity, with `.agents/rules/orchestra-task.md` |
+| `<project>/.orchestra/wt/<id>/` | the worktree of a manual task that changes files (inside the project folder, git-ignored) |
+| `<project>.wt/<name>/` | worktrees for isolated tasks of automated executors (`orch worktree`, next to the repository) |
+| `<project>/.agents/rules/orchestra-task.md` | the general Antigravity rule (always on, applies only to a named task); stays after a task closes |
 
-`.orchestra/` and the Antigravity rule are added to `.git/info/exclude` automatically, and `.gitignore` is left alone. `orch footprint` lists everything outside Claude Code.
+`.orchestra/` and the Antigravity rule are added to `.git/info/exclude` automatically (nothing is added outside a git repository), and `.gitignore` is left alone. `orch footprint` lists everything outside Claude Code.
 
 ## Alongside maestro-flow
 

@@ -11,6 +11,7 @@ Workflow — per `orch guide manual`.
    `.orchestra/MANUAL.md`.
 2. "AG-… to <agent>" / "I'll take AG-…" → `orch handoff take <ID> [--agent <agent>] [--model "<model>"] --clip`
    and show the card from the output in full: folder, model, line to paste (it is already on the clipboard).
+   A task that changes files is made a worktree at the take; the card says where it works.
 3. "AG-… done / blocked / didn't work out" → `orch handoff done <ID> --status DONE|BLOCKED|FAILED --note "…"`,
    then verify and integrate the result per `orch guide manual`.
 4. "AG-… cancel" / "not doing it" → `orch handoff cancel <ID>`; if the task is still needed, run it automatically

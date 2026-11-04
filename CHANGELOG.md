@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.20.0
+
+- **The agent's window stays on the project folder.** The operator keeps one folder open in the agent and never
+  switches it, the way they work with Claude Code. A read-only task works right there; a task that changes files works
+  in a git worktree that `orch` makes **inside** the project folder, so nothing needs opening.
+- **Read-only by default, `--write` for a task that changes files.** `offer` and `new` take `--write`, stored as
+  `write` in the meta; an old meta without the field counts as writing, since it made no promise. A read-only task
+  may write only its RESULT.md and is told to run no shell commands (each can stop and wait for the operator's
+  confirmation).
+- **`--write` means a worktree of its own**: `<project>/.orchestra/wt/<id>` on branch `ag/<id>`, made at the take (or
+  at `new`) and git-ignored with `.orchestra/`. `--base <ref>` picks its start and goes only with `--write`; without
+  it, a clear error. `--worktree` is gone and fails with a line naming `--write`. Several writing tasks may be open at
+  once and the project folder may be dirty. `--write` needs a git repository and is refused at `offer` and `new`
+  outside one (an old offer that counts as writing is not taken there); read-only tasks work anywhere, nothing
+  needs git. `make_worktree` takes a root; `orch worktree` for automated executors keeps `<project>.wt/`.
+- **TASK.md and RESULT.md stay in the project's `.orchestra/handoffs/<id>/`** for both kinds, so the agent finds them
+  the same way; `task_path` and `result_path` point there, `workdir` is the worktree. The writing protocol says to work
+  only inside the worktree (never its same-named original at the project root), to install dependencies without
+  copying secrets, and not to commit or switch branches: the orchestrator reviews the changes in the worktree and
+  commits them (this keeps the agent's shell commands, and so its confirmation prompts, to a minimum).
+- **The paste line is one line**, for the clipboard too. A read-only task's says to run no shell commands unless the
+  task lists them; a writing task's names its worktree. Both say that if the agent's file tools cannot open
+  `.orchestra/` because git ignores it, it should say so in the chat and stop instead of reaching it through the
+  terminal.
+- **One general Antigravity rule** instead of one per task: `.agents/rules/orchestra-task.md` in the project folder,
+  written at each Antigravity assignment when absent or different and excluded through `.git/info/exclude`. It applies
+  only when a message names a task id, so several open tasks do not mislead each other, and it tells a writing task to
+  stay in its worktree. It stays after a task closes; `orch footprint`, `uninstall.sh` and the README name it among
+  what the plugin leaves behind, with `git worktree prune` for the case of `.orchestra/` deleted by hand.
+- **A start is detected from RESULT.md only** for a read-only task: it works in the shared project folder, where a
+  changed file says nothing about the agent, so it stays `WAITING` until RESULT.md appears and never shows `STARTED?`
+  from someone else's edit. A task with a worktree of its own keeps the folder scan and `STARTED?`.
+- Tasks taken by an older version, with their worktree next to the project in `<project>.wt/`, keep working (card,
+  `check`, `done`); `close --remove-worktree` is now the normal end of a writing task. The card says
+  `In Antigravity, in the project folder: <path>` and, for a writing task, `It works in: .orchestra/wt/<id> (its own
+  worktree, branch ag/<id>); no need to open it`; the pool card says `(changes files, in its own worktree)`;
+  `.orchestra/MANUAL.md` follows.
+
 ## 0.19.1
 
 - **The status line says each name once**: the money of an API-billed scope joins the token counter of the same

@@ -541,17 +541,19 @@ git -C "$REPO" branch | grep -q "orch/feat-x" && ok "branch orch/feat-x" || bad 
 grep -q ".orchestra/" "$REPO/.git/info/exclude" && ok ".orchestra/ excluded from git" || bad "exclude missing"
 
 echo "── handoff"
-out=$(printf '## Goal\nDo X — naïve café ✓\n' | $ORCH handoff new --title "UI check" --model "Gemini 4 Argon" --model-key gemini-4-argon --effort High --worktree --fallback "codex gpt-5.6-sol high")
+out=$(printf '## Goal\nDo X — naïve café ✓\n' | $ORCH handoff new --title "UI check" --model "Gemini 4 Argon" --model-key gemini-4-argon --effort High --fallback "codex gpt-5.6-sol high")
 contains "$out" "AG-0001" "handoff id assigned"
 contains "$out" "Execute the task described in .orchestra/handoffs/AG-0001/TASK.md" "paste line in card"
-WT="$T/proj.wt/AG-0001"
-[[ -f "$WT/.orchestra/handoffs/AG-0001/TASK.md" ]] && ok "TASK.md inside worktree" || bad "TASK.md missing"
+WT="$REPO"
+[[ -f "$WT/.orchestra/handoffs/AG-0001/TASK.md" ]] && ok "TASK.md inside the project folder" || bad "TASK.md missing"
 grep -q "STATUS: IN_PROGRESS" "$WT/.orchestra/handoffs/AG-0001/TASK.md" && ok "protocol appended" || bad "protocol missing"
-grep -q "ag/ag-0001" "$WT/.orchestra/handoffs/AG-0001/TASK.md" && ok "branch named in TASK.md" || bad "branch not in TASK"
+grep -q "ag/ag-0001" "$WT/.orchestra/handoffs/AG-0001/TASK.md" && bad "a branch named in TASK.md" || ok "no branch in TASK.md"
 out=$($ORCH handoff list); contains "$out" "AG-0001 *WAITING" "state WAITING"
 out=$($ORCH handoff check); contains "$out" "No new events" "no events yet"
-sleep 2; echo "edit by antigravity" >> "$WT/app.txt"
-out=$($ORCH handoff list); contains "$out" "AG-0001 *STARTED?" "file activity in worktree → STARTED?"
+sleep 2; echo "edit by someone" > "$WT/scratch-activity.txt"
+out=$($ORCH handoff list); contains "$out" "AG-0001 *WAITING" "a file touched in the project folder does not start the task"
+lacks "$out" "STARTED?" "file activity in the project folder → not STARTED?"
+rm -f "$WT/scratch-activity.txt"
 echo "STATUS: IN_PROGRESS" > "$WT/.orchestra/handoffs/AG-0001/RESULT.md"
 out=$($ORCH handoff check); contains "$out" "AG-0001 picked up" "start detected from RESULT.md"
 printf 'STATUS: DONE\n## Summary\nall good\n' > "$WT/.orchestra/handoffs/AG-0001/RESULT.md"
@@ -590,11 +592,11 @@ out=$($ORCH handoff show AG-0003); contains "$out" "DONE" "manual done recorded"
 echo "── manual pool: offer → take → result"
 echo "PROJECT-RULES-MARKER" > "$REPO/CLAUDE.md"; git -C "$REPO" add CLAUDE.md && git -C "$REPO" commit -qm rules
 out=$(printf '## Goal\nCheck the form — café ✓\n' | $ORCH handoff offer --title "UI form check" --model "Gemini 4 Argon" \
-      --model-key gemini-4-argon --effort High --worktree --fallback "codex gpt-6.1-sol high"); rc=$?
+      --model-key gemini-4-argon --effort High --fallback "codex gpt-6.1-sol high"); rc=$?
 expect_rc 0 $rc "task offered to the pool"
 PID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
 contains "$out" "in the manual pool" "pool card shown"
-[[ -d "$T/proj.wt/$PID" ]] && bad "worktree created before anyone took the task" || ok "no worktree until taken"
+[[ -e "$REPO/.orchestra/handoffs/$PID/TASK.md" ]] && bad "TASK.md written before anyone took the task" || ok "no TASK.md until taken"
 out=$($ORCH handoff list); contains "$out" "Pool — available to take (1)" "list shows the pool"
 contains "$out" "$PID *OFFERED" "offered state"
 grep -q "Pool — available to take (1)" "$REPO/.orchestra/MANUAL.md" && ok "board .orchestra/MANUAL.md lists the pool" || bad "board missing pool"
@@ -603,14 +605,14 @@ n_taken=$($ORCH handoff list --json | $PY -c "import json,sys; print(sum(1 for m
 printf 'x' | $ORCH handoff new --title "cap" --max-open "$((n_taken + 1))" >/dev/null; expect_rc 0 $? "pooled tasks do not count against max_open"
 out=$($ORCH handoff take "$PID" --max-open 99); rc=$?
 expect_rc 0 $rc "operator takes the task"
-contains "$out" "Open in Antigravity: .*proj.wt/$PID" "take creates the worktree card"
+contains "$out" "In Antigravity, in the project folder: " "take: the card says the project folder"
 contains "$out" "Execute the task described in .orchestra/handoffs/$PID/TASK.md" "paste line after take"
-TW="$T/proj.wt/$PID"
+TW="$REPO"
 grep -q "an executor in the Orchestra system" "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "TASK.md: executor role for the manual agent" || bad "role missing"
 grep -q 'Project rules.*`CLAUDE.md`' "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "TASK.md points to the project rules" || bad "rules pointer missing"
 grep -q "AGENT:" "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "protocol asks the agent to name itself" || bad "AGENT line missing"
-grep -q "trigger: always_on" "$TW/.agents/rules/orchestra-task.md" 2>/dev/null && ok "Antigravity workspace rule in the task worktree" || bad "rule file missing"
-[[ -z "$(git -C "$TW" status --porcelain)" ]] && ok "rule and task files stay out of git status" || bad "git status: $(git -C "$TW" status --porcelain)"
+grep -q "trigger: always_on" "$TW/.agents/rules/orchestra-task.md" 2>/dev/null && ok "Antigravity workspace rule in the project folder" || bad "rule file missing"
+git -C "$TW" status --porcelain | grep -q "orchestra\|\.agents" && bad "git status shows task files: $(git -C "$TW" status --porcelain)" || ok "rule and task files stay out of git status"
 out=$($ORCH handoff take "$PID"); expect_rc 1 $? "second take refuses an already assigned task"
 contains "$out" "not available in the pool" "second take explains that ownership is already claimed"
 printf 'STATUS: DONE\nAGENT: Antigravity · Gemini 4 Argon\n## Summary\nok\n' > "$TW/.orchestra/handoffs/$PID/RESULT.md"
@@ -626,7 +628,7 @@ contains "$out" "No take from the pool for 5 min → the orchestrator starts tak
 grep -q "After 5 min without a take the orchestrator starts taking tasks back" "$REPO/.orchestra/MANUAL.md" && ok "board explains the pool clock" || bad "board: no pool clock"
 $ORCH handoff reclaim "$OID" >/dev/null; out=$($ORCH handoff list); grep -q "$OID" <<<"$out" && bad "reclaimed offer still listed" || ok "reclaim takes it back"
 out=$(printf 'x' | $ORCH handoff offer --title "for cursor"); CID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
-out=$($ORCH handoff take "$CID" --agent cursor --max-open 99); contains "$out" "Open in Cursor" "take for another manual agent"
+out=$($ORCH handoff take "$CID" --agent cursor --max-open 99); contains "$out" "In Cursor, in the project folder" "take for another manual agent"
 # the pool clock: a check every 5 min since the operator's last take from the pool (or since the pool opened)
 backdate_pool() { $PY - "$(native "$REPO/.orchestra/handoffs")" "$1" <<'EOF'
 import datetime as dt, glob, json, os, sys
@@ -692,9 +694,20 @@ text = open(sys.argv[1], encoding="utf-8").read().replace("\\", "/")
 proj = sys.argv[2].replace("\\", "/").rstrip("/")
 assert ("folder: `" + proj + "`") in text, text
 EOF
-out=$(printf 'x' | $ORCH handoff offer --title "wt rel" --worktree --max-offers 99); WID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
+# a task of an older version keeps its worktree as a sibling path, relative on disk
+out=$(printf 'x' | $ORCH handoff offer --title "wt rel" --max-offers 99); WID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
 $ORCH handoff take "$WID" --max-open 99 >/dev/null
-$PY - "$(native "$REPO/.orchestra/handoffs/$WID/meta.json")" "$WID" <<'EOF' && ok "worktree task keeps a relative sibling path" || bad "worktree path not relative"
+git -C "$REPO" worktree add -q -b "ag/old-$WID" "$T/proj.wt/$WID" || die "cannot create the old-task worktree"
+$PY - "$(native "$REPO/.orchestra/handoffs/$WID/meta.json")" "$(native "$T/proj.wt/$WID")" "$WID" <<'EOF'
+import json, sys
+p, wt, hid = sys.argv[1:4]
+m = json.load(open(p, encoding="utf-8"))
+m.update(worktree=True, workdir=wt, branch="ag/old-" + hid, task_path=wt + "/.orchestra/handoffs/%s/TASK.md" % hid,
+         result_path=wt + "/.orchestra/handoffs/%s/RESULT.md" % hid)
+json.dump(m, open(p, "w", encoding="utf-8"))
+EOF
+$ORCH handoff done "$WID" --note "saved once" >/dev/null
+$PY - "$(native "$REPO/.orchestra/handoffs/$WID/meta.json")" "$WID" <<'EOF' && ok "an older worktree task keeps a relative sibling path" || bad "worktree path not relative"
 import json, sys
 m = json.load(open(sys.argv[1], encoding="utf-8")); hid = sys.argv[2]
 assert m["workdir"] == "../proj.wt/" + hid, m["workdir"]
@@ -723,6 +736,257 @@ out=$($ORCH handoff check); contains "$out" "$MA finished: STATUS DONE" "RESULT.
 out=$($ORCH handoff done "$MB" --note "marked after the move"); contains "$out" "DONE" "done after the move"
 out=$($ORCH handoff show "$MB"); contains "$out" "DONE" "show after the move"
 cd "$REPO" || die "back from moved repo"
+
+echo "── manual tasks: read-only in the project folder, writing ones in a worktree inside it"
+MP="$T/mt-proj"; mkdir -p "$MP" && git -C "$MP" init -q && git -C "$MP" config user.email t@t && git -C "$MP" config user.name t \
+  && echo hi > "$MP/f.txt" && git -C "$MP" add . && git -C "$MP" -c commit.gpgsign=false commit -qm init || die "cannot create the manual-task fixture"
+mt() { (cd "$MP" && "$@"); }
+mt_id() { grep -o 'AG-[0-9]*' <<<"$1" | head -1; }
+mt_meta() { $PY -c 'import json, sys; m = json.load(open(sys.argv[1], encoding="utf-8")); print(m.get(sys.argv[2]))' "$(native "$MP/.orchestra/handoffs/$1/meta.json")" "$2"; }
+mt_cancel_all() {
+  for h in $(mt $ORCH handoff list --json | $PY -c "import json, sys; print(' '.join(m['id'] for m in json.load(sys.stdin)))"); do
+    mt $ORCH handoff cancel "$h" >/dev/null
+  done
+}
+
+# --worktree is gone, --base goes only with --write (a session that has not reloaded may still pass the old flags)
+out=$(printf 'x' | mt $ORCH handoff offer --title "wt" --worktree 2>&1); rc=$?
+expect_rc 1 $rc "offer --worktree fails"
+contains "$out" "orch: --worktree is gone: a task that changes files takes --write" "offer --worktree: the line names --write"
+contains "$out" "see orch guide manual" "offer --worktree: the line points to the guide"
+out=$(printf 'x' | mt $ORCH handoff new --title "wt" --worktree 2>&1); rc=$?
+expect_rc 1 $rc "new --worktree fails"
+contains "$out" "--worktree is gone: a task that changes files takes --write" "new --worktree: the same line"
+out=$(printf 'x' | mt $ORCH handoff offer --title "wt" --base main 2>&1); rc=$?
+expect_rc 1 $rc "offer --base without --write fails"
+contains "$out" "--base goes only with --write" "offer --base: the line says so"
+out=$(printf 'x' | mt $ORCH handoff new --title "wt" --base main 2>&1); rc=$?
+expect_rc 1 $rc "new --base without --write fails"
+[[ -z "$(mt $ORCH handoff list --all | grep ' wt · ')" ]] && ok "a refused flag leaves no task behind" || bad "a refused flag left a task"
+for sub in offer new; do
+  out=$(mt $ORCH handoff $sub --help)
+  lacks "$out" "--worktree" "handoff $sub --help no longer offers --worktree"
+  contains "$out" "--write" "handoff $sub --help offers --write"
+  contains "$out" "--base" "handoff $sub --help offers --base (with --write)"
+done
+
+# a read-only task (the default) in the project folder
+out=$(printf '## Goal\nlook\n' | mt $ORCH handoff new --title "read one" --model "Gemini 3.8 Flash" --max-open 99); R1=$(mt_id "$out")
+contains "$out" "In Antigravity, in the project folder: $MP" "taken: the card says the project folder"
+lacks "$out" "Open in" "taken: no 'Open in' line"
+lacks "$out" "It works in" "a read-only task has no worktree line"
+lacks "$out" "Branch:" "taken: no branch line"
+[[ "$(mt_meta "$R1" write)" == "False" && "$(mt_meta "$R1" branch)" == "None" && "$(mt_meta "$R1" workdir)" == "." ]] \
+  && ok "meta: write false, no branch, workdir is the project" || bad "meta of a read-only task"
+[[ -d "$T/mt-proj.wt" || -d "$MP/.orchestra/wt" ]] && bad "a read-only task made a worktree folder" || ok "no worktree folder for a read-only task"
+RP="Execute the task described in .orchestra/handoffs/$R1/TASK.md, by the execution protocol at the end of that file (RESULT.md status markers). Run no shell commands unless the task lists them. If your file tools can't open .orchestra/ because git ignores it, don't use the terminal to get around that: say so in the chat and stop."
+[[ "$(mt_meta "$R1" paste)" == "$RP" ]] && ok "read-only paste line: exact text, one line" || bad "read-only paste line: $(mt_meta "$R1" paste)"
+[[ $(mt_meta "$R1" paste | wc -l) -eq 1 ]] && ok "the paste line is one line" || bad "the paste line spans lines"
+TK="$MP/.orchestra/handoffs/$R1/TASK.md"
+grep -q "This task changes nothing: change no file except \`.orchestra/handoffs/$R1/RESULT.md\`, and do not commit. Other work goes on in this$" "$TK" \
+  && ok "read-only protocol: changes nothing, other work goes on in this folder" || bad "read-only protocol step 2"
+grep -q "Run no shell commands unless this task lists them" "$TK" && ok "read-only protocol: no shell commands" || bad "read-only protocol step 3"
+grep -q "with your file editor, with two lines" "$TK" && grep -q "Gemini 3.8 Flash>" "$TK" && ok "read-only protocol: RESULT.md created with the file editor" || bad "read-only protocol step 1"
+grep -q '## Summary` (your findings)' "$TK" && ok "read-only protocol: findings, no changed files" || bad "read-only report sections"
+grep -q "Changed files" "$TK" && bad "read-only protocol asks for changed files" || ok "read-only protocol has no Changed files section"
+grep -q "^- Working folder: \`$MP\`" "$TK" && ok "TASK.md header keeps the working folder" || bad "TASK.md header working folder"
+grep -q "Branch" "$TK" && bad "a read-only TASK.md names a branch" || ok "a read-only TASK.md has no branch line"
+contains "$(cat "$MP/.orchestra/MANUAL.md")" "in the project folder: \`$MP\`" "the board follows the card"
+
+# one general rule file, not one per task
+RULE="$MP/.agents/rules/orchestra-task.md"
+[[ -f "$RULE" ]] && grep -q "trigger: always_on" "$RULE" && ok "Antigravity rule written into the project folder" || bad "rule missing"
+grep -q "This applies only when a message names an Orchestra task (an id such as AG-0004); other conversations ignore it." "$RULE" \
+  && grep -q "The task file is \`.orchestra/handoffs/<id>/TASK.md\`" "$RULE" && ok "the rule is general: it names no task" || bad "rule text"
+grep -q "A task that changes files names its own worktree: work only inside it." "$RULE" && ok "the rule tells a writing task to stay in its worktree" || bad "rule: worktree line"
+grep -q "$R1" "$RULE" && bad "the rule names the first task" || ok "the rule does not name the task that wrote it"
+grep -q "^.agents/rules/orchestra-task.md$" "$MP/.git/info/exclude" && ok "the rule is excluded from git" || bad "rule not excluded"
+RULE_SUM=$(cksum < "$RULE")
+out=$(printf 'x' | mt $ORCH handoff new --title "read two" --max-open 99); R2=$(mt_id "$out")
+[[ "$(cksum < "$RULE")" == "$RULE_SUM" && $(ls "$MP/.agents/rules" | wc -l) -eq 1 ]] && ok "two open tasks share the one rule file" || bad "rule changed or multiplied"
+echo "stale" > "$RULE"
+printf 'x' | mt $ORCH handoff new --title "read three" --max-open 99 >/dev/null
+[[ "$(cksum < "$RULE")" == "$RULE_SUM" ]] && ok "a different rule file is rewritten at the next assignment" || bad "rule not restored"
+
+# a read-only task starts with its RESULT.md only: a file touched in the project after the take starts nothing
+sleep 2; echo "other work" >> "$MP/f.txt"
+out=$(mt $ORCH handoff list); contains "$out" "$R1 *WAITING" "a file touched after the take: still WAITING"
+lacks "$out" "STARTED?" "a file touched in the project never shows STARTED?"
+out=$(mt $ORCH handoff check); lacks "$out" "STARTED" "check: no start from someone else's edit"
+printf 'x' | mt $ORCH handoff new --title "read, dirty tree" --max-open 99 >/dev/null; expect_rc 0 $? "a read-only task on a dirty tree is handed out"
+
+# a writing task: a worktree of its own inside the project folder, whatever the state of the project folder
+out=$(printf '## Goal\nchange\n' | mt $ORCH handoff offer --title "write offer" --write --max-offers 99); OW=$(mt_id "$out")
+expect_rc 0 $? "a writing task can be offered"
+contains "$out" "(changes files, in its own worktree)" "the pool card says a writing task changes files in its own worktree"
+lacks "$out" "(own worktree)" "the pool card no longer uses the old wording"
+contains "$out" "you then get the line to paste" "the pool card says what the take gives"
+contains "$(cat "$MP/.orchestra/MANUAL.md")" "(changes files, in its own worktree)" "the board marks a writing task in the pool"
+[[ -e "$MP/.orchestra/wt/$OW" ]] && bad "a worktree before the take" || ok "no worktree until the task is taken"
+out=$(mt $ORCH handoff take "$OW" --max-open 99); rc=$?
+expect_rc 0 $rc "a writing task is taken while the project folder is dirty"
+BR1="ag/$(tr 'A-Z' 'a-z' <<<"$OW")"
+contains "$out" "In Antigravity, in the project folder: $MP" "writing card: the agent's window stays on the project folder"
+contains "$out" "It works in: .orchestra/wt/$OW (its own worktree, branch $BR1); no need to open it" "writing card: says where the task works"
+lacks "$out" "Open in" "writing card: no 'Open in' line"
+[[ -f "$MP/.orchestra/wt/$OW/f.txt" && "$(git -C "$MP/.orchestra/wt/$OW" rev-parse --abbrev-ref HEAD)" == "$BR1" ]] \
+  && ok "the worktree is .orchestra/wt/<id> on branch ag/<id>" || bad "worktree layout"
+[[ "$(cat "$MP/.orchestra/wt/$OW/f.txt")" == "hi" ]] && ok "the worktree starts from HEAD, not from the dirty project folder" || bad "worktree content"
+[[ -f "$MP/.orchestra/handoffs/$OW/TASK.md" && ! -e "$MP/.orchestra/wt/$OW/.orchestra" ]] && ok "TASK.md stays in the project's handoffs folder" || bad "TASK.md location"
+$PY - "$(native "$MP/.orchestra/handoffs/$OW/meta.json")" "$OW" "$BR1" <<'EOF' && ok "meta: workdir is the worktree, task and result paths are the project's" || bad "writing meta"
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf-8")); hid, br = sys.argv[2], sys.argv[3]
+assert m["write"] is True and m["branch"] == br, m
+assert m["workdir"] == ".orchestra/wt/" + hid, m["workdir"]
+assert m["task_path"] == ".orchestra/handoffs/%s/TASK.md" % hid and m["result_path"] == ".orchestra/handoffs/%s/RESULT.md" % hid, m
+EOF
+WP="Execute the task described in .orchestra/handoffs/$OW/TASK.md, by the execution protocol at the end of that file (RESULT.md status markers). Work only inside .orchestra/wt/$OW, a separate git worktree. If your file tools can't open .orchestra/ because git ignores it, don't use the terminal to get around that: say so in the chat and stop."
+[[ "$(mt_meta "$OW" paste)" == "$WP" ]] && ok "writing paste line: exact text, one line" || bad "writing paste line: $(mt_meta "$OW" paste)"
+[[ $(mt_meta "$OW" paste | wc -l) -eq 1 ]] && ok "the writing paste line is one line" || bad "the writing paste line spans lines"
+TW="$MP/.orchestra/handoffs/$OW/TASK.md"
+grep -q "Work only inside \`.orchestra/wt/$OW\`, a separate git worktree on branch \`$BR1\`" "$TW" && ok "writing protocol: work only inside the worktree" || bad "writing protocol step 2"
+grep -q "never its same-named original at the project root" "$TW" && ok "writing protocol: not the original at the project root" || bad "writing protocol: same-named original"
+grep -q "install dependencies as the project instructions say; do not copy secrets" "$TW" && ok "writing protocol: dependencies, no secrets" || bad "writing protocol: dependencies"
+grep -q "Do not commit and do not switch branches: the orchestrator reviews the changes in that worktree and commits them." "$TW" && ok "writing protocol: the orchestrator commits" || bad "writing protocol: commit rule"
+grep -q '## Changed files' "$TW" && ok "writing protocol keeps the Changed files section" || bad "writing protocol: Changed files"
+grep -q "Run no shell commands" "$TW" && bad "the writing protocol forbids commands" || ok "the writing protocol does not forbid commands"
+grep -q "^- Branch: \`$BR1\`" "$TW" && ok "TASK.md header names the branch of a writing task" || bad "TASK.md branch line"
+# the project's git status does not see the nested worktree, with .orchestra/ ignored through .git/info/exclude
+[[ "$(git -C "$MP" status --porcelain)" == " M f.txt" ]] && ok "the project's git status shows only its own edit, not the nested worktree" || bad "git status: $(git -C "$MP" status --porcelain)"
+git -C "$MP" worktree list | grep -q "wt/$OW" && ok "git knows the nested worktree" || bad "git worktree list"
+
+# two writing tasks open at once with a dirty project folder
+out=$(printf 'x' | mt $ORCH handoff new --title "write two" --write --max-open 99); rc=$?
+expect_rc 0 $rc "a second writing task beside the first, on a dirty folder"
+OW2=$(mt_id "$out"); BR2="ag/$(tr 'A-Z' 'a-z' <<<"$OW2")"
+[[ -d "$MP/.orchestra/wt/$OW2" && "$(git -C "$MP/.orchestra/wt/$OW2" rev-parse --abbrev-ref HEAD)" == "$BR2" && "$BR1" != "$BR2" ]] \
+  && ok "each writing task has its own worktree and branch" || bad "second worktree"
+lacks "$out" "HANDOFF" "no HANDOFF_DIRTY or HANDOFF_WRITE_BUSY any more"
+[[ "$(git -C "$MP" status --porcelain)" == " M f.txt" ]] && ok "two nested worktrees stay out of the project's git status" || bad "git status: $(git -C "$MP" status --porcelain)"
+grep -rq "HANDOFF_DIRTY\|HANDOFF_WRITE_BUSY" "$PLUGIN/bin/orch" "$PLUGIN/skills" "$PLUGIN/README.md" && bad "the removed guards are still mentioned" || ok "the removed guards are gone from code and docs"
+
+# a start in a worktree is seen by the folder scan; the project folder's edits are not the task's
+sleep 2; echo "agent edit" >> "$MP/.orchestra/wt/$OW/f.txt"
+out=$(mt $ORCH handoff list); contains "$out" "$OW *STARTED?" "a file changed in the task's worktree shows STARTED?"
+contains "$out" "$OW2 *WAITING" "the other writing task, untouched, is still WAITING"
+# RESULT.md is detected in the project's handoffs folder
+printf 'STATUS: DONE\nAGENT: Antigravity · Gemini 3.8 Flash\n## Summary\nok\n## Changed files\nf.txt\n' > "$MP/.orchestra/handoffs/$OW/RESULT.md"
+out=$(mt $ORCH handoff check); contains "$out" "$OW finished: STATUS DONE" "RESULT.md in the project's handoffs folder is detected for a writing task"
+[[ "$(git -C "$MP/.orchestra/wt/$OW" diff --stat | wc -l)" -ge 1 ]] && ok "the agent's change is in the worktree, ready to review" || bad "worktree diff"
+[[ "$(git -C "$MP" status --porcelain)" == " M f.txt" ]] && ! grep -q "agent edit" "$MP/f.txt" && ok "the project folder got no stray edit from the agent" || bad "project folder changed"
+
+# --base: the worktree starts from another ref
+git -C "$MP" stash -q; git -C "$MP" checkout -q -b side && echo "side" > "$MP/side.txt" && git -C "$MP" add side.txt && git -C "$MP" -c commit.gpgsign=false commit -qm side && git -C "$MP" checkout -q - && git -C "$MP" stash pop -q
+out=$(printf 'x' | mt $ORCH handoff new --title "based" --write --base side --max-open 99); rc=$?
+expect_rc 0 $rc "new --write --base"
+[[ -f "$MP/.orchestra/wt/$(mt_id "$out")/side.txt" ]] && ok "--base: the worktree starts from that ref" || bad "--base content"
+out=$(printf 'x' | mt $ORCH handoff new --title "bad base" --write --base no-such-ref --max-open 99 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "an unknown --base fails" || bad "unknown base accepted"
+
+# close --remove-worktree is the normal end of a writing task
+mt $ORCH handoff done "$OW" --note "reviewed" >/dev/null
+out=$(mt $ORCH handoff close "$OW" --remove-worktree --force); contains "$out" "worktree removed" "close --remove-worktree removes a writing task's worktree"
+[[ -d "$MP/.orchestra/wt/$OW" ]] && bad "the worktree is still there" || ok "the nested worktree is gone"
+git -C "$MP" worktree list | grep -q "wt/$OW" && bad "git still lists it" || ok "git no longer lists it"
+out=$(mt $ORCH handoff close "$R1" --remove-worktree); contains "$out" "nothing to remove" "close --remove-worktree on a read-only task says there is nothing to remove"
+
+# an old meta with no write field made no promise: it counts as writing and gets a nested worktree at the take
+mt_cancel_all
+git -C "$MP" worktree prune
+git -C "$MP" checkout -q -- f.txt
+out=$(printf 'x' | mt $ORCH handoff offer --title "old offer" --max-offers 99); OO=$(mt_id "$out")
+$PY - "$(native "$MP/.orchestra/handoffs/$OO/meta.json")" <<'EOF'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p, encoding="utf-8")); m.pop("write", None); m.update(worktree=True, base="HEAD"); json.dump(m, open(p, "w", encoding="utf-8"))
+EOF
+contains "$(mt $ORCH handoff show "$OO")" "(changes files, in its own worktree)" "an old offered task is shown as changing files"
+out=$(mt $ORCH handoff take "$OO" --max-open 99); expect_rc 0 $? "an old offered task is taken"
+contains "$out" "It works in: .orchestra/wt/$OO" "it gets a nested worktree"
+[[ -d "$MP/.orchestra/wt/$OO" && "$(mt_meta "$OO" branch)" != "None" ]] && ok "worktree and branch exist for it" || bad "an old offer got no worktree"
+mt $ORCH handoff cancel "$OO" >/dev/null
+
+# a task taken by an older version keeps working: its worktree next to the project, from a hand-edited meta
+out=$(printf 'x' | mt $ORCH handoff new --title "taken long ago" --max-open 99); OT=$(mt_id "$out")
+OTW="$T/mt-proj.wt/$OT"
+git -C "$MP" worktree add -q -b "ag/old-$OT" "$OTW" || die "cannot create the old-task worktree"
+mkdir -p "$OTW/.orchestra/handoffs/$OT"; cp "$MP/.orchestra/handoffs/$OT/TASK.md" "$OTW/.orchestra/handoffs/$OT/TASK.md"
+rm -f "$MP/.orchestra/handoffs/$OT/RESULT.md"
+$PY - "$(native "$MP/.orchestra/handoffs/$OT/meta.json")" "$(native "$OTW")" "$OT" <<'EOF'
+import json, sys, time
+p, wt, hid = sys.argv[1:4]
+m = json.load(open(p, encoding="utf-8"))
+m.pop("write", None)
+m.update(worktree=True, base="HEAD", workdir=wt, branch="ag/old-" + hid, activity_baseline=time.time(),
+         task_path=wt + "/.orchestra/handoffs/%s/TASK.md" % hid, result_path=wt + "/.orchestra/handoffs/%s/RESULT.md" % hid)
+json.dump(m, open(p, "w", encoding="utf-8"))
+EOF
+out=$(mt $ORCH handoff show "$OT"); contains "$out" "Open in Antigravity: .*mt-proj.wt/$OT" "an older task: the card still says where its worktree is"
+contains "$out" "Branch: ag/old-$OT" "an older task: the card names its branch"
+lacks "$out" "It works in" "an older task: no nested-worktree line"
+contains "$(mt $ORCH handoff list)" "$OT *WAITING" "an older task: listed, waiting"
+sleep 2; echo "edit in the old worktree" >> "$OTW/f.txt"
+contains "$(mt $ORCH handoff list)" "$OT *STARTED?" "an older task: the folder scan still shows STARTED?"
+printf 'STATUS: DONE\nAGENT: Antigravity · Gemini 3.8 Flash\n## Summary\nold\n' > "$OTW/.orchestra/handoffs/$OT/RESULT.md"
+out=$(mt $ORCH handoff check); contains "$out" "$OT finished: STATUS DONE" "an older task: its RESULT.md is still detected"
+$PY - "$(native "$MP/.orchestra/handoffs/$OT/meta.json")" "$OT" <<'EOF' && ok "an older task: paths stay relative on disk after a save" || bad "an older task: meta paths"
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf-8"))
+assert m["workdir"] == "../mt-proj.wt/" + sys.argv[2], m["workdir"]
+EOF
+mt $ORCH handoff done "$OT" --note "ok" >/dev/null
+out=$(mt $ORCH handoff close "$OT" --remove-worktree --force); contains "$out" "worktree removed" "close --remove-worktree still removes an older task's worktree"
+[[ -d "$OTW" ]] && bad "the old worktree is still there" || ok "the old worktree is gone"
+git -C "$MP" worktree prune; git -C "$MP" branch -D "ag/old-$OT" >/dev/null 2>&1
+
+# `orch worktree` for automated executors is untouched: it still lives in <project>.wt/
+out=$(mt $ORCH worktree add mt-feat); contains "$out" "mt-proj.wt/mt-feat" "orch worktree still works, next to the project"
+mt_cancel_all
+
+# the nested worktree stays out of git status when .orchestra/ is ignored through .gitignore as well
+MP2="$T/mt-proj2"; mkdir -p "$MP2" && git -C "$MP2" init -q && git -C "$MP2" config user.email t@t && git -C "$MP2" config user.name t \
+  && printf '.orchestra/\n' > "$MP2/.gitignore" && echo hi > "$MP2/f.txt" && git -C "$MP2" add . && git -C "$MP2" -c commit.gpgsign=false commit -qm init || die "cannot create the second fixture"
+out=$(printf 'x' | (cd "$MP2" && $ORCH handoff new --title "gitignore" --write --provider cursor --max-open 99)); rc=$?
+expect_rc 0 $rc "a writing task in a project that ignores .orchestra/ through .gitignore"
+: > "$MP2/.git/info/exclude"
+[[ -z "$(git -C "$MP2" status --porcelain)" ]] && ok "ignored through .gitignore alone: git status is clean with the nested worktree" || bad "gitignore status: $(git -C "$MP2" status --porcelain)"
+
+# --write needs a git repository; a read-only task works anywhere
+NG="$T/mt-nogit"; mkdir -p "$NG"
+ng() { (cd "$NG" && "$@"); }
+out=$(printf 'x' | ng $ORCH handoff new --title "no git, read" --max-open 99); rc=$?
+expect_rc 0 $rc "a read-only task outside git"
+contains "$out" "In Antigravity, in the project folder:" "no git: the card is the same"
+out=$(printf 'x' | ng $ORCH handoff new --title "no git, write" --write --max-open 99 2>&1); rc=$?
+expect_rc 1 $rc "new --write outside git is refused"
+contains "$out" "--write needs a git repository" "new --write outside git: a clear line"
+out=$(printf 'x' | ng $ORCH handoff offer --title "no git, write offer" --write 2>&1); rc=$?
+expect_rc 1 $rc "offer --write outside git is refused"
+contains "$out" "give the task read-only" "offer --write outside git: says what to do"
+out=$(printf 'x' | ng $ORCH handoff offer --title "no git, offered" --max-offers 99); NGO=$(mt_id "$out")
+ng $ORCH handoff take "$NGO" --max-open 99 >/dev/null; expect_rc 0 $? "outside git: offer and take (read-only)"
+[[ -f "$NG/.orchestra/handoffs/$NGO/TASK.md" && -f "$NG/.agents/rules/orchestra-task.md" ]] && ok "outside git: TASK.md and the rule are written" || bad "outside git: files missing"
+[[ -e "$NG/.git" ]] && bad "orch created a repository" || ok "outside git: nothing creates a repository"
+out=$(printf 'x' | ng $ORCH handoff offer --title "no git, old" --max-offers 99); NGW=$(mt_id "$out")
+$PY - "$(native "$NG/.orchestra/handoffs/$NGW/meta.json")" <<'EOF'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p, encoding="utf-8")); m.pop("write", None); json.dump(m, open(p, "w", encoding="utf-8"))
+EOF
+out=$(ng $ORCH handoff take "$NGW" --max-open 99); rc=$?
+expect_rc 1 $rc "an old writing offer cannot be taken outside git"
+contains "$out" "needs a git repository for its worktree" "and the line says why"
+contains "$(ng $ORCH handoff list)" "$NGW *OFFERED" "it stays in the pool"
+printf 'STATUS: DONE\nok\n' > "$NG/.orchestra/handoffs/$NGO/RESULT.md"
+out=$(ng $ORCH handoff check); contains "$out" "$NGO finished: STATUS DONE" "outside git: completion detected"
+out=$(ng $ORCH footprint); contains "$out" ".agents/rules/orchestra-task.md" "footprint names the general Antigravity rule"
+contains "$out" "git worktree prune" "footprint tells what to do about worktree entries if .orchestra/ is deleted by hand"
+grep -q "orchestra-task.md" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh names the rule" || bad "uninstall.sh does not name the rule"
+grep -q "git worktree prune" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh mentions git worktree prune" || bad "uninstall.sh: prune"
+grep -q "orchestra-task.md" "$PLUGIN/README.md" && ok "README names the rule among what the plugin leaves behind" || bad "README: rule missing"
+grep -q "effort High --worktree\|always \`--worktree\`" "$PLUGIN/skills/orchestrate/reference/manual.md" && bad "manual.md still offers --worktree" || ok "manual.md no longer offers --worktree"
+grep -q "\[--worktree\]" "$PLUGIN/registry/providers.yaml" && bad "the registry still offers --worktree" || ok "the registry no longer offers --worktree"
+cd "$REPO" || die "back from the manual-task fixtures"
 
 echo "── hooks"
 out=$(echo '{}' | $ORCH hook session-start); contains "$out" "executor registry" "session-start prints registry path"
@@ -2918,7 +3182,7 @@ def parallel_state():
     assert len(set(ids)) == 4
     assert {meta(h)["title"] for h in ids} == {"parallel-%d" % i for i in range(4)}
     for _ in range(2):
-        hid = offered(worktree=True)
+        hid = offered()
         take = start(["handoff", "take", hid]); reclaim = start(["handoff", "reclaim", hid])
         results = [finish(take), finish(reclaim)]
         assert sorted(rc for rc, _ in results) == [0, 1], results
@@ -2987,7 +3251,12 @@ def state_failures():
         cfg, err = m.load_spend_limits()
         assert err is None and isinstance(cfg, dict) and cfg["global"] == {}, (cfg, err)
     assert len(reads) == 3
-    hid = offered(worktree=True, base="missing-review-ref")
+    hid = offered(write=True, base="missing-review-ref")     # the worktree cannot be made: the take fails
+    rc, out = run(["handoff", "take", hid])
+    assert rc != 0 and m.result_status(meta(hid)) == "OFFERED", (rc, out, meta(hid))
+    clear_tasks()
+    hid = offered()
+    (m.handoffs_root() / hid / "BODY.md").unlink()           # the assignment cannot read its task: the take fails
     rc, out = run(["handoff", "take", hid])
     assert rc != 0 and m.result_status(meta(hid)) == "OFFERED", (rc, out, meta(hid))
     clear_tasks()
@@ -3255,9 +3524,21 @@ def existing_result():
     clear_tasks()
 
 def overdue_activity():
-    hid = re.search(r"AG-\d+", good(["handoff", "new", "--title", "activity"])).group()
+    # a task in the project folder shares it with other work: a changed file starts nothing
+    hid = re.search(r"AG-\d+", good(["handoff", "new", "--title", "shared"])).group()
     task = meta(hid)
     task.update(created=m.iso(fixed - dt.timedelta(hours=8)), taken=m.iso(fixed - dt.timedelta(hours=8)))
+    m.save_meta(task)
+    (proj / "app.txt").write_text("someone else\n", encoding="utf-8")
+    with mock.patch.object(m, "scan_latest_mtime", side_effect=AssertionError("a shared folder was scanned")):
+        assert m.last_activity(m.load_meta(hid)) is None and m.effective_state(m.load_meta(hid)) == "WAITING"
+    assert not any("in progress" in e and hid in e for e in m.check_events()), "a shared edit counted as activity"
+    subprocess.run(["git", "checkout", "--", "app.txt"], cwd=str(proj), check=True)
+    clear_tasks()
+    # an older task has a worktree of its own: the folder scan stays for it
+    hid = re.search(r"AG-\d+", good(["handoff", "new", "--title", "activity"])).group()
+    task = meta(hid)
+    task.update(created=m.iso(fixed - dt.timedelta(hours=8)), taken=m.iso(fixed - dt.timedelta(hours=8)), branch="ag/older")
     task.pop("activity_baseline", None)
     m.save_meta(task)
     (proj / "app.txt").write_text("activity\n", encoding="utf-8")
@@ -3352,7 +3633,7 @@ def corruption_recovery():
     clear_tasks()
 
 def assignment_recovery():
-    hid = offered(worktree=True)
+    hid = offered()
     task = meta(hid)
     task.update(taken=m.iso(m.now() - dt.timedelta(minutes=11)), assigning="old-token")
     m.save_meta(task)
@@ -3367,10 +3648,18 @@ def assignment_recovery():
             raise AssertionError("late finisher accepted")
         except SystemExit:
             pass
-    branch = "ag/" + hid.lower()
-    subprocess.run(["git", "branch", branch], cwd=str(proj), check=True)
     good(["handoff", "take", hid])
-    assert meta(hid)["branch"] == branch
+    assert meta(hid)["branch"] is None and Path(m.load_meta(hid)["workdir"]) == proj, meta(hid)
+    clear_tasks()
+    hid = offered(write=True)
+    task = meta(hid)
+    task.update(taken=m.iso(m.now() - dt.timedelta(minutes=11)), assigning="old-token")
+    m.save_meta(task)
+    assert any(hid in e and "returned to the pool" in e for e in m.check_events())
+    branch = "ag/" + hid.lower()
+    subprocess.run(["git", "branch", branch], cwd=str(proj), check=True)     # the branch is left from the first try
+    good(["handoff", "take", hid])
+    assert meta(hid)["branch"] == branch and meta(hid)["workdir"] == ".orchestra/wt/" + hid, meta(hid)
     clear_tasks()
     hid = offered()
     task = meta(hid); task.update(offered=None, taken=m.iso(m.now()), assigning="failure")

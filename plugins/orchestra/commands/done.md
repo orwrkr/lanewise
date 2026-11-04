@@ -8,5 +8,5 @@ The operator reports on a manual task: "$ARGUMENTS"
    - done/blocked/failed → `orch handoff done <ID> --status DONE|BLOCKED|FAILED --note "<note>"`
    - cancel → `orch handoff cancel <ID> --note "<note>"`
 2. For DONE: verify the result and integrate it per `orch guide manual`
-   (diff/branch, tests, cross-review, merge, `orch handoff close`).
+   (RESULT.md, `git diff` of a writing task, tests, cross-review, your own commit, `orch handoff close`).
 3. For BLOCKED/FAILED/cancel: reassign the task to its fallback, or refine it and hand it out again.

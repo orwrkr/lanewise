@@ -80,8 +80,8 @@ Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry
 - Adapters follow the contract from `adapters/_template.example` (env `ORCH_*`, exit 75 = limit, `usage.json`).
 - **No programmatic interaction with Antigravity** (or other manual agents): don't launch `agy`, don't use
   computer use, don't paste text, don't touch OAuth — this violates Google's ToS (account ban). The manual lane is
-  files in the task's work folder only: TASK.md, RESULT.md and the rule `.agents/rules/orchestra-task.md` in its
-  worktree.
+  files in the project folder only: TASK.md and RESULT.md in `.orchestra/handoffs/<id>/`, the general rule
+  `.agents/rules/orchestra-task.md`, and, for a task that changes files, its git worktree `.orchestra/wt/<id>`.
 - Personal data (limits, the personal registry, profiles and project bindings, keys, usage log) lives in
   `~/.orchestra/`, not in the repository.
 - Bump the version in `plugins/orchestra/.claude-plugin/plugin.json` when behaviour changes: plugin installs from

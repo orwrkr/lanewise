@@ -3,7 +3,9 @@
 # Claude Code: the standard way, `claude plugin uninstall` + `claude plugin marketplace remove` (Claude Code
 # settings are not edited by hand). Outside Claude Code: the orch launchers in ~/.local/bin. Personal data
 # (~/.orchestra: limits, profiles, keys, usage log) is kept; --purge deletes it too.
-# Per-project state (<project>/.orchestra/, worktrees <project>.wt/) is left alone: the script only lists it.
+# Per-project state (<project>/.orchestra/ with the worktrees of tasks that change files in .orchestra/wt/, the
+# Antigravity rule <project>/.agents/rules/orchestra-task.md, worktrees <project>.wt/ from `orch worktree`) is left
+# alone: the script only lists it. If you delete .orchestra/ by hand, run `git worktree prune` in the project.
 #
 #   bash uninstall.sh            # plugin and launchers
 #   bash uninstall.sh --purge    # plus ~/.orchestra

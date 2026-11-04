@@ -27,7 +27,7 @@ done
 
 command -v claude >/dev/null 2>&1 || { echo "claude CLI not found: install Claude Code in this environment."; exit 1; }
 [[ -n "$PY" ]] || { echo "Python >= 3.8 is required (WSL/Linux: sudo apt install python3; Windows: winget install Python.Python.3.13)"; exit 1; }
-command -v git    >/dev/null 2>&1 || warn "git not found: worktrees and manual tasks with --worktree will not work."
+command -v git    >/dev/null 2>&1 || warn "git not found: worktrees (orch worktree) will not work."
 
 case "$ROOT" in
   *$'\r'*) echo "The path contains a CR: check the line endings."; exit 1 ;;

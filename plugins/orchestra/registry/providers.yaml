@@ -215,11 +215,12 @@ providers:
     lane: manual               # task pool: you take a task (orch handoff take) and paste one line into Antigravity
     billing: subscription
     quota_key: antigravity     # more precise: antigravity/gemini-4-argon, antigravity/claude-opus
-    invoke: orch handoff offer --title ... --model ... --effort ... [--worktree] [--fallback ...]   # immediately: handoff new
+    invoke: orch handoff offer --title ... --model ... --effort ... [--write] [--fallback ...]   # immediately: handoff new
     notes: >
       No automated access to Antigravity: only you work in the official app.
       The lane is asynchronous and slow to start: ONLY tasks off the critical path, large
-      (≥ min_task_minutes), self-contained, in a separate worktree. Each one has a fallback.
+      (≥ min_task_minutes), self-contained. Read-only by default (works in the project folder); --write for one
+      that changes files (gets its own worktree inside the project folder). Each one has a fallback.
       Gemini models and third-party ones (Claude/GPT) have separate quota counters in Antigravity.
     slots:
       - id: antigravity/argon-high
@@ -229,7 +230,7 @@ providers:
         cost: 3                    # 0 for your Claude/Codex limits, but it costs the operator's time
         max_difficulty: 5
         good_for: [UI verification in a browser with recordings/screenshots, broad survey of a large codebase,
-                   an independent second opinion from another family, a long autonomous task in a worktree]
+                   an independent second opinion from another family, a long autonomous task]
       - id: antigravity/argon-medium
         model: Gemini 4 Argon
         effort: Medium (thinking)

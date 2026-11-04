@@ -4,6 +4,10 @@ You do NOT control Antigravity (or any manual agent) programmatically: no `agy`,
 proxies or OAuth. You prepare the task package as files; the operator opens the folder in the official app and
 pastes one line. For Antigravity this is a Google ToS requirement — violating it gets the account banned.
 
+The operator keeps **one folder open in the agent** — the project folder — and never switches it, the way they work
+with Claude Code. A read-only task works right there; a task that changes files works in a worktree of its own that
+`orch` makes **inside** the project folder (`.orchestra/wt/<id>`), so the window never moves.
+
 ## When to hand off manually
 
 Only if ALL of these hold:
@@ -18,7 +22,7 @@ Only if ALL of these hold:
 ## Pool or immediately
 
 - **Pool (default)** — `orch handoff offer`: the task waits until the operator picks it and takes it when
-  convenient. The worktree and the line to paste appear only when it is taken. Pool — at most `operator.max_offers`.
+  convenient. TASK.md, the worktree of a task that changes files and the line to paste appear only when it is taken. Pool — at most `operator.max_offers`.
 - **Immediately** — `orch handoff new`: only when the operator explicitly asked "give this to Antigravity now"
   or the task has already been discussed. Handed out at once — at most `operator.max_open_handoffs`.
 
@@ -27,14 +31,22 @@ The profile's `max_open` is a hard cap on `new` and `take`, including with `--fo
 the operator's open-task limit and availability blocks. All `handoff` commands refuse inside a worker.
 
 Manual state transitions and capacity checks share a project lock: only one concurrent `take` or `reclaim`
-can win. A take reserves ownership before creating its worktree outside the lock; failure returns it to the
+can win. A take reserves ownership before writing the task files and making the worktree outside the lock; failure returns it to the
 pool unless it was cancelled meanwhile. IDs remain reserved even if the counter is lost or corrupt. CLI lock
 waits are bounded; hooks and the status line skip busy state silently after a much shorter wait.
 
 ## Preparation
 
 1. Accumulate small suitable tasks and hand them out **as a batch** in one TASK.md (parts 1..N, one RESULT.md).
-2. Writing task → always `--worktree` (its own branch `ag/<id>`, no conflicts with you or Codex).
+2. **Read-only is the default.** The agent reads and reports; it may write one file, its RESULT.md, and is told to
+   run no shell commands (each can stop and wait for the operator's confirmation). A task that changes files takes
+   `--write`: `orch` makes a git worktree for it at the take, `<project>/.orchestra/wt/<id>` on branch `ag/<id>`
+   (`--base <ref>` picks the start, default `HEAD`, and goes only with `--write`). The agent works only inside that
+   folder and does not commit; TASK.md and RESULT.md stay in the project's `.orchestra/handoffs/<id>/` for both
+   kinds. Several writing tasks may be open at once and the project folder may be dirty: each has its own tree. A git
+   repository is needed for `--write` (`offer` and `new` refuse otherwise); a read-only task works anywhere.
+   `--worktree` is gone (it fails with a line naming `--write`). Tools that walk hidden folders (jest, for one) may
+   see an open nested worktree: exclude `.orchestra/` in their config if that matters.
 3. Task body (stdin or `--prompt-file`) per this template:
    ```
    ## Context              — what the project is, what's already done, key files
@@ -45,24 +57,30 @@ waits are bounded; hooks and the status line skip busy state silently after a mu
    ## Hints                — known pitfalls, file references
    ```
    `orch` adds the rest itself: the Orchestra executor role, references to the project rules (CLAUDE.md,
-   AGENTS.md), the `RESULT.md` protocol (`STATUS:` + `AGENT: product · model`), a note about the worktree. For
-   Antigravity the task's worktree also gets the rule `.agents/rules/orchestra-task.md` (always_on), so the
-   protocol isn't lost in a long session; it is excluded from git.
+   AGENTS.md), the `RESULT.md` protocol (`STATUS:` + `AGENT: product · model`; the read-only or the writing one, with
+   its worktree and "do not commit"). For
+   Antigravity the project folder also gets one general rule `.agents/rules/orchestra-task.md` (always_on, written
+   at each assignment when absent or different): it applies only when a message names a task id, so several open
+   tasks do not mislead each other (a writing task is told to stay in its worktree). It stays after a task closes
+   and is excluded from git.
 4. To the pool:
    ```
    orch handoff offer --title "<short>" --model "Gemini 4 Argon" --model-key gemini-4-argon \
-     --effort High --worktree --fallback "codex gpt-6.1-sol high" --check-min 5 \
+     --effort High --fallback "codex gpt-6.1-sol high" --check-min 5 \
      --prompt-file .orchestra/prompts/ag.md
    ```
    To the operator — one line: what you put in the pool and why. List: `orch handoff list`; the operator's board is
    `.orchestra/MANUAL.md` (it can be kept open in an editor).
 5. The operator picks: "AG-0004 to Antigravity" / "I'll take AG-0004" / "AG-0004 to Cursor" →
    `orch handoff take AG-0004 [--agent cursor] [--model …] --clip` and show the card from the output in full
-   (folder, model, thinking level, line to paste; with `--clip` it is already on the clipboard).
+   (project folder, model, thinking level, line to paste; with `--clip` it is already on the clipboard; a writing
+   task's card also says where it works, and that there is no need to open it). The line is one line; a read-only
+   task's says to run no shell commands, a writing task's names its worktree, and both say that if the agent's file
+   tools cannot open `.orchestra/` because git ignores it, it should say so in the chat and stop.
 6. Immediately, bypassing the pool (the operator asked):
    ```
    orch handoff new --title "<short>" --model "Gemini 4 Argon" --model-key gemini-4-argon \
-     --effort High --worktree --fallback "codex gpt-6.1-sol high" \
+     --effort High --fallback "codex gpt-6.1-sol high" \
      --pickup-min 30 --reassign-min 180 --max-open 2 --clip --prompt-file .orchestra/prompts/ag.md
    ```
    (numbers — from `operator` in the registry).
@@ -82,16 +100,19 @@ waits are bounded; hooks and the status line skip busy state silently after a mu
 
 ## "Orchestra" events
 
-- `✅ … finished: STATUS DONE` → verify: the diff of branch `ag/<id>` (`git -C <worktree> log/diff`), tests,
-  acceptance criteria; cross-review via Codex/Claude; merge; `orch handoff close <id> --remove-worktree`
-  (remove the worktree only once the branch is merged).
+- `✅ … finished: STATUS DONE` → read RESULT.md. For a writing task: `git -C <worktree> status` and `diff`, check
+  that the project folder got no stray edits from the agent, run the tests in the worktree, check the acceptance
+  criteria and cross-review via Codex/Claude, commit on `ag/<id>` yourself, merge, then
+  `orch handoff close <id> --remove-worktree`. A read-only task's findings are in RESULT.md. You need not keep your
+  own edits out of the project folder: the agent works elsewhere.
 - `STATUS BLOCKED/FAILED` → read RESULT.md; refine the task and hand it out again, or reassign.
 - `⌛ Manual pool: no task taken for N min …` — a pool check (see below).
 - `⏰ waiting for the operator for N min` (handed out but not started) → one short reminder, don't stop working.
 - `⚠ … not started after N min` → `orch handoff cancel <id> --reassigned`, run it via the fallback, tell the
   operator.
 - `⚠ … in progress for N min without a final status` → ask the operator once; don't reassign on your own.
-  File activity without RESULT.md (`STARTED?`) gets this warning too; fast post-tool checks never scan workdirs.
+  A read-only task works in the shared project folder, so a changed file there is never `STARTED?`: only its RESULT.md
+  counts. A task with a worktree of its own (a writing task) shows `STARTED?` from changes in that worktree.
 
 ## Pool checks: taking tasks back
 
@@ -103,8 +124,8 @@ was taken). Every `operator.pool_check_min` (5) minutes without a take, `orch` r
 At each check:
 
 1. **Reclaim every task no longer worth waiting for** — `orch handoff reclaim <id>` — and run them as you see fit:
-   in parallel where they may run in parallel (independent, no shared files, separate worktrees), choosing slots by
-   the profiles, quality, efficiency and cost as usual. Waiting is pointless when, for example: the operator is
+   in parallel where they may run in parallel (independent, no shared files, separate worktrees from `orch worktree`),
+   choosing slots by the profiles, quality, efficiency and cost as usual. Waiting is pointless when, for example: the operator is
    `away` (the check says so); the task has reached the critical path or blocks other work; the manual agent's
    advantage is small and an automated slot does it as well; the operator has ignored the pool for several checks
    in a row; the session is wrapping up; the task has gone stale.
@@ -122,6 +143,15 @@ At each check:
 Cursor, Windsurf, Jules, Kiro, etc. — the same lane: `orch handoff take <id> --agent cursor` (or
 `--provider cursor` on `offer`/`new`). TASK.md is self-contained for any agent; profile and quota are kept under
 the agent's name (`orch profile use cursor off`, `orch quota set cursor exhausted`).
+
+## Older tasks, other folders
+
+- A task handed out by an older version has its worktree next to the project (`<project>.wt/<id>`); it keeps
+  working (card, `check`, `done`, `close --remove-worktree`). An offered task of an older version without the `write`
+  field made no promise: it counts as writing and gets a nested worktree at the take.
+- A folder that is not a git repository can hold read-only manual tasks: nothing needs git there. `--write` is
+  refused at `offer` and `new` there (an old offer that counts as writing is not taken: run it automatically).
+- If `.orchestra/` is deleted by hand, git keeps stale worktree entries: run `git worktree prune` in the project.
 
 ## Moving the project or switching Windows/WSL
 

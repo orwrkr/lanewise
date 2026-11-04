@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.3
+
+Fixes from the first CI run. No change in how the plugin behaves.
+
+- The portability guard took CI's own placeholder e-mail for a local identity and flagged the workflow that sets it.
+- The self-test compared paths under a Windows short name (`RUNNER~1`) with the long form `orch` reports.
+
 ## 0.18.2
 
 - **SURPLUS and a project's own key**: with `prefer for` on the key profile active in the directory (say

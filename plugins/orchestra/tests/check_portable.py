@@ -20,7 +20,8 @@ from pathlib import Path
 # What may stand where a user name goes in an example; compared in lower case.
 PLACEHOLDER_USERS = {"me", "you", "user", "username", "name", "example", "public", "default", "shared", "...", "…"}
 # Never treated as an identity: too generic, or the names CI machines use.
-GENERIC_NAMES = {"root", "user", "admin", "administrator", "runner", "runneradmin", "ubuntu", "home", "github", "test", "ci"}
+GENERIC_NAMES = {"root", "user", "admin", "administrator", "runner", "runneradmin", "ubuntu", "home", "github", "test", "ci",
+                 "ci@example.invalid"}
 # A drive path below these is the same on every machine.
 SYSTEM_DIRS = ("program", "windows", "path/")      # Program Files, ProgramData; matches stop at a space
 

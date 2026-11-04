@@ -17,6 +17,8 @@ native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else pri
 ORCH="$PY $PLUGIN/bin/orch"
 T="$(mktemp -d)" || die "cannot create temporary directory"
 [[ -n "$T" && -d "$T" ]] || die "invalid temporary directory"
+# TEMP can hold a Windows short name (RUNNER~1), and orch reports the long one: compare like with like
+if command -v cygpath >/dev/null 2>&1; then T="$(cygpath -u "$(cygpath -w -l "$T")")"; fi
 export ORCH_HOME; ORCH_HOME="$(native "$T/home")"
 export PATH="$T/fakebin:$PATH"
 unset CLAUDE_PROJECT_DIR ORCH_PROJECT_DIR ORCH_WORKER ORCH_CODEX_BIN ORCH_CLAUDE_BIN DEEPSEEK_API_KEY ORCH_NOTIFY_CMD
@@ -2363,6 +2365,7 @@ from unittest import mock
 
 orch, root = str(Path(sys.argv[1]).resolve()), Path(sys.argv[2])
 root.mkdir()
+root = root.resolve()      # a Windows short name in TEMP: orch compares and reports the long form
 home, proj = root / "home", root / "proj"
 home.mkdir(); proj.mkdir()
 env = dict(os.environ, ORCH_HOME=str(home), ORCH_PROJECT_DIR=str(proj), ORCH_NOTIFY_CMD="",

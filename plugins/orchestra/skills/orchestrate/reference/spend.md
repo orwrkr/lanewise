@@ -81,6 +81,17 @@ defaults. Scopes are case-insensitive (`DEEPSEEK` → `deepseek`), must name a r
 and `orch spend reset … --project` refuses a project that has no limit of its own. The counters are cached
 incrementally in `~/.orchestra/spend_cache.json`; a reset takes effect at once.
 
+## When a key runs out: a fallback profile
+
+A project's profile may name a `fallback` (`orch profile set deepseek work --fallback personal`). While the profile is
+at its limit (mode `stop` or `evaluate`; `continue` never is) or marked `exhausted`/`disabled` in `orch quota`, the
+project resolves to the fallback profile: its key, its spend scope (so its own counter and limit), its `prefer_for`,
+`use_for` and `rules`. `orch spend` keeps listing both scopes. `orch spend reset <scope>`, a higher limit or
+`orch quota clear <scope>` returns the project at once. An explicit `--profile <name>` on a run bypasses the fallback
+and refuses at the limit as usual, naming the fallback that takes over without the flag. An unreadable
+`spend_limits.json` is not exhaustion: nothing moves and runs refuse as above. Two 💡 events: when a project moves to
+its fallback and when it returns.
+
 ## Prices
 
 `prices.json` holds dated entries (a price `from` a date, for promotions that end) and, for DeepSeek, peak windows:

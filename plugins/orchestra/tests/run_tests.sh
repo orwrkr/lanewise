@@ -261,7 +261,7 @@ contains "$out" "\[OK\]" "status OK printed"
 contains "$out" "add a function" "final output returned"
 contains "$out" "Prompt was: # Role: Orchestra executor" "executor role goes before the task"
 contains "$out" "STATUS: DONE | PARTIAL | BLOCKED" "role defines the report format"
-contains "$out" 'Run an allowed command on its own, without `cd`, `&&`, `;` or pipes' "role: run an allowed command unwrapped"
+contains "$out" 'Run an allowed command on its own, without `cd`, `git -C`, `&&`, `;` or' "role: run an allowed command unwrapped"
 contains "$out" "a permission rule matches the command as written" "role: says why a wrapped command is denied"
 contains "$(cat "$FAKE_ENV_LOG")" "msg=none claudecode=none worker=cod-" "orchestrator session vars stripped, ORCH_WORKER set"
 args=$(tail -1 "$FAKE_LOG")
@@ -1463,6 +1463,209 @@ spend_ledger 2700000      # $10.80 against the new baseline: the same event, thr
 out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook post-tool)
 contains "$out" "is at its spend limit" "spend event: reaches the model through PostToolUse too"
 
+echo "── fallback profile (an exhausted key hands its project to another profile)"
+FDIR="$T/fb-home"; FH="$(native "$FDIR")"
+FA="$(native "$T/fb-a")"; FB="$(native "$T/fb-b")"; FC="$(native "$T/fb-c")"; FD="$(native "$T/fb-d")"
+mkdir -p "$FDIR" "$T/fb-a" "$T/fb-b" "$T/fb-c" "$T/fb-d"
+printf 'FB_KEY_CLIENT=sk-client\nFB_KEY_PERS=sk-pers\nFB_KEY_PLAIN=sk-plain\nFB_KEY_X=sk-x\n' > "$FDIR/secrets.env"
+printf '{"usd_per_1m_tokens": {"deepseek-v4-pro": {"input": 1.0, "cache_read": 0.0, "output": 0.0}}}' > "$FDIR/prices.json"
+fb() { local d="$1"; shift; ORCH_HOME="$FH" ORCH_PROJECT_DIR="$d" $ORCH "$@"; }
+fb_run() { local d="$1"; shift; FAKE_CLAUDE="${FAKE_CLAUDE:-ok}" fb "$d" run deepseek --model deepseek-v4-pro "$@"; }
+fb_hook() { printf '{"session_id":"s-fb"}' | ORCH_HOME="$FH" ORCH_PROJECT_DIR="$1" $ORCH hook "$2"; }
+fb_spent() { $PY - "$FDIR/usage.jsonl" "$1" "$2" <<'EOF'     # fb_spent <label> <usd>: a ledger run that cost that much
+import datetime as dt, json, sys
+rec = {"kind": "run", "provider": "deepseek", "label": sys.argv[2], "model": "deepseek-v4-pro", "billing": "api",
+       "project": "fb-project", "cost_usd": float(sys.argv[3]),
+       "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 0},
+       "ts": dt.datetime.now().astimezone().isoformat(timespec="microseconds")}
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(json.dumps(rec) + "\n")
+EOF
+}
+lacks() { if grep -qF -- "$2" <<<"${1//\\//}"; then bad "$3"; echo "$1"; else ok "$3"; fi; }
+fb "$FA" profile set deepseek client --key FB_KEY_CLIENT --prefer-for tests --rules "CLIENT-RULES first" >/dev/null
+fb "$FA" profile set deepseek personal --key FB_KEY_PERS --prefer-for docs --rules "PERSONAL-RULES" >/dev/null
+fb "$FA" profile set deepseek plain --key FB_KEY_PLAIN --rules "PLAIN-RULES" >/dev/null
+
+# validation: the target exists in the same provider and differs from the profile; none clears it
+out=$(fb "$FA" profile set deepseek client --fallback client 2>&1); rc=$?
+[[ $rc -ne 0 ]] && contains "$out" "its own fallback" "fallback: a profile cannot fall back to itself" || bad "fallback to itself accepted"
+out=$(fb "$FA" profile set deepseek client --fallback nope 2>&1); rc=$?
+[[ $rc -ne 0 ]] && contains "$out" "no profile deepseek@nope" "fallback: an unknown target is refused" || bad "unknown fallback accepted"
+out=$(fb "$FA" profile set deepseek client --fallback personal 2>&1); expect_rc 0 $? "fallback: set"
+contains "$out" "fallback: personal" "fallback: the saved line names it"
+out=$(fb "$FA" profile set codex client --fallback personal 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "fallback: a target must be of the same provider (codex has no personal)" || bad "cross-provider fallback accepted"
+fb "$FA" profile set deepseek client --fallback none >/dev/null
+grep -q '"fallback"' "$FDIR/profiles.json" && bad "fallback none left the field" || ok "fallback none clears the field"
+fb "$FA" profile set deepseek client --fallback personal >/dev/null
+fb "$FA" profile use deepseek client >/dev/null
+fb "$FB" profile use deepseek plain >/dev/null
+fb "$FA" spend limit deepseek@client 0.0002 >/dev/null
+fb "$FA" spend mode deepseek@client stop >/dev/null
+fb "$FA" spend limit deepseek@plain 0.0002 >/dev/null
+fb "$FA" spend mode deepseek@plain stop >/dev/null
+fb "$FA" spend reset deepseek@client >/dev/null          # baselines for the manual counters
+fb "$FA" spend reset deepseek@plain >/dev/null
+
+# below the limit: the project's own profile, its key, its label, its priorities; the field shows though inactive
+out=$(fb "$FA" profile show)
+contains "$out" "client (project)" "below the limit: the project's profile"
+contains "$out" "fallback: personal" "below the limit: the configured profile shows its fallback"
+contains "$out" "CLIENT-RULES" "below the limit: the profile's rules"
+contains "$out" "prefer for: tests" "below the limit: the profile's prefer_for"
+fb_run "$FA" "one" >/dev/null; expect_rc 0 $? "below the limit: a run"
+check 'e["ANTHROPIC_API_KEY"] == "sk-client"' "below the limit: the run uses the project's key"
+tail -n1 "$FDIR/usage.jsonl" | grep -q '"label": "deepseek@client"' && ok "below the limit: the ledger label is the project's profile" \
+  || bad "below the limit: ledger label: $(tail -n1 "$FDIR/usage.jsonl")"
+out=$(fb_hook "$FA" user-prompt); [[ -z "$out" ]] && ok "below the limit: no event" || bad "event below the limit: $out"
+
+# at the limit: everything resolves to the fallback at once
+fb_spent deepseek@client 0.001
+out=$(fb "$FA" profile show)
+contains "$out" "personal (fallback: client is at its limit)" "at the limit: show names the fallback and why"
+contains "$out" "PERSONAL-RULES" "at the limit: the fallback's rules"
+lacks "$out" "CLIENT-RULES" "at the limit: the exhausted profile's rules are gone"
+lacks "$out" "prefer for: tests" "at the limit: the exhausted profile's prefer_for is gone"
+contains "$out" "prefer for: docs" "at the limit: the fallback's prefer_for"
+out=$(fb "$FA" status)
+contains "$out" "personal (fallback: client is at its limit)" "at the limit: status shows it too"
+out=$(fb "$FA" profile show --json)
+contains "$out" '"fallback_from": "client"' "at the limit: --json names the configured profile"
+out=$(fb_run "$FA" "two"); expect_rc 0 $? "at the limit: the run is not refused"
+check 'e["ANTHROPIC_API_KEY"] == "sk-pers"' "at the limit: the run uses the fallback's key"
+tail -n1 "$FDIR/usage.jsonl" | grep -q '"label": "deepseek@personal"' && ok "at the limit: the ledger label is the fallback's" \
+  || bad "at the limit: ledger label: $(tail -n1 "$FDIR/usage.jsonl")"
+out=$(fb "$FA" spend)
+contains "$out" "DeepSeek@client" "spend show still lists the exhausted scope"
+contains "$out" "DeepSeek@personal" "spend show lists the fallback's scope too"
+out=$(ORCH_PROFILES=deepseek=client fb "$FA" profile show)
+contains "$out" "personal (fallback: client is at its limit)" "a session-wide choice follows the fallback like a binding"
+out=$(fb_run "$FA" --profile client "explicit"); expect_rc 75 $? "--profile bypasses the fallback: the exhausted profile refuses"
+contains "$out" "SPEND_LIMIT DeepSeek@client" "--profile: the refusal names the exhausted scope"
+contains "$out" "Without --profile, DeepSeek@personal (its fallback) takes over" "--profile: the refusal says what happens instead"
+out=$(fb "$FB" profile show)
+lacks "$out" "fallback" "another project without the field is not affected"
+
+# events: once when it moves, once when it returns
+out=$(fb_hook "$FA" user-prompt)
+contains "$out" "DeepSeek@client is at its limit" "event: names the exhausted profile by its display name"
+contains "$out" "moved to its fallback DeepSeek@personal" "event: names the fallback"
+contains "$out" "orch spend reset deepseek@client" "event: the suggested command keeps ids"
+out=$(fb_hook "$FA" user-prompt); [[ -z "$out" ]] && ok "event: the move is announced once" || bad "event repeated: $out"
+out=$(fb_hook "$FA" post-tool); [[ -z "$out" ]] && ok "event: silent through PostToolUse once announced" || bad "event repeated in PostToolUse: $out"
+fb "$FA" spend limit deepseek@client 5 >/dev/null
+out=$(fb "$FA" profile show)
+contains "$out" "client (project)" "raising the limit returns at once"
+contains "$out" "CLIENT-RULES" "raising the limit: the rules return"
+out=$(fb_hook "$FA" user-prompt)
+contains "$out" "DeepSeek@client is usable again" "event: the way back is announced"
+contains "$out" "was on its fallback DeepSeek@personal" "event: the way back names the fallback it left"
+out=$(fb_hook "$FA" user-prompt); [[ -z "$out" ]] && ok "event: the return is announced once" || bad "return event repeated: $out"
+fb_run "$FA" "three" >/dev/null
+check 'e["ANTHROPIC_API_KEY"] == "sk-client"' "back below the limit: the run uses the project's key again"
+
+# spend reset returns at once; continue never switches
+fb "$FA" spend limit deepseek@client 0.0002 >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "personal (fallback: client is at its limit)" "a lowered limit moves to the fallback again"
+fb "$FA" spend reset deepseek@client >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "client (project)" "spend reset returns at once"
+fb_spent deepseek@client 0.001
+fb "$FA" spend mode deepseek@client continue >/dev/null
+out=$(fb "$FA" profile show)
+contains "$out" "client (project)" "mode continue is never exhausted"
+lacks "$out" "(fallback:" "mode continue: no fallback shown as active"
+fb_run "$FA" "four" >/dev/null; expect_rc 0 $? "mode continue: the run goes on"
+check 'e["ANTHROPIC_API_KEY"] == "sk-client"' "mode continue: the project's key"
+fb "$FA" spend mode deepseek@client evaluate >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "personal (fallback: client is at its limit)" "mode evaluate counts as exhausted"
+fb "$FA" spend reset deepseek@client >/dev/null
+fb "$FA" spend mode deepseek@client stop >/dev/null
+
+# availability: an entry on the profile's own key switches; on the provider or `low` it does not
+fb "$FA" quota set deepseek@client exhausted >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "personal (fallback: client is exhausted)" "availability: exhausted on the profile's key switches"
+fb "$FA" quota set deepseek@client disabled >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "personal (fallback: client is disabled)" "availability: disabled on the profile's key switches"
+fb "$FA" quota set deepseek@client low >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "client (project)" "availability: low is not exhausted"
+fb "$FA" quota clear deepseek@client >/dev/null
+fb "$FA" quota set deepseek exhausted >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "client (project)" "availability: an entry on the whole provider is no reason to switch"
+fb "$FA" quota clear deepseek >/dev/null
+fb "$FA" quota set deepseek@client/deepseek-v4-pro exhausted >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "client (project)" "availability: an entry on one model of the profile is no reason to switch"
+fb "$FA" quota clear deepseek@client/deepseek-v4-pro >/dev/null
+# the entry orch records itself when the provider reports an empty balance (402)
+out=$(FAKE_CLAUDE=402 fb_run "$FA" "empty"); expect_rc 75 $? "an empty balance (402) is exit 75"
+out=$(fb "$FA" profile show); contains "$out" "personal (fallback: client is exhausted)" "a recorded 402 moves the project to its fallback"
+fb "$FA" quota clear deepseek@client >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "client (project)" "clearing the entry returns at once"
+# a rate limit is recorded with a timed reset: it blocks the profile for minutes, but is no reason to spend another key
+out=$(FAKE_CLAUDE=429 fb_run "$FA" "busy"); expect_rc 75 $? "a rate limit (429) is exit 75"
+out=$(fb "$FA" profile show); contains "$out" "client (project)" "a rate limit doesn't move the project to its fallback"
+fb "$FA" quota clear deepseek@client >/dev/null
+fb_hook "$FA" user-prompt >/dev/null          # the moves above: settle the event state
+
+# an unreadable limits or profiles file is not exhaustion and never moves to another key
+fb_spent deepseek@client 0.001
+cp "$FDIR/spend_limits.json" "$FDIR/spend_limits.good"
+printf '{broken' > "$FDIR/spend_limits.json"
+out=$(fb "$FA" profile show); contains "$out" "client (project)" "a broken limits file: no move to another key"
+lacks "$out" "(fallback:" "a broken limits file: no fallback shown as active"
+out=$(fb_run "$FA" "blocked"); expect_rc 75 $? "a broken limits file: the run refuses as before"
+contains "$out" "unreadable" "a broken limits file: the refusal names the file"
+cp "$FDIR/spend_limits.good" "$FDIR/spend_limits.json"
+cp "$FDIR/profiles.json" "$FDIR/profiles.good"
+printf '{broken' > "$FDIR/profiles.json"
+out=$(fb_run "$FA" "blocked"); expect_rc 1 $? "a broken profiles file: the run refuses"
+contains "$out" "PROFILE_ERROR" "a broken profiles file: not a silent switch"
+cp "$FDIR/profiles.good" "$FDIR/profiles.json"
+out=$(fb "$FA" profile show); contains "$out" "personal (fallback: client is at its limit)" "the files restored: the fallback applies again"
+fb "$FA" spend reset deepseek@client >/dev/null
+
+# a profile without fallback behaves as before
+fb_spent deepseek@plain 0.001
+out=$(fb "$FB" profile show); contains "$out" "plain (project)" "no fallback: the exhausted profile stays resolved"
+out=$(fb_run "$FB" "plain"); expect_rc 75 $? "no fallback: the exhausted profile refuses as before"
+contains "$out" "SPEND_LIMIT DeepSeek@plain" "no fallback: the usual SPEND_LIMIT"
+lacks "$out" "Without --profile" "no fallback: the refusal adds nothing"
+out=$(fb_hook "$FB" user-prompt); lacks "$out" "fallback" "no fallback: no event"
+
+# one level only; a deleted target; the note when setting a target that has a fallback
+fb "$FA" profile set deepseek c1 --key FB_KEY_CLIENT --rules "C1-RULES" >/dev/null
+fb "$FA" profile set deepseek c2 --key FB_KEY_PERS --rules "C2-RULES" >/dev/null
+fb "$FA" profile set deepseek c3 --key FB_KEY_X --rules "C3-RULES" >/dev/null
+fb "$FA" profile set deepseek c1 --fallback c2 >/dev/null
+out=$(fb "$FA" profile set deepseek c2 --fallback c3); contains "$out" "fallback: c3" "a profile used as a fallback may have one of its own"
+out=$(fb "$FA" profile set deepseek c1 --fallback c2); contains "$out" "only one level" "setting a target that has a fallback says one level is followed"
+fb "$FA" profile use deepseek c1 --path "$FD" >/dev/null
+for l in c1 c2; do
+  fb "$FD" spend limit deepseek@$l 0.0002 >/dev/null; fb "$FD" spend mode deepseek@$l stop >/dev/null
+  fb "$FD" spend reset deepseek@$l >/dev/null; fb_spent deepseek@$l 0.001
+done
+out=$(fb "$FD" profile show)
+contains "$out" "c2 (fallback: c1 is at its limit)" "one level: the target of an exhausted profile"
+contains "$out" "C2-RULES" "one level: the target's rules"
+lacks "$out" "C3-RULES" "one level: the target's own fallback is not followed"
+lacks "$out" "fallback: c3" "one level: the target shows no fallback of its own while it stands in"
+out=$(fb_hook "$FD" session-start)
+contains "$out" "c2 (fallback: c1 is at its limit)" "SessionStart shows the fallback"
+lacks "$out" "moved to its fallback" "SessionStart records the move without announcing it"
+out=$(fb_hook "$FD" user-prompt); lacks "$out" "moved to its fallback" "the move recorded at SessionStart is not announced later"
+fb "$FA" profile set deepseek g1 --key FB_KEY_CLIENT >/dev/null
+fb "$FA" profile set deepseek g2 --key FB_KEY_PERS >/dev/null
+fb "$FA" profile set deepseek g1 --fallback g2 >/dev/null
+fb "$FA" profile use deepseek g1 --path "$FC" >/dev/null
+fb "$FC" spend limit deepseek@g1 0.0002 >/dev/null; fb "$FC" spend mode deepseek@g1 stop >/dev/null
+fb "$FC" spend reset deepseek@g1 >/dev/null; fb_spent deepseek@g1 0.001
+out=$(fb "$FC" profile show); contains "$out" "g2 (fallback: g1 is at its limit)" "a target that exists is used"
+out=$(fb "$FA" profile rm deepseek g2); contains "$out" "deepseek@g1 had it as its fallback" "removing a target says who loses its fallback"
+out=$(fb "$FC" profile show)
+contains "$out" "g1 (project)" "a deleted target: no fallback, the profile stays"
+contains "$out" "fallback: g2 (no such profile: ignored)" "a deleted target: show says so"
+out=$(fb_run "$FC" "gone"); expect_rc 75 $? "a deleted target: the exhausted profile refuses"
+
 echo "── session tokens per provider (their own status line)"
 rm -rf "$T/cx9"; mkdir -p "$T/cx9/sessions/2026/11/02"
 export CODEX_HOME; CODEX_HOME="$(native "$T/cx9")"
@@ -1584,6 +1787,14 @@ out2=$(acct_sl sess-acct); [[ "$out2" == "$out" ]] && ok "session tokens: a seco
 acct profile set claude work --key ANTHROPIC_API_KEY_WORK >/dev/null
 out=$(acct_sl sess-acct ORCH_PROFILES=claude=work)
 contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 · Codex" "a native session on a key profile shows its label"
+# its apiKeyHelper names that profile, so the thread keeps billing there while runs have moved to the fallback
+acct profile set claude personal >/dev/null
+acct profile set claude work --fallback personal >/dev/null
+acct quota set claude@work exhausted >/dev/null
+out=$(acct_sl sess-acct ORCH_PROFILES=claude=work)
+contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 · Codex" "a native session keeps its key's label while runs use the fallback"
+acct quota clear claude@work >/dev/null
+acct profile set claude work --fallback none >/dev/null
 out=$(acct_sl sess-acct)
 contains "$out" "Session in/out: Claude 1.7k/170 · Codex" "the same session on the default login adds up again"
 # an old-format cache entry (keyed by provider, no format mark) is rebuilt from the ledger with labels

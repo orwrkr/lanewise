@@ -41,7 +41,8 @@ tasks to use it for, free-form rules.
   (bind), or `/orchestra:profile`.
 - Fields (`orch profile set --help`): `--key NAME`, `--home` / `--codex-profile` (a second Codex account),
   `--models`, `--max-effort`, `--write yes|no`, `--use-for`, `--prefer-for`, `--rules`, `--max-open` (manual lane),
-  and adapter extras via `--opt FIELD=VALUE` (the Claude budget's `surplus`, `reserve`, `week_reserve`; Codex's
+  `--fallback <profile>` (another profile of the provider that takes over while this one is exhausted; `none` clears
+  it), and adapter extras via `--opt FIELD=VALUE` (the Claude budget's `surplus`, `reserve`, `week_reserve`; Codex's
   `reserve`, `week_reserve`).
 - Scope: no qualifier = this project; `--default` = every project; `--path /path/to/dir` = a directory above this
   project; `inherit` removes the binding; `off` disables the provider.
@@ -49,6 +50,9 @@ tasks to use it for, free-form rules.
   project / directory binding → provider default → the built-in `default`.
 - `orch` enforces `off`, `models`, the effort ceiling, the write ban and `max_open`; you honour `use_for`,
   `prefer_for` and `rules` when routing. A broken `profiles.json` refuses runs rather than silently re-enabling.
+- A `fallback` is resolved by `orch` itself: while the profile's key is exhausted (spend limit reached, or an
+  availability entry `exhausted`/`disabled` on `<provider>@<profile>`), the project gets the fallback's key, models,
+  limits and routing, and returns when the key has budget again. `orch profile show` shows the effective profile.
 
 ## API keys
 

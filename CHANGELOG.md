@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.18.0
+
+- **A fallback profile**: `orch profile set <provider> <name> --fallback <profile>` (`--fallback none` clears it). While
+  the profile is exhausted, every place that resolves a provider's profile for a directory gets the fallback instead:
+  its key, models, limits, `use_for`, `prefer_for` and `rules`. So a project's priorities, which exist only to spend
+  that project's key, disappear with the key and return with it, with no command and no reading of `rules` by the
+  session. Runs, `orch status`, `orch profile show`, SessionStart, the spend scopes and the ledger's `label` all follow,
+  because they all resolve the profile. Before, this was a paragraph in `rules` plus `--profile` on each run, and a
+  run on an empty key just got exit 75.
+  - *Exhausted* means the profile's spend scope is at its limit under mode `stop` or `evaluate` (`continue` never
+    is), or an availability entry on the profile's own key (`deepseek@work`) is `exhausted` or `disabled`, such as the
+    one `orch run` records when a provider reports an empty balance (402). `low`, an entry on the whole provider or on
+    one model, a rate limit (the timed entry `orch run` records on a 429), and an unreadable `spend_limits.json` or
+    `profiles.json` are not exhaustion: the project stays on its profile and the run refuses as before.
+  - A Claude session's own thread keeps billing to the key in its `apiKeyHelper`, which names the bound profile, so
+    its status and token counter stay on that account while `orch run claude` moves to the fallback.
+  - The target must be another profile of the same provider (or the built-in `default`); one level only, a target's
+    own `fallback` is not followed; a target deleted later means no fallback, and `orch profile show` says so.
+  - `--profile <name>` on a run is the operator's direct request and bypasses it: an exhausted profile still refuses
+    (exit 75), and the refusal says which fallback takes over without the flag. A session-wide choice
+    (`ORCH_PROFILES`, `orch launch --use`) follows the fallback like a binding.
+  - `orch profile show` and `orch status` print `personal (fallback: client is at its limit)` while it applies, and the
+    configured profile shows `fallback: personal` when it does not. A 💡 event fires once when a project moves to its
+    fallback and once when it returns.
+
 ## 0.17.0
 
 - **The status line counts tokens per account**: `Session in/out:` keyed each run by its provider, so `DeepSeek@client`

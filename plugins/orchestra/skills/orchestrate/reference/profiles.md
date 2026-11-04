@@ -25,6 +25,7 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 | "every session of mine — on that Claude key" | `orch profile use claude work --default` |
 | "in Antigravity — Argon only and no more than one task" | `orch profile set antigravity argon --models gemini-4-argon --max-open 1` and `orch profile use antigravity argon` |
 | "DeepSeek work — for open-source code only" | `orch profile set deepseek work --rules "open-source code only"` |
+| "when the project's key runs out, use my own key and the usual routing" | `orch profile set deepseek work --fallback personal` (`--fallback none` clears it) |
 
 - Never ask for or record the API key itself: the profile holds the variable name; the operator puts the value as a
   line `NAME=sk-…` into `~/.orchestra/secrets.env`.
@@ -49,4 +50,19 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
   This stops accidents, not intent: checked against the real CLI, `cat .en*` still gets through. **Codex has no such
   rule:** its sandbox limits writes, not reads, so a Codex run can read `.env` in either mode. What an executor reads
   goes to its provider, so keep real secrets out of the working tree when that matters.
+- **Fallback.** A profile with `fallback: <profile>` is replaced by that profile, for everything that resolves it
+  (runs, `orch status`, `orch profile show`, the spend scope, the ledger label), while it is *exhausted*: its spend
+  scope is at its limit under mode `stop`/`evaluate` (never under `continue`), or an availability entry on its own key
+  (`deepseek@work`) is `exhausted`/`disabled` — what `orch run` records on an empty balance. `low`, an entry on the
+  whole provider, a rate limit (the timed entry `orch run` records itself) and an unreadable
+  `spend_limits.json`/`profiles.json` do not count: the project stays on its profile and the run refuses as before. So the exhausted profile's `prefer_for`, `use_for` and `rules` are gone at once and
+  return by themselves when it has budget again (`orch spend reset` / a higher limit / `orch quota clear`); take the
+  routing from `orch profile show`, never from the exhausted profile's rules. `orch profile show` prints
+  `personal (fallback: work is at its limit)` while it applies and `fallback: personal` on the configured profile
+  otherwise. The target is another profile of the same provider (or the built-in `default`), one level only (its own
+  `fallback` is not followed); a deleted target means no fallback. `--profile` on a run bypasses it, and an
+  exhausted profile then refuses (exit 75) — use it only at the operator's request. A Claude session's own thread
+  stays on the key in its `apiKeyHelper` (`orch key` names the profile); only runs move. A session-wide choice
+  (`ORCH_PROFILES`, `orch launch --use`) follows it like a binding. Two 💡 events: once on the move, once on the
+  return.
 - After a profile change, replan unstarted subtasks; tell the operator briefly what changed.

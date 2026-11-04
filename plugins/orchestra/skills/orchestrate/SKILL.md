@@ -121,7 +121,8 @@ The operator talks about limits in plain words ("Codex is out until 18:00", "top
 
 "Don't use DeepSeek in this project", "use the work key here", "Codex off by default", "second Codex account",
 "don't offer Antigravity here", "no Claude in this project" → `orch profile use|set …` per `orch guide profiles`. `/orchestra:profile` does the
-same. Questions about how to set the plugin up go to `orch guide settings`.
+same. Questions about how to set the plugin up go to `orch guide settings`. A profile's `fallback` takes over by itself
+while it is exhausted: `orch profile show` already shows the effective profile, so no action is needed.
 
 ## 8. Verification, report, usage
 

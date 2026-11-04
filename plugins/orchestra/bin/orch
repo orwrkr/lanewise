@@ -1894,19 +1894,30 @@ def quietly(fn, *args):
         return None
 
 
-def session_status_part(sid, transcript_path, where=None):
-    """'Session in/out: Claude 370k/111k · Codex 450k/84k · DeepSeek@work 90k/9k', or None with no tokens yet (or
-    on any error). One counter per account (profile label), never a sum over a provider's accounts."""
-    if not sid:
+def session_status_part(sid, transcript_path, where=None, spend=None):
+    """'Session in/out: Claude 370k/111k · DeepSeek@work 90k/9k (est. $0.99/$12, account $9.73)', or None with nothing
+    to show. One counter per account (profile label), never a sum over a provider's accounts. `spend` is
+    [(display name, text)] from spend_status_items: each text joins the counter of the same displayed name, in
+    parentheses; a scope with money but no tokens in this session follows the counters, and with no tokens at all the
+    line is only those, with no 'Session in/out:' heading. Any error in the tokens costs only the tokens."""
+    counters = []
+    if sid:
+        try:
+            totals = session_tokens(sid, transcript_path, native_account(where))
+            counters = [(scope_name(acct), "%s/%s" % (fmt_tok(d["input"]), fmt_tok(d["output"])))
+                        for acct, d in sorted(totals.items(), key=lambda kv: account_sort_key(kv[0]))
+                        if d["input"] + d["output"] > 0]
+        except Exception:
+            counters = []
+    extra = dict(spend or ())
+    parts = []
+    for name, tokens in counters:
+        text = extra.pop(name, None)
+        parts.append("%s %s%s" % (name, tokens, " (%s)" % text if text else ""))
+    loose = ["%s (%s)" % (name, text) for name, text in (spend or ()) if name in extra]
+    if not parts and not loose:
         return None
-    try:
-        totals = session_tokens(sid, transcript_path, native_account(where))
-    except Exception:
-        return None
-    parts = ["%s %s/%s" % (scope_name(acct), fmt_tok(d["input"]), fmt_tok(d["output"]))
-             for acct, d in sorted(totals.items(), key=lambda kv: account_sort_key(kv[0]))
-             if d["input"] + d["output"] > 0]
-    return ("Session in/out: " + " · ".join(parts)) if parts else None
+    return ("Session in/out: " if parts else "") + " · ".join(parts + loose)
 
 
 def cmd_statusline(a):
@@ -1959,12 +1970,8 @@ def cmd_statusline(a):
         sid = data.get("session_id")
         where = Path(cwd) if cwd else None
         quietly(refresh_codex, where)
-        session_line = session_status_part(str(sid) if sid else None, data.get("transcript_path"), where)
-        spend_frag = quietly(spend_status_fragment, where) if where else None
-        if session_line and spend_frag:               # at ≥ 80% the spend joins the session in/out line
-            session_line += " · " + spend_frag
-        elif spend_frag:                              # no session tokens: the spend still surfaces on its own
-            session_line = spend_frag
+        spend = (quietly(spend_status_items, where) or []) if where else []   # always shown, beside the tokens
+        session_line = session_status_part(str(sid) if sid else None, data.get("transcript_path"), where, spend)
         extra = [p for p in (quietly(codex_status_part, where), session_line) if p]
         quietly(sweep_orch_home)
     except Exception:
@@ -3745,32 +3752,35 @@ def shown_api_scopes(where, cache=None, records=None):
     return out, cache
 
 
-def spend_status_fragment(where):
-    """For the status line's session in/out part, each API-billed scope active in the directory, always: our own
-    estimate and limit, and the provider's figure for the account where one is cached —
-    'DeepSeek@client est. $1.47/$10 · account $15.09 (3h ago)'; 'est. $1.47' alone when the limit is off, and no account
-    part before a balance was ever fetched. A provider whose active profile is a fallback also says so:
-    'DeepSeek@personal (fallback: DeepSeek@client at its limit) est. $0.99/$12'. Reads files only: no network."""
+def spend_status_items(where):
+    """For the status line, each API-billed scope active in the directory, always: [(display name, text)] where the
+    text is our own estimate and limit and, where one is cached, the provider's figure for the account —
+    'est. $1.47/$10, account $15.09, 3h ago' (the age once the figure is older than 30 minutes; 'est. $1.47' alone when
+    the limit is off, and no account part before a balance was ever fetched). A provider whose active profile is a
+    fallback also says so: 'fallback: DeepSeek@client at its limit; est. $0.99/$12'. The session part puts each text in
+    parentheses after the counter of the same name. Reads files only: no network."""
     active = active_profiles(where)
-    notes = {prof.label: " (fallback: %s %s)" % (scope_name("%s@%s" % (prof.provider, prof.fallback_from)),
-                                                 fallback_cause_words(prof.fallback_cause))
+    notes = {prof.label: "fallback: %s %s" % (scope_name("%s@%s" % (prof.provider, prof.fallback_from)),
+                                              fallback_cause_words(prof.fallback_cause))
              for prof, _ in active if prof.fallback_from}
     rows = {prof.label: (spent, limit, acct) for prof, _, spent, limit, acct in shown_api_scopes(where)[0]}
-    parts = []
+    items = []
     for prof, _ in active:
         label = prof.label
         if label not in rows and label not in notes:
             continue
-        head = scope_name(label) + notes.get(label, "")
+        text = []
         if label in rows:
             spent, limit, acct = rows[label]
-            head += " est. $%.2f" % spent
+            est = "est. $%.2f" % spent
             if limit is not None:
-                head += "/" + limit_text(limit)
-            if acct:
-                head += " · " + acct
-        parts.append(head)
-    return " · ".join(parts)
+                est += "/" + limit_text(limit)
+            text = [est] + ([acct] if acct else [])
+        money_text = ", ".join(text)
+        if label in notes:
+            money_text = notes[label] + ("; " + money_text if money_text else "")
+        items.append((scope_name(label), money_text))
+    return items
 
 
 @locked("home")
@@ -4111,12 +4121,18 @@ def balance_checked(entry):
     return max(times) if times else None
 
 
-def balance_age_note(entry):
-    """' (3h ago)' once a figure is older than BALANCE_FRESH_SECONDS, else ''."""
+def balance_age(entry):
+    """'3h ago' once a figure is older than BALANCE_FRESH_SECONDS, else ''."""
     at = parse_iso(str(entry.get("at") or "")) if isinstance(entry, dict) else None
     if at is not None and (now() - at).total_seconds() > BALANCE_FRESH_SECONDS:
-        return " (%s)" % human_delta(at)
+        return human_delta(at)
     return ""
+
+
+def balance_age_note(entry):
+    """' (3h ago)' once a figure is older than BALANCE_FRESH_SECONDS, else ''."""
+    age = balance_age(entry)
+    return " (%s)" % age if age else ""
 
 
 def balance_cell(entry):
@@ -4126,7 +4142,7 @@ def balance_cell(entry):
 
 
 def balance_fragments(scopes, cache=None):
-    """{scope: 'account $8.42 (3h ago)'} for the scopes with a cached figure: the status line's read of the cache. The
+    """{scope: 'account $8.42, 3h ago'} for the scopes with a cached figure: the status line's read of the cache. The
     figure is the provider's balance of the whole account the key belongs to, not of the key."""
     scopes = [s for s in scopes if s.partition("@")[0] in BALANCE_PROVIDERS]
     if not scopes:
@@ -4136,7 +4152,8 @@ def balance_fragments(scopes, cache=None):
     for scope in scopes:
         known = balance_known(cache.get(scope))
         if known:
-            out[scope] = "account " + money(*known) + balance_age_note(cache[scope])
+            age = balance_age(cache[scope])
+            out[scope] = "account " + money(*known) + (", " + age if age else "")
     return out
 
 

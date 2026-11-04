@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.1
+
+- **The status line says each name once**: the money of an API-billed scope joins the token counter of the same
+  displayed name, in parentheses, instead of repeating the name after a `·` and sitting under the "Session" heading
+  (the money is not the session's): `Session in/out: Claude 6.7M/1.2M · DeepSeek@personal 1.5M/988k (est. $0.99/$12,
+  account $9.73)`. A scope with money but no tokens in this session follows the counters
+  (`DeepSeek@client (est. $1.47/$10, account $15.09)`), and with no session tokens at all the line is only that, with
+  no `Session in/out:` heading. The age of the account figure goes inside the same parentheses
+  (`, 3h ago`), the limit off leaves `(est. $1.47, account $15.09)`, no balance yet leaves `(est. $0.99/$12)`, and a
+  fallback is the first item inside them: `(fallback: DeepSeek@client at its limit; est. $0.99/$12, account $9.73)`.
+  `orch status` and `orch spend` keep their formats.
+
 ## 0.19.0
 
 - **The provider's balance of the account**: `orch balance` asks the provider how much the account behind a key has

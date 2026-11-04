@@ -1299,7 +1299,7 @@ $PY "$(native "$T/gen_rollout.py")" "$(native "$T/cxkey/sessions/2026/11/02/roll
 CODEX_HOME="$(native "$T/cxkey")"
 $ORCH profile use codex keyed >/dev/null
 out=$(cx_status); grep -q "Codex ·" <<<"$out" && bad "codex key profile: limits in the status line: $out" || ok "codex key profile: no limits in the status line"
-contains "$out" "Codex@keyed est. \$0.00/\$10" "codex key profile: its estimate and limit stand in the status line, with no account part"
+contains "$out" "Codex@keyed (est. \$0.00/\$10)" "codex key profile: its estimate and limit stand in the status line, with no account part"
 lacks "$out" "account" "codex key profile: no account figure without a balance API"
 out=$($ORCH status); grep -q "Codex subscription" <<<"$out" && bad "codex key profile: Codex line in status: $out" || ok "codex key profile: no Codex subscription line"
 rm -f "$ORCH_HOME/profiles.json"
@@ -1597,7 +1597,7 @@ contains "$out" "API keys (spend and limit: our estimate of orch's own runs; acc
   "status: the API keys block says where each number comes from"
 contains "$out" "DeepSeek  *est. \$8.10 of \$10 (manual, since .*) · account balance not fetched yet" "status: the key scope's block line, no balance fetched yet"
 out=$(printf '{"session_id":"s-spend","workspace":{"current_dir":"%s"}}' "$SS" | ORCH_HOME="$SH" $ORCH statusline)
-contains "$out" "DeepSeek est. \$8.10/\$10" "status line: spend fragment at ≥ 80%"
+contains "$out" "DeepSeek (est. \$8.10/\$10)" "status line: spend fragment at ≥ 80%"
 lacks "$out" "account" "status line: no account part where no balance was ever fetched"
 out=$(printf '{"session_id":"s-spend"}' | ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH hook user-prompt)
 contains "$out" "80%" "spend event: 80% announced"
@@ -1620,17 +1620,17 @@ contains "$out" "is at its spend limit" "spend event: reaches the model through 
 spend_reset
 sl_spend() { printf '{"session_id":"s-spend-sl","workspace":{"current_dir":"%s"}}' "${1:-$SS}" | ORCH_HOME="${2:-$SH}" $ORCH statusline; }
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend reset deepseek >/dev/null
-out=$(sl_spend); contains "$out" "^DeepSeek est. \$0.00/\$10\$" "status line: the fragment shows at 0% too, with a known limit"
+out=$(sl_spend); contains "$out" "^DeepSeek (est. \$0.00/\$10)\$" "status line: the fragment shows at 0% too, with a known limit"
 spend_ledger 3000000      # $3.00 of $10: 30%, well below the 80% warning
-out=$(sl_spend); contains "$out" "^DeepSeek est. \$3.00/\$10\$" "status line: the fragment shows below 80%"
+out=$(sl_spend); contains "$out" "^DeepSeek (est. \$3.00/\$10)\$" "status line: the fragment shows below 80%"
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH status); lacks "$out" "API spend:" "status: still no API spend warning below 80%"
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend limit deepseek 12.16 >/dev/null
-out=$(sl_spend); contains "$out" "^DeepSeek est. \$3.00/\$12.16\$" "status line: a limit that is not whole is not rounded"
+out=$(sl_spend); contains "$out" "^DeepSeek (est. \$3.00/\$12.16)\$" "status line: a limit that is not whole is not rounded"
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend limit deepseek 12 >/dev/null
-out=$(sl_spend); contains "$out" "^DeepSeek est. \$3.00/\$12\$" "status line: a whole limit shows without cents"
+out=$(sl_spend); contains "$out" "^DeepSeek (est. \$3.00/\$12)\$" "status line: a whole limit shows without cents"
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend limit deepseek off >/dev/null
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend show); grep -E '^DeepSeek ' <<<"$out" | grep -q '\$10' && bad "orch spend limit off left the default limit: $out" || ok "orch spend limit off really turns the limit off"
-out=$(sl_spend); contains "$out" "^DeepSeek est. \$3.00\$" "status line: limit off shows the estimate alone"
+out=$(sl_spend); contains "$out" "^DeepSeek (est. \$3.00)\$" "status line: limit off shows the estimate alone"
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH status)
 contains "$out" "DeepSeek  *est. \$3.00, limit off (manual, since" "status: limit off in the block line"
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend limit deepseek 10 >/dev/null
@@ -1644,7 +1644,7 @@ import datetime as dt, json, sys
 at = (dt.datetime.now().astimezone() - dt.timedelta(seconds=int(sys.argv[2]))).isoformat(timespec="seconds")
 json.dump({"deepseek": {"amount": 15.09, "currency": "USD", "at": at}}, open(sys.argv[1], "w", encoding="utf-8"))
 EOF
-out=$(sl_spend); contains "$out" "^DeepSeek est. \$3.00/\$10 · account \$15.09\$" "status line: the account figure follows the estimate"
+out=$(sl_spend); contains "$out" "^DeepSeek (est. \$3.00/\$10, account \$15.09)\$" "status line: the account figure follows the estimate"
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH status); contains "$out" "DeepSeek  *est. \$3.00 of \$10 (manual, since .*) · account \$15.09 (checked" \
   "status: the block line carries the account figure and when it was checked"
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend)
@@ -1657,7 +1657,35 @@ import datetime as dt, json, sys
 at = (dt.datetime.now().astimezone() - dt.timedelta(seconds=int(sys.argv[2]))).isoformat(timespec="seconds")
 json.dump({"deepseek": {"amount": 15.09, "currency": "USD", "at": at}}, open(sys.argv[1], "w", encoding="utf-8"))
 EOF
-out=$(sl_spend); contains "$out" "^DeepSeek est. \$3.00/\$10 · account \$15.09 (3h ago)\$" "status line: an old account figure says how old it is"
+out=$(sl_spend); contains "$out" "^DeepSeek (est. \$3.00/\$10, account \$15.09, 3h ago)\$" "status line: an old account figure says how old it is"
+# the money joins the token counter of the same scope; the age sits inside the same parentheses
+lacks "$out" "Session in/out" "status line: with no session tokens at all there is no heading"
+lacks "$out" "))" "status line: the age is not a nested parenthesis"
+sl_sess() { printf '{"session_id":"%s","workspace":{"current_dir":"%s"}}' "$1" "$SS" | ORCH_HOME="$SH" $ORCH statusline; }
+$PY - "$SH/usage.jsonl" <<'EOF'
+import json, sys
+def rec(sid, prov, label, inp, out):
+    return json.dumps({"kind": "run", "session": sid, "provider": prov, "label": label, "model": "m",
+                       "usage": {"input_tokens": inp, "cached_input_tokens": 0, "output_tokens": out}})
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(rec("s-sl-same", "deepseek", "deepseek", 1500, 988) + "\n")
+    f.write(rec("s-sl-other", "codex", "codex", 400, 40) + "\n")
+EOF
+out=$(sl_sess s-sl-same)
+contains "$out" "^Session in/out: DeepSeek 1.5k/988 (est. \$3.0[0-9]/\$10, account \$15.09, 3h ago)\$" \
+  "status line: the money joins the counter of the same scope, in one pair of parentheses"
+[[ $(grep -o "DeepSeek" <<<"$out" | wc -l) -eq 1 ]] && ok "status line: the name is not repeated" || bad "status line: the name repeats: $out"
+out=$(sl_sess s-sl-other)
+contains "$out" "^Session in/out: Codex 400/40 · DeepSeek (est. \$3.0[0-9]/\$10, account \$15.09, 3h ago)\$" \
+  "status line: a scope with money and no tokens follows the counters"
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend limit deepseek off >/dev/null
+out=$(sl_sess s-sl-same); contains "$out" "^Session in/out: DeepSeek 1.5k/988 (est. \$3.0[0-9], account \$15.09, 3h ago)\$" \
+  "status line: the limit off leaves the estimate and the account figure"
+ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend limit deepseek 10 >/dev/null
+rm -f "$SDIR/balances.json"
+out=$(sl_sess s-sl-same); contains "$out" "^Session in/out: DeepSeek 1.5k/988 (est. \$3.0[0-9]/\$10)\$" \
+  "status line: no balance yet leaves our part alone"
+unset -f sl_sess
 rm -f "$SDIR/balances.json"
 spend_reset
 unset -f sl_spend
@@ -1903,7 +1931,7 @@ out=$(fb_sl "$SXA"); lacks "$out" "(fallback:" "a key with budget: no fallback n
 fb_spent deepseek@sx 6
 out=$(fb_sl "$SXA")
 contains "$out" "week 50% .*surplus: Claude first" "on the fallback: the status line has today's surplus text"
-contains "$out" "^DeepSeek@sy (fallback: DeepSeek@sx at its limit) est. \$0.00/\$5\$" "on the fallback: the note and the fallback's own estimate stand on a line of their own with no session tokens"
+contains "$out" "^DeepSeek@sy (fallback: DeepSeek@sx at its limit; est. \$0.00/\$5)\$" "on the fallback: the note and the fallback's own estimate stand on a line of their own with no session tokens"
 lacks "$out" "Session in/out" "on the fallback: no session line without tokens"
 out=$(fb "$SXA" status)
 contains "$out" "$SX_TODAY" "on the fallback: orch status has today's text"
@@ -1918,13 +1946,13 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
     f.write(json.dumps(rec) + "\n")
 EOF
 out=$(fb_sl_tok "$SXA")
-contains "$out" "^Session in/out: .* · DeepSeek@sy (fallback: DeepSeek@sx at its limit) est. \$0.00/\$5\$" "on the fallback: the note and the estimate join the session in/out line"
+contains "$out" "^Session in/out: .* · DeepSeek@sy (fallback: DeepSeek@sx at its limit; est. \$0.00/\$5)\$" "on the fallback: the note and the estimate join the session in/out line"
 grep -q "^DeepSeek@sy" <<<"$out" && bad "on the fallback: with session tokens the note has a line of its own" \
   || ok "on the fallback: with session tokens it has no line of its own"
 # the fallback's own spend follows the note, at any level
 fb_spent deepseek@sy 4.5
 out=$(fb_sl "$SXA")
-contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx at its limit) est. \$4.50/\$5" "on the fallback: its own estimate follows the note"
+contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx at its limit; est. \$4.50/\$5)" "on the fallback: its own estimate follows the note"
 # and the account figure of the fallback's key, not the exhausted one's
 $PY - "$FDIR/balances.json" <<'EOF'
 import datetime as dt, json, sys
@@ -1933,17 +1961,27 @@ json.dump({"deepseek@sx": {"amount": 1.0, "currency": "USD", "at": at},
            "deepseek@sy": {"amount": 9.75, "currency": "USD", "at": at}}, open(sys.argv[1], "w", encoding="utf-8"))
 EOF
 out=$(fb_sl "$SXA")
-contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx at its limit) est. \$4.50/\$5 · account \$9.75" "on the fallback: the account figure is the fallback's own"
+contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx at its limit; est. \$4.50/\$5, account \$9.75)" "on the fallback: the account figure is the fallback's own"
 lacks "$out" "account \$1.00" "on the fallback: the exhausted profile's figure is not shown"
+# the fallback profile's own tokens in this session carry the note and the money in the same parentheses
+$PY - "$FDIR/usage.jsonl" <<'EOF2'
+import json, sys
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(json.dumps({"kind": "run", "session": "s-sx-tok", "provider": "deepseek", "label": "deepseek@sy", "model": "m",
+                        "usage": {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10}}) + "\n")
+EOF2
+out=$(fb_sl_tok "$SXA")
+contains "$out" " · DeepSeek@sy 100/10 (fallback: DeepSeek@sx at its limit; est. \$4.5[0-9]/\$5, account \$9.75)\$" \
+  "on the fallback: the tokens, the note, the estimate and the account figure share one pair of parentheses"
 rm -f "$FDIR/balances.json"
 # the cause words of the other causes
 fb "$SXA" spend limit deepseek@sx 50 >/dev/null
 out=$(fb_sl "$SXA"); lacks "$out" "(fallback:" "the key has budget again: the note is gone"
 contains "$out" "week 50% .*surplus\$" "the key has budget again: surplus without 'Claude first'"
 fb "$SXA" quota set deepseek@sx exhausted >/dev/null
-out=$(fb_sl "$SXA"); contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx exhausted)" "an exhausted key: the note says so"
+out=$(fb_sl "$SXA"); contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx exhausted;" "an exhausted key: the note says so"
 fb "$SXA" quota set deepseek@sx disabled >/dev/null
-out=$(fb_sl "$SXA"); contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx disabled)" "a disabled key: the note says so"
+out=$(fb_sl "$SXA"); contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx disabled;" "a disabled key: the note says so"
 fb "$SXA" quota clear deepseek@sx >/dev/null
 out=$(fb_sl "$SXA"); lacks "$out" "(fallback:" "the entry cleared: the note is gone"
 out=$(fb "$SXA" status); contains "$out" "$SX_ON" "the entry cleared: orch status names the exception again"
@@ -2105,21 +2143,21 @@ contains "$out" "\`account\` is the provider's figure for the whole account.*whi
 grep -qE "^scope +spent +limit +account " <<<"$out" && ok "spend show: the column is called account" || bad "spend show: column header: $out"
 contains "$out" "DeepSeek@client .*\$8.42" "spend show: the account balance of the scope"
 sl_bal() { printf '{"session_id":"s-bal","workspace":{"current_dir":"%s"}}' "${1:-$BA}" | ORCH_HOME="$BH" $ORCH statusline; }
-out=$(sl_bal); contains "$out" "DeepSeek@client est. \$0.00/\$10 · account \$8.42" "status line: estimate, limit and account figure for the active scope"
-out=$(sl_bal "$BB"); contains "$out" "DeepSeek@work est. \$0.00/\$10 · account ¥110.00" "status line: the other project shows its own key's account figure"
+out=$(sl_bal); contains "$out" "DeepSeek@client (est. \$0.00/\$10, account \$8.42)" "status line: estimate, limit and account figure for the active scope"
+out=$(sl_bal "$BB"); contains "$out" "DeepSeek@work (est. \$0.00/\$10, account ¥110.00)" "status line: the other project shows its own key's account figure"
 lacks "$(sl_bal)" "ago)" "status line: no age while the figure is fresh"
 lacks "$(sl_bal)" "balance" "status line: the figure is called account, not balance"
 
 # an active key scope the provider was never asked about: the status line shows our part only, orch status says so
 bal profile set deepseek fresh --key DEEPSEEK_API_KEY_FRESH >/dev/null
 bal profile use deepseek fresh --path "$BD" >/dev/null
-out=$(sl_bal "$BD"); contains "$out" "^DeepSeek@fresh est. \$0.00/\$10\$" "status line: a scope with no balance fetched shows only our part"
+out=$(sl_bal "$BD"); contains "$out" "^DeepSeek@fresh (est. \$0.00/\$10)\$" "status line: a scope with no balance fetched shows only our part"
 BWHERE="$BD"; out=$(BAL_MODE=off bal status); BWHERE=""
 contains "$out" "DeepSeek@fresh  *est. \$0.00 of \$10 (manual.*) · account balance not fetched yet" "status: a key scope with no balance still has its line"
 # a provider with no balance API: our part, and orch status says so
 bal profile use codex work --path "$BE" >/dev/null
-out=$(sl_bal "$BE"); contains "$out" "^Codex@work est. \$0.00/\$10 · DeepSeek@client est. " "status line: a provider with no balance API shows only our part"
-lacks "$out" "Codex@work est. \$0.00/\$10 · account" "status line: and no account figure follows it"
+out=$(sl_bal "$BE"); contains "$out" "^Codex@work (est. \$0.00/\$10) · DeepSeek@client (est. " "status line: a provider with no balance API shows only our part"
+lacks "$out" "Codex@work (est. \$0.00/\$10, account" "status line: and no account figure follows it"
 BWHERE="$BE"; out=$(BAL_MODE=off bal status); BWHERE=""
 contains "$out" "Codex@work  *est. \$0.00 of \$10 (manual.*) · no balance API" "status: a provider with no balance API says so"
 # two keys of one account: each scope shows the account's figure, the same one
@@ -2128,8 +2166,8 @@ bal profile set deepseek twin --key DEEPSEEK_API_KEY_TWIN >/dev/null
 bal profile use deepseek twin --path "$BF" >/dev/null
 bal_answers '{"sk-fake-client": {"total": "8.42"}, "sk-fake-twin": {"total": "8.42"}, "sk-fake-work": {"total": "110.00", "currency": "CNY"}}'
 bal balance deepseek@twin >/dev/null
-out=$(sl_bal "$BF"); contains "$out" "DeepSeek@twin est. \$0.00/\$10 · account \$8.42" "status line: a second key of the account shows the same figure"
-out=$(sl_bal); contains "$out" "DeepSeek@client est. \$0.00/\$10 · account \$8.42" "status line: and the first key still shows it"
+out=$(sl_bal "$BF"); contains "$out" "DeepSeek@twin (est. \$0.00/\$10, account \$8.42)" "status line: a second key of the account shows the same figure"
+out=$(sl_bal); contains "$out" "DeepSeek@client (est. \$0.00/\$10, account \$8.42)" "status line: and the first key still shows it"
 BWHERE="$BF"; out=$(BAL_MODE=off bal status); BWHERE=""
 contains "$out" "DeepSeek@twin  *est. \$0.00 of \$10 (manual.*) · account \$8.42" "status: the second key's block line carries the account figure"
 # next to the token-based estimate the status line says which is which
@@ -2141,7 +2179,7 @@ rec = {"kind": "run", "provider": "deepseek", "label": "deepseek@client", "model
        "ts": dt.datetime.now().astimezone().isoformat(timespec="microseconds")}
 open(sys.argv[1], "a", encoding="utf-8").write(json.dumps(rec) + "\n")
 EOF
-out=$(sl_bal); contains "$out" "DeepSeek@client est. \$8.50/\$10 · account \$8.42" "status line: the estimate is marked est., the account figure is the provider's"
+out=$(sl_bal); contains "$out" "DeepSeek@client (est. \$8.50/\$10, account \$8.42)" "status line: the estimate is marked est., the account figure is the provider's"
 out=$(bal status); contains "$out" "est. \$8.50 of \$10 (manual.*) · account \$8.42" "status: the estimate beside the account figure"
 contains "$out" "API spend: DeepSeek@client \$8.50/\$10 (85%)" "status: the warning at 80% is still there, apart from the block"
 
@@ -2152,11 +2190,11 @@ sl_bal >/dev/null; sl_bal "$BB" >/dev/null
 bal_age deepseek@client 10800
 bal_answers '{"sk-fake-client": {"total": "1.00", "sleep": 8}, "sk-fake-work": {"total": "110.00", "currency": "CNY"}}'
 t0=$(bal_ms); out=$(sl_bal); t1=$(bal_ms)
-contains "$out" "DeepSeek@client est. .*account \$8.42 (3h ago)" "status line: an old figure says how old it is"
+contains "$out" "DeepSeek@client (est. .*account \$8.42, 3h ago)" "status line: an old figure says how old it is"
 [[ $((t1 - t0)) -lt 7000 ]] && ok "the status line does not wait for a slow provider ($((t1 - t0)) ms)" || bad "the status line took $((t1 - t0)) ms"
 [[ $(bal_count) -eq $before ]] && ok "an old figure makes the status line fetch nothing" || bad "the status line fetched an old figure"
 bal_stop
-out=$(sl_bal); contains "$out" "account \$8.42 (3h ago)" "status line: with the server stopped the cached amount still shows"
+out=$(sl_bal); contains "$out" "account \$8.42, 3h ago)" "status line: with the server stopped the cached amount still shows"
 
 # a stale cache triggers a fetch from orch status and spend show, a fresh one does not
 bal_answers '{"sk-fake-client": {"total": "7.00"}, "sk-fake-work": {"total": "110.00", "currency": "CNY"}}'
@@ -2368,7 +2406,7 @@ out2=$(acct_sl sess-acct); [[ "$out2" == "$out" ]] && ok "session tokens: a seco
 # a native session billed to a key profile counts under that profile's label, the default-login run stays apart
 acct profile set claude work --key ANTHROPIC_API_KEY_WORK >/dev/null
 out=$(acct_sl sess-acct ORCH_PROFILES=claude=work)
-contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 · Codex" "a native session on a key profile shows its label"
+contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 (est. \$0.00/\$10) · Codex" "a native session on a key profile shows its label, with its money in the same parentheses"
 # its apiKeyHelper names that profile, so the thread keeps billing there while runs have moved to the fallback
 acct profile set claude personal >/dev/null
 acct profile set claude work --fallback personal >/dev/null

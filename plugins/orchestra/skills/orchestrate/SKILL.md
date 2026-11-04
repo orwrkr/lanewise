@@ -22,7 +22,8 @@ Detailed sections of this skill: `orch guide <section>` (`manual`, `quota`, `pro
    If it starts with `Lead: …`, you are not Claude: read `orch guide lead` first (orch-* subagents run on your own
    model there; Claude is reachable only as `orch run claude`, if its profile allows).
    `Claude subscription: … SURPLUS` (or a `💡` event) — the 5-hour window would expire with a lot unused beyond the
-   reserve: Claude goes first, also ahead of Codex on a tie, within your session's share; `TIGHT` — treat Claude as
+   reserve: Claude goes first (except the task types an API key with budget has `prefer for` — the line names them),
+   also ahead of Codex on a tie, within your session's share; `TIGHT` — treat Claude as
    `low`. A `Codex subscription: … TIGHT` line (or its `💡` event) — treat Codex as `low`. `orch guide budget`.
 2. Registry — once per session (and whenever the operator changed it): `orch registry show`. It holds slots
    (provider × model × effort), cost, `max_difficulty`, `good_for`, operator parameters, routes (`routing`).

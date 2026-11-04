@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.18.2
+
+- **SURPLUS and a project's own key**: with `prefer for` on the key profile active in the directory (say
+  `deepseek@client`) and budget on that key, that provider goes first for those task types, ahead of Claude, also in a
+  SURPLUS. The status line used to say `surplus: Claude first` there, and `orch status`, the `💡` event and the skill
+  "give subtasks to Claude subagents rather than to API-billed executors". Now the status line says `surplus`, and the
+  line and the event add ", except the task types preferred for DeepSeek@client (tests, docs)". When the key is
+  exhausted, the profile's `fallback` takes over and the text is as before unless the fallback has a `prefer for`
+  of its own. With no such profile nothing changes. `SKILL.md` section 1 and `reference/budget.md` say the same.
+- **A fallback shows on the status line**: while a provider's active profile is a fallback, the spend part of the
+  status line says `DeepSeek@personal (fallback: DeepSeek@client at its limit)` (or `exhausted`, `disabled`), whatever
+  the fallback's own spend is; its `$spent/$limit` follows from 80%. With no session tokens yet the note stands on a
+  line of its own. Before, the exhausted key's `$10.50/$10` just vanished from the line.
+- **Codex's model**: the status line named `codex-auto-review`, the model of Codex's internal auto-review step, which
+  also writes `turn_context` events. It is ignored: the last real model of the tail is shown, else just `Codex`. An
+  entry that older versions saved with that model counts as no model, and a re-scan drops it.
+
 ## 0.18.1
 
 - **A fast status line**: it went blank in busy sessions although the command works, because Claude Code runs it on

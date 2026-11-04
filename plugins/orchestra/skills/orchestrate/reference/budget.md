@@ -24,7 +24,9 @@ a key): what stays unused at a reset is lost, and a balance is money. The modes 
   beyond the reserve, and the weekly limit has room beyond its reserve. The line names the active orchestrator
   sessions and each one's share of the surplus: plan for your share, not for the whole. Until the reset shown:
   - a subtask still headed for an API-billed executor goes to the cheapest Claude slot that handles its difficulty
-    (a subagent; in a session led by another model — `orch run claude`);
+    (a subagent; in a session led by another model — `orch run claude`) — except the task types the active profile of
+    an API-billed provider has in `prefer for` (the line names them): while that key has budget, they go to it first.
+    When the key runs out, the profile's `fallback` takes over and its own `prefer for` (if any) applies instead;
   - Codex and the manual pool keep their tasks; on a tie between Claude and Codex, take Claude;
   - cross-review of Claude's code stays with Codex (DeepSeek only if Codex is unavailable);
   - don't spend for the sake of spending: no extra subtasks, no effort above what the task needs.
@@ -91,7 +93,10 @@ adapter's exit 75).
 The status line shows the limits on a line of their own, and a further `Session in/out:` line with this session's
 tokens per account, without cache reads: one counter per profile label (`Codex`, `Codex@work`, `DeepSeek@client`,
 `DeepSeek@personal`), never a sum over a provider's accounts. The session's own Claude thread counts as `Claude`, or
-under its key profile's label when it bills to a key. None of this costs tokens: the status line never reaches the model.
+under its key profile's label when it bills to a key. While a provider's active profile is a fallback, the same
+line carries `DeepSeek@personal (fallback: DeepSeek@client at its limit)` (the cause: `at its limit`, `exhausted` or
+`disabled`; on a line of its own when the session has no tokens yet), followed by the fallback's own `$spent/$limit`
+from 80% of its limit. None of this costs tokens: the status line never reaches the model.
 
 ## The status line format
 
@@ -100,8 +105,9 @@ Every provider's part of the status line is built the same way, as
 
 - the Claude part is `Claude <model> · 5h 40% → 18:00 · week 60% · 3 sessions · surplus: Claude first` (a session
   led by another model shows the model's display name with no `Claude ` prefix);
-- the Codex part is the model of the last `turn_context` event in the same rollout file that gave the limits
-  (`Codex GPT-6.1 Terra · 5h 81% → 18:28 · week 95% · tight: week over reserve`; just `Codex` when no model is
-  logged, an unknown model id as-is). It has no session count.
+- the Codex part is the model of the last `turn_context` event in the same rollout file that gave the limits, except
+  the internal `codex-auto-review` step, which is skipped (`Codex GPT-6.1 Terra · 5h 81% → 18:28 · week 95% · tight:
+  week over reserve`; just `Codex` when no model is logged, an unknown model id as-is). It has no session count.
 - the mode text is the same on both (`tight: 5h`, `tight: week N% projected`, `tight: week over reserve`; Claude
-  also `surplus: Claude first`), and both append `stale: <age>` once the measurement is older than 20 minutes.
+  also `surplus: Claude first`, or just `surplus` where a key profile's `prefer for` holds), and both append
+  `stale: <age>` once the measurement is older than 20 minutes.

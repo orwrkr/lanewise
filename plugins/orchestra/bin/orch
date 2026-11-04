@@ -209,11 +209,11 @@ def claude_status_name(model):
     return "Claude " + m
 
 
-def short_mode(mode, budget_line):
+def short_mode(mode, budget_line, where=None):
     """The compact mode text for the Claude status line: 'tight: week N% projected', 'tight: week over reserve',
-    'tight: 5h', or 'surplus: Claude first'."""
+    'tight: 5h', or 'surplus: Claude first' ('surplus' alone where an API-key profile has `prefer for`)."""
     if mode == "surplus":
-        return "surplus: Claude first"
+        return "surplus" if preferred_api_profiles(where) else "surplus: Claude first"
     if mode != "tight":
         return None
     m = re.search(r"weekly limit is tight \((\d+)% projected", budget_line or "")
@@ -1073,9 +1073,13 @@ def claude_budget(where=None):
     if weekly is not None and weekly >= 100 - eff:
         return "normal", line + ". Weekly projection %d%%: no surplus mode yet." % pct(weekly)
     each = " — ≈%d%% for each of the %d sessions" % (pct(spare / sessions), sessions) if sessions > 1 else ""
+    exceptions = preferred_api_profiles(where)
+    except_text = (", except the task types preferred for " + " and ".join(
+        "%s (%s)" % (name, ", ".join(types)) for name, types in exceptions)) if exceptions else ""
     return "surplus", line + (". SURPLUS: at the current pace (%s) about %d%% of the window would expire unused beyond "
                               "the reserve%s — until %s give subtasks to Claude subagents rather than to API-billed "
-                              "executors (DeepSeek, API-key profiles); orch guide budget." % (basis, pct(spare), each, at))
+                              "executors (DeepSeek, API-key profiles)%s; orch guide budget." % (
+                                  basis, pct(spare), each, at, except_text))
 
 
 @locked("home")
@@ -1239,8 +1243,16 @@ def codex_event_limits(line):
     return measured, windows, rl.get("plan_type")
 
 
+def codex_work_model(model):
+    """The model id, or None for no model or for Codex's internal auto-review step (`codex-auto-review`), which
+    runs between the operator's own turns and is not the model they work with."""
+    m = str(model).strip() if model else ""
+    return None if not m or "auto-review" in m.lower() else m
+
+
 def codex_event_model(line):
-    """The model of a `turn_context` event (the last turn), or None."""
+    """The model of a `turn_context` event (the last turn), or None; the internal auto-review model is ignored,
+    so the last real model of the tail stays."""
     try:
         ev = json.loads(line)
     except ValueError:
@@ -1248,9 +1260,9 @@ def codex_event_model(line):
     if not isinstance(ev, dict) or ev.get("type") != "turn_context":
         return None
     payload = ev.get("payload")
-    if not isinstance(payload, dict) or not payload.get("model"):
+    if not isinstance(payload, dict):
         return None
-    return str(payload["model"])
+    return codex_work_model(payload.get("model"))
 
 
 def scan_codex_limits(home):
@@ -1332,7 +1344,7 @@ def refresh_codex(where=None, force=False, prof=None):
     measured, windows, plan_type, model = scanned
     with state_lock(ORCH_HOME / ".state.lock"):
         snap, entry = read_codex_cache(home)
-        old_model = entry.get("model")
+        old_model = codex_work_model(entry.get("model"))      # an entry saved with the auto-review model: none
         old_week_history = entry.get("week_history")
         entry = codex_windows(measured, windows, plan_type)
         if model:
@@ -1488,7 +1500,7 @@ def codex_status_part(where=None):
     five = codex_window(entry, "five_hour")
     week = codex_window(entry, "seven_day")
     measured = five[2] if five else (week[2] if week else None)
-    m = entry.get("model")
+    m = codex_work_model(entry.get("model"))
     name = (display_name(m) if m else None) or m or "Codex"   # a known id → display name, an unknown id as-is, no model → Codex
     return provider_line(
         name,
@@ -1920,7 +1932,7 @@ def cmd_statusline(a):
                 claude_status_name(model),
                 (five[0], five[1]) if five and five[1] else None,
                 (week[0], week[1]) if week else None,
-                short_mode(mode, budget_line),
+                short_mode(mode, budget_line, Path(cwd) if cwd else None),
                 measured_at(snap, "five_hour") if (five and five[1]) else None,
                 sessions=n,
             )
@@ -2229,9 +2241,14 @@ def _profile_exhaustion(prof, where):
     return None
 
 
+def fallback_cause_words(cause):
+    """'at its limit' | 'exhausted' | 'disabled'."""
+    return "at its limit" if cause == "limit" else str(cause)
+
+
 def fallback_cause_text(name, cause):
     """'client is at its limit' — for a person; `name` is the configured (exhausted) profile."""
-    return "%s is %s" % (name, "at its limit" if cause == "limit" else cause)
+    return "%s is %s" % (name, fallback_cause_words(cause))
 
 
 def profile_names(profs):
@@ -3476,9 +3493,39 @@ def api_billed(provider, where=None):
     return spend_scope(provider, where) is not None
 
 
+def active_profiles(where):
+    """[(profile, spend scope or None)]: the profile each provider resolves to in a directory (a fallback while its
+    key is exhausted), in provider order; a provider whose profile cannot be resolved is left out."""
+    where = where or project_dir()
+    out = []
+    for provider in known_providers():
+        try:
+            prof = resolve_profile(provider, where)
+        except ProfileError:
+            continue
+        out.append((prof, profile_api_scope(prof, provider, where)))
+    return out
+
+
 def api_scopes(where):
     """The API-billed scope labels active in a directory (DeepSeek + any key profiles), in provider order."""
-    return [s for s in (spend_scope(p, where) for p in known_providers()) if s]
+    return [scope for _, scope in active_profiles(where) if scope]
+
+
+def preferred_api_profiles(where):
+    """[(display name, [task types])] of the API-billed profiles active in a directory that have `prefer for`: while
+    their key has budget they go first for those task types, ahead of Claude in a SURPLUS. An exhausted profile
+    resolves to its fallback, whose own `prefer for` (if any) applies instead."""
+    try:
+        out = []
+        for prof, scope in active_profiles(where):
+            types = prof.data.get("prefer_for")
+            types = [types] if isinstance(types, str) else list(types or [])
+            if scope and types and prof.provider != "claude":
+                out.append((scope_name(prof.label), [str(t) for t in types]))
+        return out
+    except Exception:
+        return []
 
 
 def counter_cover(config, scope, where):
@@ -3632,12 +3679,12 @@ def codex_live_usage(run_dir, where=None, prof=None):
     return usage if found else None
 
 
-def spend_high_scopes(where):
+def spend_high_scopes(where, scopes=None):
     """[(scope, spent, limit, ratio)] of the API-billed scopes of a directory at ≥ 80% of their limit."""
     config = load_spend_limits()[0]
     records, _ = spend_cache_update()
     out = []
-    for scope in api_scopes(where):
+    for scope in (api_scopes(where) if scopes is None else scopes):
         eff = resolve_spend(config, scope, where)
         limit = _limit_number(eff)
         if limit is None or limit <= 0:
@@ -3658,9 +3705,19 @@ def spend_status_part(where):
 
 
 def spend_status_fragment(where):
-    """'DeepSeek $8.10/$10' fragments at ≥ 80%, for the status line's session in/out part."""
-    return " · ".join("%s $%.2f/$%.0f" % (scope_name(s), spent, limit)
-                      for s, spent, limit, ratio in spend_high_scopes(where))
+    """'DeepSeek@client $8.10/$10' at ≥ 80%, and 'DeepSeek@personal (fallback: DeepSeek@client at its limit)' for each
+    provider whose active profile is a fallback (its own $x/$y follows when it is at ≥ 80% itself), for the status
+    line's session in/out part."""
+    active = active_profiles(where)
+    notes = {prof.label: " (fallback: %s %s)" % (scope_name("%s@%s" % (prof.provider, prof.fallback_from)),
+                                                 fallback_cause_words(prof.fallback_cause))
+             for prof, _ in active if prof.fallback_from}
+    parts, shown = [], set()
+    for scope, spent, limit, _ in spend_high_scopes(where, [sc for _, sc in active if sc]):
+        parts.append("%s%s $%.2f/$%.0f" % (scope_name(scope), notes.get(scope, ""), spent, limit))
+        shown.add(scope)
+    parts += [scope_name(label) + note for label, note in notes.items() if label not in shown]
+    return " · ".join(parts)
 
 
 @locked("home")

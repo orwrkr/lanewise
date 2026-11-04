@@ -40,6 +40,7 @@ contains() {
   fi
   [[ $matched -eq 0 ]] && ok "$3" || { bad "$3"; echo "----- output -----"; echo "$1"; echo "------------------"; }
 }
+lacks() { if grep -qF -- "$2" <<<"${1//\\//}"; then bad "$3"; echo "$1"; else ok "$3"; fi; }
 
 # fake codex (`codex exec --json` event stream): behaviour selected by FAKE_CODEX env
 mkdir -p "$T/fakebin" "$T/home" "$T/no-codex" || die "cannot create fake and home directories"
@@ -1076,6 +1077,60 @@ open(sys.argv[1], "a", encoding="utf-8").write(filler + ev + "\n")
 EOF
 out=$(cx_status); contains "$out" "GPT-6.1 Sol · 5h 40%" "codex: model retained after the turn_context scrolled out of the tail"
 
+# Codex's internal auto-review step writes turn_context events too: its model is not the one the operator works with
+cat > "$T/gen_rollout_ar.py" <<'EOF'
+import datetime as dt, json, sys
+path = sys.argv[1]; models = sys.argv[2:]          # the turn_context models, in file order
+now = dt.datetime.now(dt.timezone.utc)
+def iso(t): return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+lines = [json.dumps({"timestamp": iso(now - dt.timedelta(minutes=10 - i)), "type": "turn_context",
+                     "payload": {"model": m, "effort": "medium"}}) for i, m in enumerate(models)]
+lines.append(json.dumps({"timestamp": iso(now), "type": "event_msg", "payload": {"type": "token_count",
+    "rate_limits": {"limit_id": "codex",
+        "primary": {"used_percent": 30.0, "window_minutes": 300, "resets_at": int((now + dt.timedelta(hours=2)).timestamp())},
+        "secondary": {"used_percent": 20.0, "window_minutes": 10080, "resets_at": int((now + dt.timedelta(days=7)).timestamp())},
+        "plan_type": "plus"}}}))
+open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+EOF
+ar_home() { rm -rf "$T/$1"; mkdir -p "$T/$1/sessions/2026/11/02"; export CODEX_HOME; CODEX_HOME="$(native "$T/$1")"; }
+ar_roll() { local h=$1; shift; $PY "$(native "$T/gen_rollout_ar.py")" "$(native "$T/$h/sessions/2026/11/02/rollout-0001.jsonl")" "$@"; }
+ar_home cxar1; ar_roll cxar1 codex-auto-review
+out=$(cx_status); contains "$out" "^Codex · 5h 30%" "codex: only the auto-review model in the rollout → just Codex"
+lacks "$out" "auto-review" "codex: the auto-review model is not shown"
+ar_home cxar2; ar_roll cxar2 gpt-6.1-sol codex-auto-review
+out=$(cx_status); contains "$out" "GPT-6.1 Sol · 5h 30%" "codex: an auto-review turn after the real one keeps the real model"
+lacks "$out" "auto-review" "codex: nothing of the auto-review turn shows after a real model"
+ar_home cxar3; ar_roll cxar3 codex-auto-review my-custom-model-7b codex-auto-review
+out=$(cx_status); contains "$out" "my-custom-model-7b · 5h 30%" "codex: the last real model is shown between auto-review turns"
+ar_home cxar4; ar_roll cxar4 gpt-6.1-sol codex-auto-review gpt-6.1-terra
+out=$(cx_status); contains "$out" "GPT-6.1 Terra · 5h 30%" "codex: a real model after an auto-review turn is shown"
+# an entry saved by an older version holds the internal model: it is no model, on show and on every re-scan
+rm -f "$ORCH_HOME/codex_usage.json"          # the seeding below touches every entry of the cache
+ar_home cxar5; ar_roll cxar5 codex-auto-review
+cx_status >/dev/null
+$PY - "$(native "$ORCH_HOME/codex_usage.json")" <<'EOF' && ok "codex: stored entry set to the auto-review model" || bad "codex: could not seed the stored entry"
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+for k, v in d.items():
+    if isinstance(v, dict) and "updated" in v:
+        v["model"] = "codex-auto-review"
+json.dump(d, open(p, "w", encoding="utf-8"))
+EOF
+out=$(cx_status); contains "$out" "^Codex · 5h 30%" "codex: a stored auto-review model is shown as no model"
+lacks "$out" "auto-review" "codex: nothing of the stored auto-review model shows"
+$PY - "$(native "$ORCH_HOME/codex_usage.json")" <<'EOF'
+import datetime as dt, json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+for k, v in d.items():
+    if isinstance(v, dict) and "updated" in v:
+        v["updated"] = (dt.datetime.now().astimezone() - dt.timedelta(minutes=5)).isoformat(timespec="seconds")
+json.dump(d, open(p, "w", encoding="utf-8"))
+EOF
+out=$(cx_status); contains "$out" "^Codex · 5h 30%" "codex: a re-scan with no real model leaves no model"
+lacks "$(cat "$ORCH_HOME/codex_usage.json")" "auto-review" "codex: a re-scan drops the stored auto-review model"
+
 # a missing week (only the five-hour window) leaves the week part out
 rm -rf "$T/cxmw"; mkdir -p "$T/cxmw/sessions/2026/11/02"
 export CODEX_HOME; CODEX_HOME="$(native "$T/cxmw")"
@@ -1482,7 +1537,6 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
     f.write(json.dumps(rec) + "\n")
 EOF
 }
-lacks() { if grep -qF -- "$2" <<<"${1//\\//}"; then bad "$3"; echo "$1"; else ok "$3"; fi; }
 fb "$FA" profile set deepseek client --key FB_KEY_CLIENT --prefer-for tests --rules "CLIENT-RULES first" >/dev/null
 fb "$FA" profile set deepseek personal --key FB_KEY_PERS --prefer-for docs --rules "PERSONAL-RULES" >/dev/null
 fb "$FA" profile set deepseek plain --key FB_KEY_PLAIN --rules "PLAIN-RULES" >/dev/null
@@ -1665,6 +1719,80 @@ out=$(fb "$FC" profile show)
 contains "$out" "g1 (project)" "a deleted target: no fallback, the profile stays"
 contains "$out" "fallback: g2 (no such profile: ignored)" "a deleted target: show says so"
 out=$(fb_run "$FC" "gone"); expect_rc 75 $? "a deleted target: the exhausted profile refuses"
+
+# SURPLUS follows the active profile: a key with `prefer for` and budget goes first, even in a SURPLUS; on its
+# fallback the global rule returns, and the status line says so
+SXA="$(native "$T/fb-sx")"; SXB="$(native "$T/fb-sz")"; SXC="$(native "$T/fb-none")"
+mkdir -p "$T/fb-sx" "$T/fb-sz" "$T/fb-none"
+fb "$FA" profile set deepseek sy --key FB_KEY_PERS --rules "SY-RULES" >/dev/null          # the fallback: no prefer_for
+fb "$FA" profile set deepseek sx --key FB_KEY_CLIENT --prefer-for tests,docs --fallback sy >/dev/null
+fb "$FA" profile set deepseek sz --key FB_KEY_PLAIN --rules "SZ-RULES" >/dev/null         # a key, no prefer_for
+fb "$FA" profile use deepseek sx --path "$SXA" >/dev/null
+fb "$FA" profile use deepseek sz --path "$SXB" >/dev/null
+for l in sx sy; do
+  fb "$SXA" spend limit deepseek@$l 5 >/dev/null; fb "$SXA" spend mode deepseek@$l stop >/dev/null
+  fb "$SXA" spend reset deepseek@$l >/dev/null
+done
+fb "$SXA" budget set --used 20 --resets +3h --week 50 >/dev/null
+fb_sl() { printf '{"session_id":"s-sx","model":{"display_name":"Opus 5.5"},"workspace":{"current_dir":"%s"}}' "$1" | ORCH_HOME="$FH" $ORCH statusline; }
+SX_ON="except the task types preferred for DeepSeek@sx (tests, docs)"
+SX_TODAY="executors (DeepSeek, API-key profiles); orch guide budget."
+out=$(fb_sl "$SXA")
+contains "$out" "Claude Opus 5.5 · 5h 20% → .* · week 50% .*surplus" "prefer for with budget: the status line says surplus"
+lacks "$out" "Claude first" "prefer for with budget: no 'Claude first' on the status line"
+out=$(fb "$SXA" status)
+contains "$out" "SURPLUS: at the current pace" "prefer for with budget: orch status keeps the SURPLUS word"
+contains "$out" "give subtasks to Claude subagents rather than to API-billed executors (DeepSeek, API-key profiles), $SX_ON; orch guide budget." \
+  "prefer for with budget: orch status names the exception"
+out=$(fb_hook "$SXA" user-prompt)
+contains "$out" "💡 Claude subscription: .*SURPLUS: .*$SX_ON" "prefer for with budget: the budget event names the exception"
+# another project, no such profile (a key without prefer_for; the built-in default): today's text
+for d in "$SXB" "$SXC"; do
+  out=$(fb_sl "$d"); contains "$out" "week 50% .*surplus: Claude first" "no prefer for in $(basename "$d"): the status line is as before"
+  out=$(fb "$d" status); contains "$out" "$SX_TODAY" "no prefer for in $(basename "$d"): orch status is as before"
+  lacks "$out" "except the task types" "no prefer for in $(basename "$d"): no exception in orch status"
+done
+# a session with tokens: the fallback note joins its line; without them it stands on a line of its own
+fb_sl_tok() { printf '{"session_id":"s-sx-tok","model":{"display_name":"Opus 5.5"},"workspace":{"current_dir":"%s"}}' "$1" | ORCH_HOME="$FH" $ORCH statusline; }
+out=$(fb_sl "$SXA"); lacks "$out" "(fallback:" "a key with budget: no fallback note on the status line"
+# the key hits its limit: the profile moves to its fallback
+fb_spent deepseek@sx 6
+out=$(fb_sl "$SXA")
+contains "$out" "week 50% .*surplus: Claude first" "on the fallback: the status line has today's surplus text"
+contains "$out" "^DeepSeek@sy (fallback: DeepSeek@sx at its limit)\$" "on the fallback: the note stands on a line of its own with no session tokens"
+lacks "$out" "Session in/out" "on the fallback: no session line without tokens"
+out=$(fb "$SXA" status)
+contains "$out" "$SX_TODAY" "on the fallback: orch status has today's text"
+lacks "$out" "except the task types" "on the fallback: the exception is gone with the key's prefer_for"
+$PY - "$FDIR/usage.jsonl" <<'EOF'
+import datetime as dt, json, sys
+rec = {"kind": "run", "provider": "codex", "label": "codex", "model": "gpt-6.1-terra", "billing": "subscription",
+       "session": "s-sx-tok", "project": "fb-project",
+       "usage": {"input_tokens": 400, "cached_input_tokens": 0, "output_tokens": 40},
+       "ts": dt.datetime.now().astimezone().isoformat(timespec="microseconds")}
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(json.dumps(rec) + "\n")
+EOF
+out=$(fb_sl_tok "$SXA")
+contains "$out" "^Session in/out: .* · DeepSeek@sy (fallback: DeepSeek@sx at its limit)\$" "on the fallback: the note joins the session in/out line"
+grep -q "^DeepSeek@sy" <<<"$out" && bad "on the fallback: with session tokens the note has a line of its own" \
+  || ok "on the fallback: with session tokens it has no line of its own"
+# the fallback's own spend appears as usual from 80%
+fb_spent deepseek@sy 4.5
+out=$(fb_sl "$SXA")
+contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx at its limit) \$4.50/\$5" "on the fallback: its own spend follows the note at 80% and above"
+# the cause words of the other causes
+fb "$SXA" spend limit deepseek@sx 50 >/dev/null
+out=$(fb_sl "$SXA"); lacks "$out" "(fallback:" "the key has budget again: the note is gone"
+contains "$out" "week 50% .*surplus\$" "the key has budget again: surplus without 'Claude first'"
+fb "$SXA" quota set deepseek@sx exhausted >/dev/null
+out=$(fb_sl "$SXA"); contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx exhausted)" "an exhausted key: the note says so"
+fb "$SXA" quota set deepseek@sx disabled >/dev/null
+out=$(fb_sl "$SXA"); contains "$out" "DeepSeek@sy (fallback: DeepSeek@sx disabled)" "a disabled key: the note says so"
+fb "$SXA" quota clear deepseek@sx >/dev/null
+out=$(fb_sl "$SXA"); lacks "$out" "(fallback:" "the entry cleared: the note is gone"
+out=$(fb "$SXA" status); contains "$out" "$SX_ON" "the entry cleared: orch status names the exception again"
+out=$(fb_sl "$SXB"); lacks "$out" "(fallback:" "a profile without a fallback never shows a note"
 
 echo "── session tokens per provider (their own status line)"
 rm -rf "$T/cx9"; mkdir -p "$T/cx9/sessions/2026/11/02"

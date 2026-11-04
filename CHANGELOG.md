@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.18.1
+
+- **A fast status line**: it went blank in busy sessions although the command works, because Claude Code runs it on
+  every update and a slow run gets replaced by the next one. A run now starts no process, rewrites no large file and
+  loads only what it needs.
+- **No `git`**: the project root comes from looking upward for `.git` (a folder, or a file in a linked worktree or a
+  submodule), for every command, so the status line and `orch run` always agree on a project's profiles. Only
+  `--then`, the operator's own command, still starts a process.
+- **One small file per session**: `~/.orchestra/session_tokens/<session>.json` replaces the shared
+  `session_tokens.json`, so a refresh leaves other sessions' data alone. It is saved at most once per 30 seconds; in
+  between a refresh parses from the saved offset and shows the result without saving it. A backlog over 8 MB (a long
+  transcript seen for the first time) is parsed in steps, each saved at once, so runs that get killed still get
+  through it. A running session continues from its entry in the old file, which goes once it is a day old.
+- **Bounded ids**: a file keeps the ids of its newest 100 messages, none once it has not grown for 10 minutes. In this
+  project's transcripts every one of 1956 re-sent lines was adjacent to its first copy, at most 87 seconds later. A
+  copy that comes after its id was dropped is recognized by its timestamp, older than the newest id dropped (or that
+  very message) and is skipped. A copy with a new timestamp would count again; none was seen.
+- **Imports**: `argparse`, `shutil`, `subprocess`, `tempfile`, `platform`, `random`, `shlex`, `signal` and others are
+  imported where they are used, and a plain `orch statusline` does not build the argument parser. `write_json` no
+  longer needs `tempfile`.
+- **A busy lock costs nothing**: the status line does not wait for a lock, and prints what is cached. Readers of
+  `~/.orchestra` state take no lock unless a file is corrupt. A part that fails costs only that part, not the whole
+  line. Each file is opened once per run until it is written or a lock is taken.
+- **The Codex scan keeps to its throttle**: a scan that found nothing, or a run killed mid-scan, made the next update
+  scan the rollouts again. Now the start of a scan is recorded, which also limits all sessions together to one scan a
+  minute per account, and the scan runs outside the lock.
+- `*.tmp` files left by killed writes and the files of quiet sessions go after a day.
+
 ## 0.18.0
 
 - **A fallback profile**: `orch profile set <provider> <name> --fallback <profile>` (`--fallback none` clears it). While
@@ -24,6 +52,7 @@
   - `orch profile show` and `orch status` print `personal (fallback: client is at its limit)` while it applies, and the
     configured profile shows `fallback: personal` when it does not. A 💡 event fires once when a project moves to its
     fallback and once when it returns.
+
 
 ## 0.17.0
 

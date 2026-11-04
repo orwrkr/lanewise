@@ -372,7 +372,7 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `~/.orchestra/usage.jsonl` | usage log: runs, manual tasks, session snapshots (`orch usage`) |
 | `~/.orchestra/claude_usage.json` | the Claude subscription's last known window usage and its recent history, for the budget mode (`orch budget`) |
 | `~/.orchestra/codex_usage.json` | the Codex account's last known limits, per `CODEX_HOME` (the `Codex subscription:` line) |
-| `~/.orchestra/session_tokens.json` | per-session byte offsets and running token totals per account, for the status line's session part |
+| `~/.orchestra/session_tokens/<session>.json` | one session's byte offsets and running token totals per account, for the status line's session part; removed a day after its last save |
 | `~/.orchestra/sessions.json` | active Claude Code sessions and Claude executor runs: the budget's consumer count |
 | `~/.orchestra/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
 | `<project>/.orchestra/runs/` | executor runs: prompt, role, project rules, response, log, tokens |

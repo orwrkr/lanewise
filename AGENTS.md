@@ -36,10 +36,10 @@ be in the user's language; whatever goes into the repository is English.
 ## Before committing
 
 ```bash
-bash plugins/orchestra/tests/run_tests.sh          # must report failed: 0 — both in Git Bash on Windows and in WSL:
-wsl.exe -- bash -lc 'bash plugins/orchestra/tests/run_tests.sh'   # from the repo root, default WSL distro
+wsl.exe -- bash -lc 'bash plugins/orchestra/tests/run_tests.sh'   # must report failed: 0; from the repo root, default WSL distro
 claude plugin validate ./plugins/orchestra && claude plugin validate .
 ```
+Git Bash on Windows is left to CI (`.github/workflows/tests.yml`, on a pull request or a push to `main`): it takes five minutes there, while locally it takes half an hour or more and slows every session on the machine. Run it locally only to debug a Windows-specific failure.
 Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry format — update SKILL.md and README.
 
 ## Rules
@@ -49,6 +49,11 @@ Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry
 - No machine-specific content: no absolute paths, user names, distro names or personal settings in code, docs,
   tests or commit messages (examples use `/path/to/…`, `<you>`; test data, the user `me`); the repository works from any
   location. `tests/check_portable.py` enforces this in the self-test and in the git hooks (`.githooks`); don't bypass it.
+- No names of private projects or clients, in code, tests, docs, sample data, commit messages or tags, in any commit:
+  this repository is or may become public. Use a neutral label (`client`, `work`), also in specifications given to
+  executors, which copy what they read. The guard reads the names at run time from `~/.orchestra` (`private_terms.txt`,
+  this machine's profile names, key variables and bound folders), and its `pre-push` hook checks every commit a push
+  would send; CI has no such list, so this holds only on a machine that has it.
 - Cross-platform: paths — via `pathlib`, output — UTF-8 (`utf8_stdio`), shell adapters on Windows run through
   Git Bash (`find_bash`, not `System32\bash.exe` — that is WSL), the executor's process tree — a Job Object on
   Windows, a process group on POSIX.
@@ -81,6 +86,6 @@ Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry
   `~/.orchestra/`, not in the repository.
 - Bump the version in `plugins/orchestra/.claude-plugin/plugin.json` when behaviour changes: plugin installs from
   GitHub are cached by version.
-- A version that reaches `main` gets a signed tag `vX.Y.Z` on its last commit, at the merge, once what CI runs passes
-  locally (`.github/workflows/tests.yml`: the self-test in both environments, vermin). A tag never moves: a fix that
-  external CI still calls for is a new patch version with its own tag, because installs are cached by version.
+- A version that reaches `main` gets a signed tag `vX.Y.Z` on its last commit, at the merge, once CI is green on its
+  pull request (`.github/workflows/tests.yml`: the self-test on Ubuntu and Windows, vermin). A tag never moves: a fix
+  that CI on `main` still calls for is a new patch version with its own tag, because installs are cached by version.

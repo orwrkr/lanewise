@@ -9,7 +9,7 @@ The development rules — structure, compatibility, isolation, language, what to
 ```bash
 git clone https://github.com/orwrkr/orchestra && cd orchestra
 bash install.sh          # installs the plugin from this folder: edits are live after /reload-plugins
-git config core.hooksPath .githooks     # stops absolute paths and your user name from reaching a commit
+git config core.hooksPath .githooks     # stops absolute paths, your user name and private names (~/.orchestra/private_terms.txt, your profile names) from reaching a commit or a push
 ```
 
 On Windows run it in Git Bash; under WSL run it inside WSL. Each environment has its own installation and its own

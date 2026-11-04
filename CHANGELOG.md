@@ -6,6 +6,8 @@ Fixes from the first CI run. No change in how the plugin behaves.
 
 - The portability guard took CI's own placeholder e-mail for a local identity and flagged the workflow that sets it.
 - The self-test compared paths under a Windows short name (`RUNNER~1`) with the long form `orch` reports.
+- For contributors: the portability guard also stops private names, read at run time from `~/.orchestra`, and a new
+  `pre-push` hook checks every commit a push would send, messages and annotated tags included.
 
 ## 0.18.2
 

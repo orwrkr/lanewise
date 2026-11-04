@@ -26,6 +26,7 @@ project** (files under `~/.orchestra/`). Personal data never goes into a reposit
 | Personal registry | `orch registry init` → `~/.orchestra/providers.yaml` |
 | Profile definitions and provider defaults | `orch profile set …`, `orch profile use … --default` → `profiles.json` |
 | Spend limits, modes, price table | `orch spend …` → `spend_limits.json`; `prices.json` |
+| Account balances (the provider's figure, shared by all keys of an account) | `orch balance` → `balances.json` |
 | Availability ("away", "out until …") | `orch quota set|clear` → `availability.json` |
 | Status line | `"statusLine": { … "orch statusline" }` in Claude Code settings |
 
@@ -74,6 +75,13 @@ Caps what API-billed executors spend (DeepSeek always; Codex/Claude only on a `k
 - After a top-up: `orch spend reset <scope> [--limit N]` (counts from zero from now).
 - Personal price table: `~/.orchestra/prices.json` overrides the built-in `registry/prices.json`.
 - Stored in `~/.orchestra/spend_limits.json`; a broken file refuses runs and writes.
+- The provider's balance of the account behind a key (DeepSeek): `orch balance [--json]`, kept in
+  `~/.orchestra/balances.json` and shown as `account $15.09` in the status line (after our `est. $1.47/$10`),
+  `orch status` and the `account` column of `orch spend`; `ORCH_BALANCE=off` turns every request off. Other providers
+  have no balance API for an ordinary key and show only the estimate. The account is shared by all its keys and can be
+  spent from outside `orch`, so a drop in it says nothing about one key's spend: limits stay hand-set budgets for
+  `orch`'s own runs, and the provider's refusal (402) is what stops an empty account (and moves a project to its
+  profile's `fallback`).
 
 ## Subscription budgets — `orch guide budget`
 

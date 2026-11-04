@@ -47,7 +47,7 @@ Default limit **10 USD**; `orch spend limit <scope> N` or `off`. Two modes per s
 | `continue` | warn only | warn only | warn only |
 
 - A refused or killed run exits **75** and the header/usage log say `SPEND_LIMIT`; a killed run still logs the
-  partial usage it spent. At **80%** a warning appears in `orch status`, the status line, and a 💡 event fires once
+  partial usage it spent. At **80%** a warning appears in `orch status` (an `API spend:` line), and a 💡 event fires once
   per counter period (per month for `month`, per baseline for `manual`; again at 100%).
 - **Lead mode** (default `continue`) governs the orchestrator itself: `orch launch` refuses at the limit under
   `stop`/`evaluate`, and `orch key` (the apiKeyHelper) refuses past the threshold — `stop` at 100%, `evaluate`
@@ -100,11 +100,44 @@ hours). Chinese public holidays are off-peak on DeepSeek's page but are not mode
 errs high, which is accepted. `orch spend` warns when a provider's prices are older than 30 days and names the
 source to check.
 
+## The provider's balance of the account — `orch balance`
+
+`orch spend` is an **estimate of `orch`'s own runs** (tokens × prices). For a provider that reports a balance,
+`orch balance` also reads the provider's own figure with the key (`GET /user/balance` for DeepSeek) and keeps it in
+`~/.orchestra/balances.json`: per scope `{amount, currency, at}`, plus the last error and its time. A failed fetch keeps
+the last amount; its age says how old it is. The currency is the provider's own (`$`, `¥` for CNY): nothing is
+converted, and the USD limits above stay as set by hand.
+
+**The figure belongs to the account, not to the key.** All keys of one DeepSeek account share one balance, and the
+account can be spent from outside `orch` (other tools, other people). So it is the account's balance everywhere it is
+shown, two keys of one account show the same figure, and it is never comparable with one key's estimate: **a drop in
+the account balance says nothing about one key's spend.** Spend limits stay what they were, hand-set budgets for
+`orch`'s own runs. What actually stops an empty account is the provider's refusal (402), and it moves a project whose
+profile has a `fallback` to that profile.
+
+- **Where**: for every API-billed scope active in the directory, the status line always shows our part and, once a
+  balance was fetched, the provider's:
+  `DeepSeek@client est. $1.47/$10 · account $15.09` (`(3h ago)` after 30 minutes; `est. $1.47` alone when the limit
+  is `off`; no account part before the first fetch or for a provider with no balance API; a limit that is not whole
+  shows as it is, `$12.16`). `orch status` has a line per such scope under an `API keys (...)` heading that says where
+  each number comes from: `est. $1.47 of $10 (manual, since Nov 03) · account $15.09 (checked 3m ago)`, or `no balance
+  API`, or `last fetch failed: ...`. `orch spend` has an `account` column. The warning at 80% (`API spend:` in `orch
+  status`) and the 💡 events are unchanged.
+- **When fetched**: `orch balance [SCOPE …] [--json]` always; `orch status` and `orch spend` when the figure is older
+  than 10 minutes; the end of each `orch run` for its scope; SessionStart starts a detached `orch balance --quiet`
+  when it is stale. 5-second timeout everywhere; a failure never fails the command. The status line only reads the
+  file. `ORCH_BALANCE=off` stops every request.
+- **Which providers**: only what an ordinary key can read: DeepSeek. OpenAI (Codex key), Anthropic (Claude key) and
+  Google (Gemini API, Vertex AI) offer none, so those scopes show "no balance API: see `orch spend`" and keep the
+  estimate. A new provider is a fetch function plus an entry in `BALANCE_PROVIDERS` in `bin/orch`.
+- A rejected key (401/403) is reported with its variable name (`check DEEPSEEK_API_KEY_WORK`); a key value is never
+  printed, logged or cached.
+
 ## The provider's own refusal is separate
 
-A DeepSeek 402 blocks until `orch quota clear deepseek` — that is the provider's real balance. `orch spend` is our
-estimate of the same spending and is a separate stop. Both are worth respecting: the provider's is exact, ours is
-early (before the money runs out).
+A DeepSeek 402 blocks until `orch quota clear deepseek` — the account is really empty, whoever spent it. `orch spend`
+is our estimate of `orch`'s own runs and is a separate stop. Both are worth respecting: the provider's is exact, ours
+is early (before the money runs out) and covers only what `orch` ran.
 
 ## The orchestrator's job
 

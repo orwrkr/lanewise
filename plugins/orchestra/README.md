@@ -80,6 +80,8 @@ Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex logi
 
 Multiple keys (personal, work) and per-project key selection are handled by [profiles](#executor-profiles-keys-accounts-rules-projects). A second Codex account is a profile too.
 
+`orch balance` reads the balance of the DeepSeek account behind a key from DeepSeek itself (`GET /user/balance`) and keeps it in `~/.orchestra/balances.json`. The status line then shows, for every API-billed scope of the directory, our own estimate and limit next to it: `DeepSeek@client est. $1.47/$10 · account $15.09`. The account figure is the provider's, shared by all keys of that account (which can also be spent from outside `orch`), so it is never a key's balance and a drop in it says nothing about one key's spend; limits stay hand-set budgets for `orch`'s own runs, and the provider's refusal (402) is what stops an empty account. Other providers give an ordinary key no balance to read, so they show only the estimate. See `orch guide spend`.
+
 Codex model capacity failures return exit 75 and block only the selected model for about ten minutes.
 On native Windows, write workers may need a scratch directory with readable parents and explicit `--add-dir`
 permission for tests using temp repositories; see the Codex [registry notes](registry/providers.yaml).

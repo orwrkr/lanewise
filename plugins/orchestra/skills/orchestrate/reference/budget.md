@@ -99,10 +99,12 @@ adapter's exit 75).
 The status line shows the limits on a line of their own, and a further `Session in/out:` line with this session's
 tokens per account, without cache reads: one counter per profile label (`Codex`, `Codex@work`, `DeepSeek@client`,
 `DeepSeek@personal`), never a sum over a provider's accounts. The session's own Claude thread counts as `Claude`, or
-under its key profile's label when it bills to a key. While a provider's active profile is a fallback, the same
-line carries `DeepSeek@personal (fallback: DeepSeek@client at its limit)` (the cause: `at its limit`, `exhausted` or
-`disabled`; on a line of its own when the session has no tokens yet), followed by the fallback's own `$spent/$limit`
-from 80% of its limit. None of this costs tokens: the status line never reaches the model.
+under its key profile's label when it bills to a key. The same line carries every API-billed scope active in the
+directory, always: `DeepSeek@client est. $1.47/$10 · account $15.09` (our estimate and limit, then the provider's
+figure for the account once one was fetched; `orch guide spend`). While a provider's active profile is a fallback it
+says so: `DeepSeek@personal (fallback: DeepSeek@client at its limit) est. $0.99/$12` (the cause: `at its limit`,
+`exhausted` or `disabled`; on a line of its own when the session has no tokens yet). None of this costs tokens: the
+status line never reaches the model.
 
 ## The status line format
 

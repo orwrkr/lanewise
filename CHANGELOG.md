@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.19.0
+
+- **The provider's balance of the account**: `orch balance` asks the provider how much the account behind a key has
+  left, with that key, for every profile that has a `key` and for DeepSeek's built-in `DEEPSEEK_API_KEY`
+  (`GET /user/balance`; `--json`; `--quiet`). Only what an ordinary key can read counts, so only DeepSeek has it.
+  OpenAI, Anthropic and Google offer a key no balance (OpenAI and Anthropic keep billing and cost reports behind admin
+  keys; the Gemini API and Vertex AI have none), and `orch balance` says so for those: "no balance API: see `orch
+  spend`". Another provider is one fetch function and one table entry (`BALANCE_PROVIDERS`).
+- **It is the account's figure, not the key's**: all keys of a DeepSeek account share one balance, and the account can
+  be spent from outside `orch` (other tools, other people). So it is worded as the account's balance everywhere
+  (`account`), two keys of one account show the same figure, and it is never presented as comparable with one key's
+  estimate: a drop in the account balance says nothing about one key's spend. Spend limits stay hand-set budgets for
+  `orch`'s own runs; what actually stops an empty account is the provider's refusal (402), which moves a project with a
+  `fallback` to that profile.
+- **The status always shows both kinds of data**, not only from 80%: for every API-billed scope active in the
+  directory (a fallback included), the status line has our estimate and limit and, where a balance was fetched, the
+  provider's figure: `DeepSeek@client est. $1.47/$10 · account $15.09`, with `(3h ago)` once the figure is older than
+  30 minutes; `est. $1.47` alone when the limit is `off`; only our part before a balance was ever fetched or for a
+  provider with no balance API; a limit that is not whole shows as it is (`$12.16`). The built-in DeepSeek profile
+  stays silent until it has a key, some spend or a balance. `orch status` has a line for each such scope, balance or
+  not, under a heading saying where each number comes from (spend and limit: our estimate of `orch`'s own runs;
+  account: the provider's figure, for all keys of that account), with the age of the figure, `no balance API`, or the
+  last failed fetch. `orch spend` has an `account` column and a header that says `spent` is our estimate of `orch`'s
+  runs and `account` can include spending outside `orch`. The warning at 80% (`API spend:` in `orch status`) and the 💡
+  events are unchanged. The currency is the one the provider reports (`$`, `¥` for CNY), never converted.
+- **When it is fetched**: `orch balance` always; `orch status` and `orch spend show` when the figure is older than 10
+  minutes; the end of every `orch run` for its scope; and SessionStart, which starts a detached `orch balance --quiet`
+  instead of waiting. Every request has a 5-second timeout. A failure never fails a run, a status or a hook: the last
+  amount stays in `~/.orchestra/balances.json` with the error beside it and shows as age. The status line only reads
+  that file: no request, no process. `ORCH_BALANCE=off` turns every request off; `ORCH_DEEPSEEK_BALANCE_URL` points
+  the DeepSeek request elsewhere (tests).
+- The key is read the way a run reads it (environment, then `secrets.env`), sent only as the bearer token, and appears
+  in no message, no `--json`, no cache. A rejected key (401) names its variable. Spend limits work as before.
+
 ## 0.18.4
 
 - **No five-hour TIGHT from a few minutes of data**: a projection of the five-hour window now needs at least 60

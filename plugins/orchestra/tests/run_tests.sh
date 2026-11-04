@@ -237,6 +237,7 @@ printf 'subject /home/%s/y\n' "$u" > "$GT/msg"
 git -C "$GT" -c core.hooksPath="$HOOKS" commit -q -F "$(native "$GT/msg")" >/dev/null 2>&1 && bad "commit-msg let a home path through" || ok "commit-msg stops a home path"
 git -C "$GT" -c core.hooksPath="$HOOKS" commit -qm "fine" >/dev/null 2>&1 && ok "a clean commit passes both hooks" || bad "hooks stopped a clean commit"
 # private names: read at run time from ~/.orchestra, never listed in the repository
+rm -f "$GT/msg"    # it holds a home path from above, and this repository is scanned and committed below
 GH="$T/guard-home"; mkdir -p "$GH" || die "cannot create guard home"
 printf 'Acmecorp\n# a comment\n\n' > "$GH/private_terms.txt"
 cat > "$GH/profiles.json" <<'EOF'
@@ -251,8 +252,8 @@ for text in "macmecorpx" "personal" "deepseek@personal" "DEEPSEEK_API_KEY" "a co
   guard_private "see $text here" && ok "guard allows: $text" || bad "guard false alarm on a private name: $text"
 done
 guard_on "see acmecorp here" && ok "no ~/.orchestra (CI): no private names to check" || bad "guard flagged a name with no list"
-printf 'subject acmecorp\n' > "$GT/msg"
-ORCH_HOME="$(native "$GH")" $PY "$GUARD" --message "$(native "$GT/msg")" >/dev/null 2>&1 && bad "guard missed a private name in a message" || ok "guard flags a private name in a message"
+printf 'subject acmecorp\n' > "$T/guard-msg"
+ORCH_HOME="$(native "$GH")" $PY "$GUARD" --message "$(native "$T/guard-msg")" >/dev/null 2>&1 && bad "guard missed a private name in a message" || ok "guard flags a private name in a message"
 printf '{broken' > "$GH/profiles.json"
 guard_private "see acmecorp here" && bad "a broken profiles.json dropped the private terms" || ok "a broken profiles.json leaves the private terms working"
 guard_private "see betacli here" && ok "a broken profiles.json is no finding" || bad "guard failed on a broken profiles.json"

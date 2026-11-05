@@ -10,7 +10,7 @@ orch launch deepseek --dry-run      # print the command and the environment (key
 ```
 
 Claude Code starts with your usual config and plugins, but every model request goes to DeepSeek's
-Anthropic-compatible API: the main thread runs on M (default `deepseek-v4-pro`), background calls on the profile's
+Anthropic-compatible API: the main thread runs on M (default `deepseek-flash`), background calls on the profile's
 fast model, every subagent on M. The DeepSeek key comes from the profile (`orch profile … deepseek`) or
 `~/.orchestra/secrets.env`; your `ANTHROPIC_*` variables and `CLAUDE_CODE_OAUTH_TOKEN` are dropped for the session. The session spends the DeepSeek balance (402 → top up, then `orch quota clear deepseek[@P]`).
 

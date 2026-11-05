@@ -408,6 +408,9 @@ expect_rc 0 $rc "deepseek analysis run"
 check 'e["ANTHROPIC_API_KEY"] == "sk-env"' "real environment wins over secrets.env"
 check '"Edit" not in a[a.index("--tools") + 1] and not any(x.startswith(("Edit", "Write")) for x in r["allowed"])' "analysis: no edit tools"
 check '"--effort" not in a' "unsupported effort dropped"
+FAKE_CLAUDE=ok $ORCH run deepseek "default model" >/dev/null; rc=$?
+expect_rc 0 $rc "deepseek run without --model"
+check 'e["ANTHROPIC_MODEL"] == "deepseek-flash" and a[a.index("--model") + 1] == "deepseek-flash"' "default model deepseek-flash passed to Claude Code"
 out=$(FAKE_CLAUDE=402 $ORCH run deepseek --model deepseek-v4-pro "x"); rc=$?
 expect_rc 75 $rc "402 insufficient balance → exit 75"
 out=$($ORCH quota show); contains "$out" "deepseek .*exhausted .*until cleared manually" "balance blocks deepseek until manual clear"
@@ -462,7 +465,7 @@ contains "$out" "Claude: off" "--no-claude: no Claude model in the session"
 contains "$out" "Dropped for this session: ANTHROPIC_API_KEY" "your Anthropic key is not sent to DeepSeek"
 contains "$out" "ANTHROPIC_AUTH_TOKEN=sk-f…" "DeepSeek key as the session's token"
 grep -q "sk-from-file" <<<"$out" && bad "dry run printed the key" || ok "dry run masks the key"
-contains "$out" "Command: .*--model deepseek-v4-pro --resume" "claude arguments after --"
+contains "$out" "Command: .*--model deepseek-flash --resume" "claude arguments after --, default lead model Flash"
 contains "$out" "ORCH_PROFILES=codex=alt,claude=off" "session-wide choices go to the session"
 out=$(env -u CLAUDECODE FAKE_CLAUDE=ok ANTHROPIC_API_KEY=sk-ant-parent $ORCH launch deepseek --model deepseek-flash -- --resume \
       </dev/null 2>&1); rc=$?
@@ -497,7 +500,7 @@ recs = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8")]
 cx = [r for r in recs if r["kind"] == "run" and r["provider"] == "codex" and r["task"] == "Implement the café parser"][-1]
 ds = [r for r in recs if r["kind"] == "run" and r["provider"] == "deepseek" and r["task"] == "Café parser tests"][-1]
 assert cx["session"] == "sess-test" and cx["model"] == "gpt-6.1-terra" and cx["usage"]["output_tokens"] == 30, cx
-assert ds["usage"] == {"input_tokens": 150, "cached_input_tokens": 400, "output_tokens": 25, "model": "deepseek-v4-pro"}, ds
+assert ds["usage"] == {"input_tokens": 150, "cached_input_tokens": 400, "output_tokens": 25, "model": "deepseek-flash"}, ds
 EOF
 # a worktree holds no git-ignored files: an @import it lacks comes from the project folder
 IP="$T/import-proj"; mkdir -p "$IP/.local-notes" "$IP/docs" && git -C "$IP" init -q && git -C "$IP" config user.email t@t && git -C "$IP" config user.name t \
@@ -577,7 +580,7 @@ contains "$out" "Session sess-tes · “Café parser”" "usage: current session
 contains "$out" "orchestrator *Claude Opus 5.5 *high .* 115 *3.0k *70" "main thread: streamed lines counted once"
 contains "$out" "subagent orch-sonnet-high *Claude Sonnet 5.5 *medium *Find naïve parse calls" "subagent: type, model, what for"
 contains "$out" "Codex *GPT-6.1 Terra *.*Implement the café parser · OK" "CLI executor in the session report"
-contains "$out" "DeepSeek *DeepSeek V4 Pro .*Café parser tests" "DeepSeek executor in the session report"
+contains "$out" "DeepSeek *DeepSeek V4.1 Flash .*Café parser tests" "DeepSeek executor in the session report"
 echo "{\"session_id\": \"sess-test\", \"transcript_path\": \"$(native "$CFG/sess-test.jsonl")\", \"cwd\": \"$(native "$REPO")\"}" | \
   $ORCH hook session-end >"$T/se.out"; rc=$?
 [[ $rc -eq 0 && ! -s "$T/se.out" ]] && ok "SessionEnd hook silent" || bad "session-end: rc=$rc $(cat "$T/se.out")"
@@ -4529,6 +4532,28 @@ done <<<"$review"
 
 echo "── registry & doctor"
 out=$($ORCH registry path); contains "$out" "registry/providers.yaml" "default registry path"
+$ORCH registry show > "$T/registry-shown.yaml" || bad "registry show failed"
+reg_checks=$($PY - "$(native "$T/registry-shown.yaml")" <<'EOF'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+routes = []                      # 2-space keys whose value is an inline list (the routing block)
+for line in text.splitlines():
+    m = re.match(r"^  ([a-z0-9_]+):\s*\[(.*)\]", line)
+    if m:
+        routes.append([s.strip() for s in m.group(2).split(",")])
+pro = [s for slots in routes for s in slots if s.startswith("deepseek/pro-")]
+print("PRO-ROUTE-OK" if routes and not pro else "PRO-ROUTE-BAD %r" % pro)
+blocks = re.split(r"\n\s*- id: ", text)      # each slot: its fields up to the next slot
+slots = {b.partition("\n")[0].strip(): b.partition("\n")[2] for b in blocks[1:]}
+def has(sid, pattern):
+    return re.search(pattern, slots.get(sid, ""), re.M) is not None
+print("FLASH-MAX-OK" if has("deepseek/flash-max", r"^\s+effort: max$") else "FLASH-MAX-BAD")
+print("FLASH-HIGH-D4-OK" if has("deepseek/flash-high", r"^\s+max_difficulty: 4$") else "FLASH-HIGH-D4-BAD")
+EOF
+)
+for k in PRO-ROUTE-OK FLASH-MAX-OK FLASH-HIGH-D4-OK; do
+  contains "$reg_checks" "$k" "registry: $k"
+done
 $ORCH registry init >/dev/null; out=$($ORCH registry path); contains "$out" "$ORCH_HOME/providers.yaml" "user registry overrides default"
 out=$($ORCH doctor); ok "doctor runs (rc=$?)"
 contains "$out" "DEEPSEEK_API_KEY *set" "doctor sees the DeepSeek key"

@@ -191,12 +191,12 @@ DeepSeek as the orchestrator — from a terminal, in the project:
 ```bash
 orch launch deepseek                       # DeepSeek leads; Claude is still available as an executor
 orch launch deepseek --no-claude           # no Claude models at all in this session
-orch launch deepseek --profile work --model deepseek-v4-pro --use codex=alt -- --resume
+orch launch deepseek --profile work --model deepseek-v4-pro --use codex=alt -- --resume   # Pro on purpose
 orch launch deepseek --dry-run             # show the command and the environment (key masked)
 ```
 
 This is the same Claude Code with your settings and plugins, but every model request goes to DeepSeek's
-Anthropic-compatible API: the main thread and all subagents run on the lead model (default `deepseek-v4-pro`), and
+Anthropic-compatible API: the main thread and all subagents run on the lead model (default `deepseek-flash`), and
 background calls run on the profile's fast model. The key comes from the `deepseek` profile or `secrets.env`. Your
 `ANTHROPIC_*` variables are dropped for the session, so no Anthropic credential is sent to DeepSeek. The skill, the
 registry, profiles and the manual pool work as usual; `orch status` starts with `Lead: …`, and the orchestrator

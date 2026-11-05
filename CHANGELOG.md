@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.24.0
+
+- **Flash is DeepSeek's default model, and Pro is taken only when it is known to be needed.** Flash is newer, ahead
+  on coding and agentic work and several times cheaper, so the adapter's default, the lead and every DeepSeek route
+  are Flash. Pro keeps a slot each for a second opinion when Flash failed or its answer is in doubt, and for the
+  hardest knowledge-heavy reasoning. `deepseek/flash-high` now reaches difficulty 4, and a new `deepseek/flash-max`
+  covers hard debugging, cross-module changes and an architecture critic.
+
 ## 0.23.0
 
 - **A model at capacity is not a used-up limit.** The run ends `[CAPACITY]`, still exit 75, and the entry on that model

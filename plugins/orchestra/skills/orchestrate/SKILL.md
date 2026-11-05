@@ -78,7 +78,7 @@ the project rules (CLAUDE.md, AGENTS.md) itself — put only the task in the pro
 2. Writing task in parallel with other work → `orch worktree add <name>`, then `--cd <path>`.
 3. Launch **in the background** (Bash, `run_in_background: true`); `--task` is for the usage log:
    `orch run codex --model gpt-6.1-terra --effort high --mode write --cd <path> --task "<short>" --prompt-file .orchestra/prompts/x.md`
-   `orch run deepseek --model deepseek-v4-pro --effort high --mode write --cd <path> --allow 'Bash(npm test:*)' --task "<short>" --prompt-file …`
+   `orch run deepseek --model deepseek-flash --effort high --mode write --cd <path> --allow 'Bash(npm test:*)' --task "<short>" --prompt-file …`
    The DeepSeek key and the Codex account come from the project profile. `--profile <name>` — only at the
    operator's direct request.
 4. **DeepSeek permissions** are explicit only: read/write inside `--cd`, git reads; grant tests, build, linter with

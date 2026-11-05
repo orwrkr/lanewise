@@ -8,7 +8,7 @@
 # set by executor profiles (orch profile show; ~/.orchestra/profiles.json): they disable a provider,
 # narrow models and effort, forbid writing and set rules.
 # Models and effort levels change: check against /model in Claude Code, /model in codex,
-# the model picker in Antigravity and api-docs.deepseek.com (Codex: `codex debug models`). As of 2026-10-29.
+# the model picker in Antigravity and api-docs.deepseek.com (Codex: `codex debug models`). As of 2026-11-05.
 # ─────────────────────────────────────────────────────────────────────────────
 
 version: 1
@@ -184,6 +184,9 @@ providers:
       Bash — only git reads and the rules from --allow (grant tests and build explicitly, e.g.
       --allow 'Bash(npm test:*)'). Permission denials are listed at the end of the answer. No balance (402) →
       exit 75 and a block until `orch quota clear deepseek`. Run in the background, like Codex.
+      Flash is the default: it is newer, ahead on coding and agentic work, and several times cheaper. Pro is taken
+      only when it is known to be needed — Flash failed at the task, or the reasoning is heavy on scientific or
+      factual knowledge.
     slots:
       - id: deepseek/flash-medium
         model: deepseek-flash      # DeepSeek V4.1 Flash, 1M context (variant deepseek-flash[1m])
@@ -195,20 +198,29 @@ providers:
         model: deepseek-flash
         effort: high
         cost: 1
-        max_difficulty: 3
-        good_for: [ordinary implementation, review of small diffs, log analysis]
+        max_difficulty: 4
+        good_for: [implementation, debugging, cross-review of Claude and Codex code (the third family), tests,
+                   review of diffs, log analysis]
+      - id: deepseek/flash-max
+        model: deepseek-flash
+        effort: max
+        cost: 1
+        max_difficulty: 4
+        good_for: [hard debugging and cross-module changes, hard algorithms and correctness,
+                   an independent second opinion on architecture]
       - id: deepseek/pro-high
         model: deepseek-v4-pro     # DeepSeek V4 Pro
         effort: high
-        cost: 2
+        cost: 3
         max_difficulty: 4
-        good_for: [medium-complexity features, cross-review of Claude and Codex code (third family), debugging]
+        good_for: [a second opinion when Flash failed at the task or its answer is in doubt,
+                   reasoning heavy on scientific or factual knowledge]
       - id: deepseek/pro-max
         model: deepseek-v4-pro
         effort: max
-        cost: 3
+        cost: 4
         max_difficulty: 4
-        good_for: [hard algorithms and correctness, an independent second opinion on architecture]
+        good_for: [the hardest knowledge-heavy reasoning, after Flash]
 
   # ───────────── Google Antigravity (MANUAL lane via the operator) ─────────────
   antigravity:
@@ -275,20 +287,20 @@ routing:
   mechanical:         [claude/haiku-low, codex/luna-medium, deepseek/flash-medium, antigravity/flash]
   docs:               [claude/sonnet-medium, codex/luna-medium, deepseek/flash-medium]
   implement_d2:       [codex/luna-medium, deepseek/flash-medium, claude/sonnet-medium]
-  implement_d3:       [claude/sonnet-high, codex/terra-high, deepseek/pro-high, codex/terra-medium]
-  implement_d4:       [codex/sol-high, claude/opus-high, deepseek/pro-max, claude/sonnet-high]
+  implement_d3:       [claude/sonnet-high, codex/terra-high, deepseek/flash-high, codex/terra-medium]
+  implement_d4:       [codex/sol-high, claude/opus-high, deepseek/flash-max, claude/sonnet-high]
   implement_d5:       [main-thread, claude/opus-high, codex/sol-xhigh]
-  debug_d3:           [claude/sonnet-high, codex/terra-high, deepseek/pro-high]
+  debug_d3:           [claude/sonnet-high, codex/terra-high, deepseek/flash-high]
   debug_d4_5:         [claude/opus-high, codex/sol-high]
   tests:              [codex/terra-medium, deepseek/flash-high, claude/sonnet-medium]
-  review_of_claude:   [codex/sol-high, deepseek/pro-high, codex/terra-high]   # cross-review
-  review_of_codex:    [claude/opus-high, deepseek/pro-high, claude/sonnet-high]
+  review_of_claude:   [codex/sol-high, deepseek/flash-high, codex/terra-high]   # cross-review
+  review_of_codex:    [claude/opus-high, deepseek/flash-high, claude/sonnet-high]
   review_of_deepseek: [claude/sonnet-high, codex/terra-high]
   review_of_manual:   [codex/terra-high, claude/sonnet-high]
   security:           [claude/opus-high, codex/sol-xhigh]       # both, independently
-  architecture:       [main-thread, codex/sol-xhigh, deepseek/pro-max]   # critics
+  architecture:       [main-thread, codex/sol-xhigh, deepseek/flash-max]   # critics
   ui_verify:          [antigravity/argon-high, claude/sonnet-high]
-  isolated_big_task:  [antigravity/argon-high, codex/sol-high, deepseek/pro-high]  # off the critical path
+  isolated_big_task:  [antigravity/argon-high, codex/sol-high, deepseek/flash-high]  # off the critical path
   fallback_when_claude_exhausted:   [codex/*, deepseek/*, antigravity/claude-opus]
   fallback_when_codex_exhausted:    [claude/*, deepseek/*, antigravity/argon-medium]
   fallback_when_deepseek_exhausted: [codex/*, claude/*]

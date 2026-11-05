@@ -36,7 +36,7 @@ sys.dont_write_bytecode = True        # no __pycache__ inside the plugin's adapt
 import _claude_headless as H  # noqa: E402
 
 BASE_URL = os.environ.get("ORCH_DEEPSEEK_BASE_URL") or "https://api.deepseek.com/anthropic"
-DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_MODEL = "deepseek-flash"
 FAST_MODEL = os.environ.get("ORCH_DEEPSEEK_FAST_MODEL") or "deepseek-flash"
 NO_KEY = "DEEPSEEK_API_KEY is not set — add a line DEEPSEEK_API_KEY=sk-… to ~/.orchestra/secrets.env (or the environment)"
 

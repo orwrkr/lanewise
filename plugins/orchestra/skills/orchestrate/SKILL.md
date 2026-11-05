@@ -34,6 +34,7 @@ Detailed sections of this skill: `orch guide <section>` (`manual`, `quota`, `pro
    subagents and no `orch run claude` — do it yourself or route elsewhere); `models:` — only these;
    `effort ≤` — no higher; `analysis only` — not for writing tasks; `only for:` — only these task types;
    `prefer for:` — rank it first for these types; `rules:` — an operator requirement (e.g. "open-source code only").
+   `Project rules:` hold for every executor in this project, whichever profile is active; only you see them.
 
 ## 2. Decomposition
 

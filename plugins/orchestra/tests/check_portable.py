@@ -83,6 +83,8 @@ def private_names(root):
                 names.add(profile["key"])
     projects = data.get("projects") if isinstance(data.get("projects"), dict) else {}
     names.update(p.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] for p in projects)
+    rules = data.get("project_rules") if isinstance(data.get("project_rules"), dict) else {}
+    names.update(p.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] for p in rules)
     skip = GENERIC_LABELS | STANDARD_KEYS | {root.name.lower()}
     return sorted(n for n in names if n and len(n) >= 3 and n.lower() not in skip)
 

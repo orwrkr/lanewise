@@ -2030,7 +2030,7 @@ class Profile(object):
 
 def load_profiles():
     """(data, error). A broken file is an error, never "no profiles": an "off" must not silently turn into "on"."""
-    empty = {"providers": {}, "projects": {}}
+    empty = {"providers": {}, "projects": {}, "project_rules": {}}
     try:
         data = json.loads(_read_text_retry(PROFILES_FILE, encoding="utf-8-sig"))
     except FileNotFoundError:
@@ -2038,10 +2038,12 @@ def load_profiles():
     except (OSError, ValueError) as ex:
         return empty, "%s is unreadable: %s" % (PROFILES_FILE, ex)
     if not isinstance(data, dict) or not isinstance(data.get("providers", {}), dict) \
-            or not isinstance(data.get("projects", {}), dict):
-        return empty, "%s: expected an object with providers and projects fields" % PROFILES_FILE
+            or not isinstance(data.get("projects", {}), dict) \
+            or not isinstance(data.get("project_rules", {}), dict):
+        return empty, "%s: expected an object with providers, projects and project_rules fields" % PROFILES_FILE
     data.setdefault("providers", {})
     data.setdefault("projects", {})
+    data.setdefault("project_rules", {})
     return data, None
 
 
@@ -2136,6 +2138,17 @@ def binding_for(data, provider, where):
             best = len(ck)
             found = (str(binding[provider]).lower(), "project" if root == ck else "directory " + ck)
     return found
+
+
+def project_rules_for(data, where):
+    """All nonempty directory rules containing the project, outermost first."""
+    root = canon_path(project_root(where))
+    matches = []
+    for directory, value in data["project_rules"].items():
+        ck = canon_path(directory)
+        if value and (root == ck or root.startswith(ck if ck.endswith("/") else ck + "/")):
+            matches.append((ck, value))
+    return sorted(matches, key=lambda pair: (len(pair[0]), pair[0]))
 
 
 def session_profiles(text=None):
@@ -2419,7 +2432,9 @@ def profile_lines(where, data=None):
         if err:
             warn_state(PROFILES_FILE, err)
             return ["⚠ " + err + " — CLI executors and manual tasks will not start until the file is fixed"]
-    lines = []
+    root = canon_path(project_root(where))
+    lines = ["  Project rules%s: %s" % ("" if directory == root else " (%s)" % directory, value)
+             for directory, value in project_rules_for(data, where)]
     for provider in managed_providers(data):
         try:
             prof = resolve_profile(provider, where, data=data)
@@ -2428,6 +2443,9 @@ def profile_lines(where, data=None):
             continue
         lines.append("  %-12s %s" % (display_name(provider),
                                       describe_profile(prof, provider_section(data, provider)[1])))
+        configured = provider_section(data, provider)[1].get(prof.fallback_from) if prof.fallback_from else None
+        if isinstance(configured, dict) and configured.get("rules"):
+            lines.append("  %-12s rules of %s are not in force while it is exhausted" % ("", prof.fallback_from))
         if prof.data.get("rules"):
             lines.append("  %-12s rules: %s" % ("", prof.data["rules"]))
     return lines
@@ -2654,7 +2672,8 @@ def cmd_profile(a):
                     out[provider].update({"fallback_from": p.fallback_from, "fallback_cause": p.fallback_cause})
             except ProfileError as ex:
                 out[provider] = {"error": str(ex)}
-        print(json.dumps({"project": canon_path(project_root(where)), "providers": out}, ensure_ascii=False, indent=2))
+        rules = [{"directory": directory, "text": value} for directory, value in project_rules_for(data, where)]
+        print(json.dumps({"project": canon_path(project_root(where)), "providers": out, "rules": rules}, ensure_ascii=False, indent=2))
         return 0
     if a.action == "show":
         where = Path(a.path).resolve() if a.path else project_dir()
@@ -2679,6 +2698,35 @@ def cmd_profile(a):
             for k, binding in sorted(data["projects"].items()):
                 if isinstance(binding, dict) and binding.get(provider):
                     print("  ↳ %s → %s" % (k, binding[provider]))
+        if data["project_rules"]:
+            print("Project rules:")
+            for directory, value in sorted(data["project_rules"].items()):
+                print("  %s: %s" % (directory, value))
+        return 0
+
+    if a.action == "rules":
+        where = Path(a.path).resolve() if a.path else project_root(project_dir())
+        if a.set is None and not a.clear:
+            rules = project_rules_for(data, where)
+            if rules:
+                root = canon_path(project_root(where))
+                for directory, value in rules:
+                    print("  Project rules%s: %s" % ("" if directory == root else " (%s)" % directory, value))
+            else:
+                print("No project rules apply here; add one with orch profile rules --set TEXT.")
+            return 0
+        key = canon_path(where)
+        if a.clear or not a.set.strip():
+            if key in data["project_rules"]:
+                del data["project_rules"][key]
+                save_profiles(data)
+                print("Cleared project rules for %s." % key)
+            else:
+                print("No project rules to clear for %s." % key)
+        else:
+            data["project_rules"][key] = a.set.strip()
+            save_profiles(data)
+            print("Saved project rules for %s." % key)
         return 0
 
     provider = a.provider.lower()
@@ -6883,6 +6931,11 @@ def parse_args(argv):
     x = fs.add_parser("list", help="all profiles, defaults and directory bindings")
     x.add_argument("provider", nargs="?")
     x.add_argument("--json", action="store_true")
+    x = fs.add_parser("rules", help="show or change project directory rules")
+    x.add_argument("--path", help="directory instead of the current project")
+    xg = x.add_mutually_exclusive_group()
+    xg.add_argument("--set", metavar="TEXT", help="set rules; an empty value clears them")
+    xg.add_argument("--clear", action="store_true", help="clear rules")
     x = fs.add_parser("use", help="bind a profile (or off / inherit) to this project, a directory or the default")
     x.add_argument("provider")
     x.add_argument("name", help="profile | off | inherit")

@@ -26,6 +26,11 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 | "in Antigravity — Argon only and no more than one task" | `orch profile set antigravity argon --models gemini-4-argon --max-open 1` and `orch profile use antigravity argon` |
 | "DeepSeek work — for open-source code only" | `orch profile set deepseek work --rules "open-source code only"` |
 | "when the project's key runs out, use my own key and the usual routing" | `orch profile set deepseek work --fallback personal` (`--fallback none` clears it) |
+| "all executors here must follow this requirement" | `orch profile rules --set "TEXT"` |
+
+`orch profile rules` shows applicable project rules; `--clear` or `--set ""` removes an entry. Add
+`--path /path/to/dir` to set or clear a directory's rules. All matching parent rules apply, outermost first.
+These private operator requirements survive profile fallback; profile `rules` belong to the key and lapse with it.
 
 - Never ask for or record the API key itself: the profile holds the variable name; the operator puts the value as a
   line `NAME=sk-…` into `~/.orchestra/secrets.env`.

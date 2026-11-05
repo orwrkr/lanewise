@@ -244,11 +244,17 @@ orch profile use codex off --default         # Codex is off by default
 orch profile use claude off                  # no Claude workers in this project (no orch-* subagents, no orch run claude)
 orch profile use deepseek work --path ~/work # every project under ~/work
 orch profile use deepseek inherit            # remove the project binding
+orch profile rules --set "Do not touch credentials" # requirements for every executor here
+orch profile rules                           # show applicable project rules
+orch profile rules --clear                   # remove the project's entry
 orch profile show                            # what applies here and where it comes from
 orch profile list                            # all profiles, defaults and bindings
 ```
 
 Resolution order: `--profile` on a specific run (only when you ask for it) → session-wide choices (`ORCH_PROFILES=claude=off,codex=alt`, set by `orch launch --no-claude` / `--use`) → the binding of the project or of the nearest directory above it → the default profile → the built-in `default`.
+
+Project rules are private requirements for the orchestrator, independent of profiles and their fallbacks. Use
+`--path /path/to/dir` to set or clear a directory's rules; all matching parent rules apply.
 
 | Field | Meaning | Enforced by |
 |---|---|---|

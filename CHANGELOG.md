@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.0
+
+- **Project rules survive a key change.** `orch profile rules --set "TEXT"` records private directory requirements
+  for the orchestrator, shown with profiles in status and SessionStart. Parent and project rules all apply; `--path`
+  selects a directory and `--clear` removes its entry. A fallback also reports when the configured key's rules lapse.
+
 ## 0.20.2
 
 Fixes from an independent review of 0.19.1 to 0.20.1.

@@ -51,6 +51,8 @@ tasks to use it for, free-form rules.
   project / directory binding → provider default → the built-in `default`.
 - `orch` enforces `off`, `models`, the effort ceiling, the write ban and `max_open`; you honour `use_for`,
   `prefer_for` and `rules` when routing. A broken `profiles.json` refuses runs rather than silently re-enabling.
+- `orch profile rules --set "TEXT"` records project-wide operator requirements; `--path /path/to/dir` covers a directory,
+  and `--clear` removes the entry. `orch profile rules` shows all applicable entries.
 - A `fallback` is resolved by `orch` itself: while the profile's key is exhausted (spend limit reached, or an
   availability entry `exhausted`/`disabled` on `<provider>@<profile>`), the project gets the fallback's key, models,
   limits and routing, and returns when the key has budget again. `orch profile show` shows the effective profile.
@@ -140,6 +142,10 @@ any other credential. These are fixed for safety, not knobs.
 
 A project's own workflow and commit rules come **first** — the plugin is a tool inside that process, not above it.
 When the operator records a decision, do it where the project asks; `.orchestra/` is local and outside git, so it is
-the place for plugin state, not for the project's own notes. The project's `CLAUDE.md` and `AGENTS.md` reach every
-executor on their own, exactly once, so a constraint on all work there belongs in them. A profile's `rules` are for
-you, the orchestrator: `orch` only shows them, and you follow them when routing and writing the task.
+the place for plugin state, not for the project's own notes. There are three places for a constraint:
+
+- The project's `CLAUDE.md` and `AGENTS.md` live in its repository and reach every executor on their own, exactly
+  once, so a constraint everyone working there should see belongs in them.
+- Project rules (`orch profile rules`) are private to this machine and survive a key change. `orch` shows them only
+  to you, the orchestrator: follow them when routing, and carry what an executor needs into its task.
+- A profile's `rules` belong to that key and lapse with its fallback. `orch` shows them to you the same way.

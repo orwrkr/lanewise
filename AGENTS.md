@@ -67,7 +67,8 @@ Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry
   AGENTS.md into `ORCH_CONTEXT_FILE`, minus the files the agent reads on its own (`# orch-context-native:`).
 - Executor profiles (`~/.orchestra/profiles.json`, `orch profile …`): `off`, models, effort ceiling, write ban and
   `max_open` are enforced by `orch` itself (exit 75 `PROFILE_OFF`/`PROFILE_DENIED`); `use_for`/`prefer_for`/`rules` —
-  by the orchestrator per SKILL.md. A profile holds only the key's variable name, never the key itself. An unreadable
+  by the orchestrator per SKILL.md, as are a directory's `project_rules`, which don't depend on the profile. A profile
+  holds only the key's variable name, never the key itself. An unreadable
   `profiles.json` means refusing to run, not "no profiles". Profile fields for an adapter — the directive
   `# orch-profile-env: field=VARIABLE`. Session-wide choices: `ORCH_PROFILES=provider=profile,…`.
 - Usage log `~/.orchestra/usage.jsonl`: runs (`usage.json` from the adapter), manual tasks, session snapshots

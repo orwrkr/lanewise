@@ -244,10 +244,10 @@ GH="$T/guard-home"; mkdir -p "$GH" || die "cannot create guard home"
 printf 'Acmecorp\n# a comment\n\n' > "$GH/private_terms.txt"
 cat > "$GH/profiles.json" <<'EOF'
 {"providers": {"deepseek": {"profiles": {"betacli": {"key": "KEY_OF_GAMMA"}, "personal": {"key": "DEEPSEEK_API_KEY"}}}},
- "projects": {"/path/to/delta-app": {"deepseek": "betacli"}}}
+ "projects": {"/path/to/delta-app": {"deepseek": "betacli"}}, "project_rules": {"/path/to/epsilon-app": "rule"}}
 EOF
 guard_private() { printf '%s\n' "$1" > "$GT/f.txt"; ORCH_HOME="$(native "$GH")" $PY "$GUARD" --root "$(native "$GT")" >/dev/null 2>&1; }
-for text in "acmecorp" "ACMECORP-web" "x_acmecorp_y" "deepseek@betacli" "KEY_OF_GAMMA" "delta-app"; do
+for text in "acmecorp" "ACMECORP-web" "x_acmecorp_y" "deepseek@betacli" "KEY_OF_GAMMA" "delta-app" "epsilon-app"; do
   guard_private "see $text here" && bad "guard missed a private name: $text" || ok "guard flags a private name: $text"
 done
 for text in "macmecorpx" "personal" "deepseek@personal" "DEEPSEEK_API_KEY" "a comment" "client"; do
@@ -2053,6 +2053,36 @@ fb "$FA" spend mode deepseek@plain stop >/dev/null
 fb "$FA" spend reset deepseek@client >/dev/null          # baselines for the manual counters
 fb "$FA" spend reset deepseek@plain >/dev/null
 
+echo "── project rules"
+fb "$FA" profile rules --set "PROJECT-RULE" >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "Project rules: PROJECT-RULE" "project rules: show"
+lacks "$out" "not in force while it is exhausted" "project rules: no warning before fallback"
+out=$(fb "$FA" status); contains "$out" "Project rules: PROJECT-RULE" "project rules: status"
+out=$(fb_hook "$FA" session-start); contains "$out" "Project rules: PROJECT-RULE" "project rules: session start"
+out=$(fb "$FA" profile show --json); contains "$out" '"rules": \[' "project rules: JSON list"
+contains "$out" '"text": "PROJECT-RULE"' "project rules: JSON text"
+out=$(fb "$FA" profile list); contains "$out" "Project rules:" "project rules: list section"
+mkdir -p "$T/rules/inner" "$T/rules-sibling"
+fb "$FA" profile rules --set "OUTER-RULE" --path "$(native "$T/rules")" >/dev/null
+fb "$FA" profile rules --set "INNER-RULE" --path "$(native "$T/rules/inner")" >/dev/null
+out=$(fb "$(native "$T/rules/inner")" profile rules)
+contains "$out" 'Project rules (' "project rules: parent named"
+[[ "$out" == *OUTER-RULE*INNER-RULE* ]] && ok "project rules: parent first" || bad "project rules: parent order"
+out=$(fb "$(native "$T/rules-sibling")" profile rules); lacks "$out" "OUTER-RULE" "project rules: sibling excluded"
+fb "$REPO" profile rules --set "WORKTREE-RULE" >/dev/null
+out=$(fb "$(native "$T/proj.wt/feat-x")" profile show); contains "$out" "WORKTREE-RULE" "project rules: worktree"
+fb "$REPO" profile rules --clear >/dev/null
+fb "$FA" profile rules --clear --path "$(native "$T/rules")" >/dev/null
+fb "$FA" profile rules --set "" --path "$(native "$T/rules/inner")" >/dev/null
+out=$(fb "$FA" profile rules --set "   " --path "$(native "$T/rules/inner")"); contains "$out" "No project rules to clear" "project rules: empty and blank text both clear"
+out=$(fb "$FA" profile rules --clear --path "$(native "$T/rules/inner")"); expect_rc 0 $? "project rules: clear missing"
+contains "$out" "No project rules to clear" "project rules: clear missing says so"
+out=$(fb "$FA" profile rules --set x --clear 2>&1); [[ $? -ne 0 ]] && ok "project rules: exclusive options" || bad "project rules: exclusive options accepted"
+cp "$FDIR/profiles.json" "$FDIR/rules.good"
+printf '{"project_rules": []}' > "$FDIR/profiles.json"
+out=$(fb "$FA" profile rules 2>&1); [[ $? -ne 0 ]] && contains "$out" "project_rules" "project rules: invalid object refused" || bad "project rules: invalid object accepted"
+cp "$FDIR/rules.good" "$FDIR/profiles.json"
+
 # below the limit: the project's own profile, its key, its label, its priorities; the field shows though inactive
 out=$(fb "$FA" profile show)
 contains "$out" "client (project)" "below the limit: the project's profile"
@@ -2070,11 +2100,15 @@ fb_spent deepseek@client 0.001
 out=$(fb "$FA" profile show)
 contains "$out" "personal (fallback: client is at its limit)" "at the limit: show names the fallback and why"
 contains "$out" "PERSONAL-RULES" "at the limit: the fallback's rules"
+contains "$out" "Project rules: PROJECT-RULE" "project rules: survives fallback"
+contains "$out" "rules of client are not in force while it is exhausted" "project rules: fallback warns"
 lacks "$out" "CLIENT-RULES" "at the limit: the exhausted profile's rules are gone"
 lacks "$out" "prefer for: tests" "at the limit: the exhausted profile's prefer_for is gone"
 contains "$out" "prefer for: docs" "at the limit: the fallback's prefer_for"
 out=$(fb "$FA" status)
 contains "$out" "personal (fallback: client is at its limit)" "at the limit: status shows it too"
+fb "$FA" profile rules --clear >/dev/null
+out=$(fb "$FA" profile list); lacks "$out" "Project rules:" "project rules: empty list has no section"
 out=$(fb "$FA" profile show --json)
 contains "$out" '"fallback_from": "client"' "at the limit: --json names the configured profile"
 out=$(fb_run "$FA" "two"); expect_rc 0 $? "at the limit: the run is not refused"

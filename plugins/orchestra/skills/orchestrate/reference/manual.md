@@ -139,8 +139,9 @@ At each check:
 4. To the operator — one line per check: what you took back and why.
 
 When the operator says they'll take a task later, keep it: `orch handoff hold <id>` (`--until WHEN` to come back
-by itself, `--off` to undo). Checks leave a held task out; a take or a reclaim ends the hold. Hold a task only on the
-operator's word, never to quiet the checks.
+by itself, `--off` to undo). Checks leave a held task out; a take or a reclaim ends the hold. A hold doesn't hand the
+task out: it stays in the pool until the operator says they took it, and when waiting for it starts to block other
+work, reclaim it as usual. Hold a task only on the operator's word, never to quiet the checks.
 
 ## Other manual agents
 

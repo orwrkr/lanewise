@@ -108,7 +108,8 @@ that means a ban under Google's ToS). Files only: TASK.md → operator → agent
 - By default — **to the pool**: `orch handoff offer …`; the operator picks and takes tasks ("AG-0004 to
   Antigravity" → `orch handoff take AG-0004 --clip`, show the card). Immediately (`orch handoff new`) — only at
   their request.
-- The operator says they'll take a task later → `orch handoff hold <id>`.
+- The operator says they'll take a task later → `orch handoff hold <id>`; it stays in the pool until they say they took
+  it, so reclaim it if waiting starts to block other work.
 - Don't wait for manual tasks: hooks detect completion via RESULT.md. Handle "Orchestra" events (`✅` done,
   `⏰` not started, `⚠`) per `orch guide manual`.
 - `⌛` pool check — every 5 min without a take from the pool: reclaim every task no longer worth waiting for (in

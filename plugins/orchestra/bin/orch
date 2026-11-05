@@ -6204,7 +6204,7 @@ def hold_mark(m):
     if not held(m):
         return ""
     until = parse_iso(m["hold"].get("until"))
-    return " · held by the operator" + (" until " + until.astimezone().strftime("%H:%M") if until else "")
+    return " · on hold for the operator" + (" until " + until.astimezone().strftime("%H:%M") if until else "")
 
 
 @locked("project")

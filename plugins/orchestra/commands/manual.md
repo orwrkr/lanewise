@@ -16,5 +16,6 @@ Workflow — per `orch guide manual`.
    then verify and integrate the result per `orch guide manual`.
 4. "AG-… cancel" / "not doing it" → `orch handoff cancel <ID>`; if the task is still needed, run it automatically
    (the fallback from the card) and say whom you gave it to.
-5. "AG-… later" / "I'll take it later" → `orch handoff hold <ID> [--until WHEN]`: pool checks leave it out
-   until then; don't reclaim it. "Hold off" → `orch handoff hold <ID> --off`.
+5. "AG-… later" / "I'll take it later" → `orch handoff hold <ID> [--until WHEN]`: pool checks leave it out. It
+   isn't handed out: it stays in the pool until the operator says they took it, and you reclaim it if waiting for it
+   starts to block other work. Undo → `orch handoff hold <ID> --off`.

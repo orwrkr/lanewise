@@ -711,9 +711,9 @@ out=$($ORCH handoff check --peek); grep -q "Manual pool: no task taken" <<<"$out
 backdate_pool 5
 $ORCH handoff hold "$AID" --until +1h --note later >/dev/null
 $ORCH handoff hold "$BID" >/dev/null
-out=$($ORCH handoff list); contains "$out" "$AID.*held by the operator until" "hold shown in list"
-out=$($ORCH status --brief); contains "$out" "$AID.*held by the operator" "hold shown in status"
-contains "$(cat "$REPO/.orchestra/MANUAL.md")" "$AID.*held by the operator" "hold shown on board"
+out=$($ORCH handoff list); contains "$out" "$AID.*on hold for the operator until" "hold shown in list"
+out=$($ORCH status --brief); contains "$out" "$AID.*on hold for the operator" "hold shown in status"
+contains "$(cat "$REPO/.orchestra/MANUAL.md")" "$AID.*on hold for the operator" "hold shown on board"
 before=$(cat "$REPO/.orchestra/handoffs/.pool.json")
 out=$($ORCH handoff check --peek); grep -q "Manual pool: no task taken" <<<"$out" && bad "held pool checked" || ok "only held tasks produce no pool check"
 after=$(cat "$REPO/.orchestra/handoffs/.pool.json")

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.2
+
+Fixes from an independent review of 0.19.1 to 0.20.1.
+
+- **Something at a worktree's path must really be that worktree.** `make_worktree` accepted any existing path. Inside a
+  plain folder under the project git answers for the project around it, so with `.orchestra/wt/<id>` a leftover folder
+  would have let a writing task's review and commit land on the project's own branch. Now a path is reused only if it is
+  the root of a worktree of this repository, on the expected branch; otherwise `handoff take`, `handoff new` and
+  `orch worktree add` refuse and say why. `orch worktree add` on an existing worktree reports its real branch.
+- **A failure after the worktree was made leaves it on record.** A task whose preparation failed later (the Antigravity
+  rule can't be written, for one) had no `workdir` or `branch`, so nothing could find its worktree. Now a task back in the
+  pool reuses it at the next take, and a failed `handoff new` says how to remove it: `orch handoff close <id>
+  --remove-worktree`.
+- **The status line joins money to its account by label, not by display name.** Two accounts that display alike could get
+  each other's figures. The match is on the lowercase label, the key the run ledger uses.
+
 ## 0.20.1
 
 - **`orch` on PATH, said where a new user looks.** `install.sh` now prints the PATH advice last, after the doctor

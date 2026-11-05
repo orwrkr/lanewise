@@ -152,6 +152,10 @@ the agent's name (`orch profile use cursor off`, `orch quota set cursor exhauste
 - A folder that is not a git repository can hold read-only manual tasks: nothing needs git there. `--write` is
   refused at `offer` and `new` there (an old offer that counts as writing is not taken: run it automatically).
 - If `.orchestra/` is deleted by hand, git keeps stale worktree entries: run `git worktree prune` in the project.
+- A take refuses when something at `.orchestra/wt/<id>` isn't that task's worktree: a plain folder there would make git
+  answer for the project around it. Look at it, remove it, take again. A task whose preparation failed after its
+  worktree was made keeps it on record: a later take reuses it, and a failed `new` is cleaned up with
+  `orch handoff close <id> --remove-worktree`.
 
 ## Moving the project or switching Windows/WSL
 

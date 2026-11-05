@@ -884,6 +884,46 @@ expect_rc 0 $rc "new --write --base"
 out=$(printf 'x' | mt $ORCH handoff new --title "bad base" --write --base no-such-ref --max-open 99 2>&1); rc=$?
 [[ $rc -ne 0 ]] && ok "an unknown --base fails" || bad "unknown base accepted"
 
+# something at the task's worktree path must really be that worktree: inside a plain folder git answers for the project
+out=$(printf 'x' | mt $ORCH handoff offer --title "plain folder" --write --max-offers 99); PF=$(mt_id "$out")
+mkdir -p "$MP/.orchestra/wt/$PF"
+out=$(mt $ORCH handoff take "$PF" --max-open 99 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "a plain folder at the worktree path is refused" || bad "a plain folder taken for a worktree"
+contains "$out" "is not a working git worktree" "the refusal says what is wrong with the folder"
+contains "$(mt $ORCH handoff list)" "$PF *OFFERED" "the task stays in the pool after that refusal"
+rmdir "$MP/.orchestra/wt/$PF"
+out=$(mt $ORCH handoff take "$PF" --max-open 99); expect_rc 0 $? "taken once the plain folder is gone"
+[[ "$(git -C "$MP/.orchestra/wt/$PF" rev-parse --show-toplevel)" != "$(git -C "$MP" rev-parse --show-toplevel)" ]] && ok "then it is a worktree of its own" || bad "still the project's tree"
+out=$(printf 'x' | mt $ORCH handoff offer --title "wrong branch" --write --max-offers 99); WB=$(mt_id "$out")
+git -C "$MP" worktree add -q -b "wrong-$WB" "$MP/.orchestra/wt/$WB" HEAD
+out=$(mt $ORCH handoff take "$WB" --max-open 99 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "a worktree on another branch is refused" || bad "a worktree on another branch was accepted"
+contains "$out" "is on branch wrong-$WB" "the refusal names the branch it found"
+git -C "$MP" worktree remove --force "$MP/.orchestra/wt/$WB"
+out=$($ORCH worktree add feat-x); contains "$out" "orch/feat-x" "orch worktree add on an existing worktree reports its branch"
+mkdir -p "$T/proj.wt/plain-x"
+out=$($ORCH worktree add plain-x 2>&1); rc=$?
+[[ $rc -ne 0 ]] && contains "$out" "is not a working git worktree" "orch worktree add refuses a plain folder too" || bad "orch worktree add took a plain folder: $out"
+rmdir "$T/proj.wt/plain-x"
+
+# a failure after the worktree was made leaves it on record: a later take reuses it, close can remove it
+[[ -e "$MP/.agents" ]] && mv "$MP/.agents" "$MP/.agents.saved"
+printf 'x' > "$MP/.agents"                 # the Antigravity rule can't be written now
+out=$(printf 'x' | mt $ORCH handoff offer --title "fails after the worktree" --write --max-offers 99); FA=$(mt_id "$out")
+out=$(mt $ORCH handoff take "$FA" --max-open 99 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "a take fails when the rule can't be written" || bad "the take went through"
+contains "$(mt $ORCH handoff list)" "$FA *OFFERED" "after the failure the task is back in the pool"
+[[ "$(mt_meta "$FA" branch)" == "ag/$(tr 'A-Z' 'a-z' <<<"$FA")" && -d "$MP/.orchestra/wt/$FA" ]] && ok "the worktree it left stays on record" || bad "unrecorded worktree: $(mt_meta "$FA" branch)"
+printf 'x' | mt $ORCH handoff new --title "fails, direct" --write --max-open 99 >/dev/null 2>&1; rc=$?
+[[ $rc -ne 0 ]] && ok "new fails when the rule can't be written" || bad "new went through"
+FN=$(basename "$(ls -d "$MP"/.orchestra/handoffs/AG-* | sort | tail -1)")
+contains "$(mt_meta "$FN" manual_note)" "close $FN --remove-worktree" "a failed new says how to remove the worktree it left"
+out=$(mt $ORCH handoff close "$FN" --remove-worktree); contains "$out" "worktree removed" "close removes the worktree a failed new left"
+[[ -d "$MP/.orchestra/wt/$FN" ]] && bad "the failed task's worktree is still there" || ok "the failed task's worktree is gone"
+rm -f "$MP/.agents"; [[ -e "$MP/.agents.saved" ]] && mv "$MP/.agents.saved" "$MP/.agents"
+out=$(mt $ORCH handoff take "$FA" --max-open 99); expect_rc 0 $? "a later take reuses the worktree"
+contains "$out" "It works in: .orchestra/wt/$FA" "the card of the retaken task says where it works"
+
 # close --remove-worktree is the normal end of a writing task
 mt $ORCH handoff done "$OW" --note "reviewed" >/dev/null
 out=$(mt $ORCH handoff close "$OW" --remove-worktree --force); contains "$out" "worktree removed" "close --remove-worktree removes a writing task's worktree"
@@ -1089,6 +1129,19 @@ grep -q '"profile": "argon"' "$REPO/.orchestra/handoffs/$(grep -o 'AG-[0-9]*' <<
 out=$($ORCH doctor </dev/null); contains "$out" "DeepSeek@work key *DEEPSEEK_API_KEY_WORK set" "doctor checks profile keys"
 $ORCH profile rm deepseek work >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "bound profile not removed silently" || bad "bound profile removed"
 $ORCH profile rm deepseek work --force >/dev/null; out=$($ORCH profile show); contains "$out" "DeepSeek *personal (default)" "rm --force drops its bindings"
+$PY -B - "$PLUGIN/bin/orch" <<'EOF' && ok "status line: money joins its own account, even when two accounts display alike" || bad "money attached by the display name"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("orch", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("orch", loader)); loader.exec_module(m)
+m.native_account = lambda where: "claude"
+m.scope_name = lambda s: "Same@work"
+m.fmt_tok = str
+m.session_tokens = lambda sid, path, native: {"a@work": {"input": 1, "output": 10}, "B@Work": {"input": 2, "output": 20}}
+spend = [("a@work", "Same@work", "est. $1"), ("b@work", "Same@work", "est. $9"), ("c@work", "Same@work", "est. $2")]
+out = m.session_status_part("s", None, None, spend)
+assert "Same@work 1/10 (est. $1)" in out and "Same@work 2/20 (est. $9)" in out, out
+assert out.index("2/20") < out.index("Same@work (est. $2)"), out
+EOF
 $PY -B - "$PLUGIN/bin/orch" <<'EOF' && ok "directory keys equal in Windows and WSL; profile quota keys" || bad "canon_path / key_chain"
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("orch", sys.argv[1])

@@ -1897,24 +1897,25 @@ def quietly(fn, *args):
 def session_status_part(sid, transcript_path, where=None, spend=None):
     """'Session in/out: Claude 370k/111k · DeepSeek@work 90k/9k (est. $0.99/$12, account $9.73)', or None with nothing
     to show. One counter per account (profile label), never a sum over a provider's accounts. `spend` is
-    [(display name, text)] from spend_status_items: each text joins the counter of the same displayed name, in
-    parentheses; a scope with money but no tokens in this session follows the counters, and with no tokens at all the
-    line is only those, with no 'Session in/out:' heading. Any error in the tokens costs only the tokens."""
+    [(account label, display name, text)] from spend_status_items: each text joins the counter of the same account, in
+    parentheses, matched on the lowercase label (the ledger's key), since two accounts can display alike; a scope with
+    money but no tokens in this session follows the counters, and with no tokens at all the line is only those, with no
+    'Session in/out:' heading. Any error in the tokens costs only the tokens."""
     counters = []
     if sid:
         try:
             totals = session_tokens(sid, transcript_path, native_account(where))
-            counters = [(scope_name(acct), "%s/%s" % (fmt_tok(d["input"]), fmt_tok(d["output"])))
+            counters = [(str(acct).lower(), scope_name(acct), "%s/%s" % (fmt_tok(d["input"]), fmt_tok(d["output"])))
                         for acct, d in sorted(totals.items(), key=lambda kv: account_sort_key(kv[0]))
                         if d["input"] + d["output"] > 0]
         except Exception:
             counters = []
-    extra = dict(spend or ())
+    extra = {label: text for label, _, text in spend or ()}
     parts = []
-    for name, tokens in counters:
-        text = extra.pop(name, None)
+    for label, name, tokens in counters:
+        text = extra.pop(label, None)
         parts.append("%s %s%s" % (name, tokens, " (%s)" % text if text else ""))
-    loose = ["%s (%s)" % (name, text) for name, text in (spend or ()) if name in extra]
+    loose = ["%s (%s)" % (name, text) for label, name, text in spend or () if label in extra]
     if not parts and not loose:
         return None
     return ("Session in/out: " if parts else "") + " · ".join(parts + loose)
@@ -3753,12 +3754,12 @@ def shown_api_scopes(where, cache=None, records=None):
 
 
 def spend_status_items(where):
-    """For the status line, each API-billed scope active in the directory, always: [(display name, text)] where the
-    text is our own estimate and limit and, where one is cached, the provider's figure for the account —
+    """For the status line, each API-billed scope active in the directory, always: [(lowercase label, display name,
+    text)] where the text is our own estimate and limit and, where one is cached, the provider's figure for the account —
     'est. $1.47/$10, account $15.09, 3h ago' (the age once the figure is older than 30 minutes; 'est. $1.47' alone when
     the limit is off, and no account part before a balance was ever fetched). A provider whose active profile is a
     fallback also says so: 'fallback: DeepSeek@client at its limit; est. $0.99/$12'. The session part puts each text in
-    parentheses after the counter of the same name. Reads files only: no network."""
+    parentheses after the counter of the same account. Reads files only: no network."""
     active = active_profiles(where)
     notes = {prof.label: "fallback: %s %s" % (scope_name("%s@%s" % (prof.provider, prof.fallback_from)),
                                               fallback_cause_words(prof.fallback_cause))
@@ -3779,7 +3780,7 @@ def spend_status_items(where):
         money_text = ", ".join(text)
         if label in notes:
             money_text = notes[label] + ("; " + money_text if money_text else "")
-        items.append((scope_name(label), money_text))
+        items.append((label.lower(), scope_name(label), money_text))
     return items
 
 
@@ -5083,17 +5084,50 @@ def cmd_launch(a):
 
 # ───────────────────────── worktrees ─────────────────────────
 
+def worktree_branch_at(path, proj):
+    """The branch of the git worktree rooted exactly at `path`, if it belongs to proj's repository, else None. Git asked
+    inside a plain folder under the project answers for the project around it, so a commit there would land on the
+    project's own branch: the root and the repository are both compared. A detached HEAD gives 'HEAD'."""
+    if not Path(path).is_dir():
+        return None
+
+    def common(cwd):
+        r = git(["rev-parse", "--git-common-dir"], cwd)
+        if r is None or r.returncode != 0:
+            return None
+        c = Path(r.stdout.strip())
+        return c if c.is_absolute() else Path(cwd) / c
+    top, head = git(["rev-parse", "--show-toplevel"], path), git(["rev-parse", "--abbrev-ref", "HEAD"], path)
+    mine, theirs = common(path), common(proj)
+    if not (top and head and mine and theirs) or top.returncode != 0 or head.returncode != 0:
+        return None
+    try:
+        same = os.path.samefile(top.stdout.strip(), str(path)) and os.path.samefile(str(mine), str(theirs))
+    except OSError:
+        return None
+    return head.stdout.strip() if same else None
+
+
 def make_worktree(name, base="HEAD", branch=None, root=None):
-    """A git worktree `name` on `branch`: next to the project in <project>.wt/ unless `root` says where."""
+    """A git worktree `name` on `branch`: next to the project in <project>.wt/ unless `root` says where. Something
+    already at that path is reused only if it really is that worktree."""
     proj = project_dir()
     r = git(["rev-parse", "--is-inside-work-tree"], proj)
     if r is None or r.returncode != 0:
         raise SystemExit("orch: %s is not a git repository — worktree unavailable" % proj)
     wt_root = Path(root) if root else proj.parent / (proj.name + ".wt")
     path = wt_root / name
-    branch = branch or ("orch/" + name.lower())
+    wanted, branch = branch, branch or ("orch/" + name.lower())
     if path.exists():
-        return path, branch
+        actual = worktree_branch_at(path, proj)
+        if actual is None:
+            raise SystemExit("orch: %s exists but is not a working git worktree of this repository (a plain folder, "
+                             "another repository, or links broken by a move: see git worktree repair). Sort it out or "
+                             "remove it, then try again." % path)
+        if wanted and actual != wanted:
+            raise SystemExit("orch: the worktree %s is on branch %s, not %s. Sort it out or remove it, then try again."
+                             % (path, actual, wanted))
+        return path, actual
     wt_root.mkdir(parents=True, exist_ok=True)
     exists = git(["show-ref", "--verify", "--quiet", "refs/heads/" + branch], proj)
     args = ["worktree", "add", str(path), branch] if exists and exists.returncode == 0 else \
@@ -5730,15 +5764,23 @@ def materialize_handoff(claim, prof):
     try:
         assigned = assign_handoff(dict(claim), prof)
     except BaseException as ex:
+        # A worktree made before the failure stays on record: a later take reuses it, and close can remove it.
+        wt = state_dir() / "wt" / claim["id"]
+        left = quietly(worktree_branch_at, wt, project_dir()) if task_writes(claim) else None
         with state_lock(state_dir() / ".state.lock"):
             current = load_meta(claim["id"])
             if current.get("assigning") == token:
                 current.pop("assigning", None)
                 if result_status(current) not in TERMINAL and not current.get("archived"):
                     current["taken"] = None
+                    if left:
+                        current.update(workdir=str(wt), branch=left)
                     if not current.get("offered"):
+                        note = "Assignment failed: %s" % ex
+                        if left:
+                            note += "; its worktree remains: orch handoff close %s --remove-worktree" % claim["id"]
                         current.update(manual_status="CANCELLED", archived=iso(now()), closed=iso(now()),
-                                       manual_note="Assignment failed: %s" % ex)
+                                       manual_note=note)
                 save_meta(current)
         raise
     with state_lock(state_dir() / ".state.lock"):

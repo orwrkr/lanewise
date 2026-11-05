@@ -741,6 +741,7 @@ cd "$REPO" || die "back from moved repo"
 echo "── manual tasks: read-only in the project folder, writing ones in a worktree inside it"
 MP="$T/mt-proj"; mkdir -p "$MP" && git -C "$MP" init -q && git -C "$MP" config user.email t@t && git -C "$MP" config user.name t \
   && echo hi > "$MP/f.txt" && git -C "$MP" add . && git -C "$MP" -c commit.gpgsign=false commit -qm init || die "cannot create the manual-task fixture"
+NMP="$(native "$MP")"     # orch prints native paths, and contains() compares them with forward slashes
 mt() { (cd "$MP" && "$@"); }
 mt_id() { grep -o 'AG-[0-9]*' <<<"$1" | head -1; }
 mt_meta() { $PY -c 'import json, sys; m = json.load(open(sys.argv[1], encoding="utf-8")); print(m.get(sys.argv[2]))' "$(native "$MP/.orchestra/handoffs/$1/meta.json")" "$2"; }
@@ -773,7 +774,7 @@ done
 
 # a read-only task (the default) in the project folder
 out=$(printf '## Goal\nlook\n' | mt $ORCH handoff new --title "read one" --model "Gemini 3.8 Flash" --max-open 99); R1=$(mt_id "$out")
-contains "$out" "In Antigravity, in the project folder: $MP" "taken: the card says the project folder"
+contains "$out" "In Antigravity, in the project folder: $NMP" "taken: the card says the project folder"
 lacks "$out" "Open in" "taken: no 'Open in' line"
 lacks "$out" "It works in" "a read-only task has no worktree line"
 lacks "$out" "Branch:" "taken: no branch line"
@@ -790,9 +791,9 @@ grep -q "Run no shell commands unless this task lists them" "$TK" && ok "read-on
 grep -q "with your file editor, with two lines" "$TK" && grep -q "Gemini 3.8 Flash>" "$TK" && ok "read-only protocol: RESULT.md created with the file editor" || bad "read-only protocol step 1"
 grep -q '## Summary` (your findings)' "$TK" && ok "read-only protocol: findings, no changed files" || bad "read-only report sections"
 grep -q "Changed files" "$TK" && bad "read-only protocol asks for changed files" || ok "read-only protocol has no Changed files section"
-grep -q "^- Working folder: \`$MP\`" "$TK" && ok "TASK.md header keeps the working folder" || bad "TASK.md header working folder"
+contains "$(cat "$TK")" "^- Working folder: \`$NMP\`" "TASK.md header keeps the working folder"
 grep -q "Branch" "$TK" && bad "a read-only TASK.md names a branch" || ok "a read-only TASK.md has no branch line"
-contains "$(cat "$MP/.orchestra/MANUAL.md")" "in the project folder: \`$MP\`" "the board follows the card"
+contains "$(cat "$MP/.orchestra/MANUAL.md")" "in the project folder: \`$NMP\`" "the board follows the card"
 
 # one general rule file, not one per task
 RULE="$MP/.agents/rules/orchestra-task.md"
@@ -827,7 +828,7 @@ contains "$(cat "$MP/.orchestra/MANUAL.md")" "(changes files, in its own worktre
 out=$(mt $ORCH handoff take "$OW" --max-open 99); rc=$?
 expect_rc 0 $rc "a writing task is taken while the project folder is dirty"
 BR1="ag/$(tr 'A-Z' 'a-z' <<<"$OW")"
-contains "$out" "In Antigravity, in the project folder: $MP" "writing card: the agent's window stays on the project folder"
+contains "$out" "In Antigravity, in the project folder: $NMP" "writing card: the agent's window stays on the project folder"
 contains "$out" "It works in: .orchestra/wt/$OW (its own worktree, branch $BR1); no need to open it" "writing card: says where the task works"
 lacks "$out" "Open in" "writing card: no 'Open in' line"
 [[ -f "$MP/.orchestra/wt/$OW/f.txt" && "$(git -C "$MP/.orchestra/wt/$OW" rev-parse --abbrev-ref HEAD)" == "$BR1" ]] \

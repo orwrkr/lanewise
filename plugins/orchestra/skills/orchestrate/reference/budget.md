@@ -9,11 +9,12 @@ already in them. `orch` projects the 5-hour window at the **current pace**: the 
 pace of the last 30–60 minutes, measured back from the same snapshot (the base sample is at least 30 minutes old, so a
 short burst is not extrapolated). A five-hour projection needs at least 60 minutes of the window behind it, at the
 measurement, for Claude and Codex alike: before that only a used share that has reached the reserve counts, and
-neither TIGHT nor SURPLUS is projected. The week is projected from its
-**recent pace**: the earliest of the week's own samples (`week_history`, at most one per 15 minutes, kept for 72 hours) from
-the last 24 hours with the same reset and at least 6 hours before the measurement; while there is no such sample
-(not enough history yet, or just after a reset) the week falls back to its window average, as before. Each window
-has its own measurement time; projections are anchored to it and do not improve merely as the numbers age. A
+neither TIGHT nor SURPLUS is projected. The week is projected from its **recent pace**: the earliest of the week's
+own samples (`week_history`, at most one per 15 minutes, kept for 80 hours) from the last three days with the same
+reset and at least 6 hours before the measurement; while there is no such sample (not enough history yet, or just
+after a reset) the week falls back to its window average, as before. Three days, not one: a single heavy or light
+day no longer swings the projection, while a burst still shows in the five-hour window. Each window has its own
+measurement time; projections are anchored to it and do not improve merely as the numbers age. A
 **reserve** is kept for sessions orch doesn't know about and as a safety margin: 10% of the 5-hour window, and for
 the week a reserve that shrinks with the time left to the reset — `reserve × (time left / 7 days)`, floored at
 1 point and never below a reserve of 0. So a 10% weekly reserve is 10 at the start of the week, 5 at mid-week,

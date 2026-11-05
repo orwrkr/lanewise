@@ -3832,7 +3832,7 @@ def weekly_pace():
     assert m.week_reserve_text(10, 10) == "10%"
     assert m.week_reserve_text(10, 1.85) == "2% (10% at the start of the week)"
 
-    # week_history sampling: at most one per 15 min, capped at 300, malformed entries dropped.
+    # week_history sampling: at most one per 15 min, kept for 80 h, capped at 400, malformed entries dropped.
     t0 = fixed
     hist = m.week_history_update([], {"used": 80.0, "resets_at": m.iso(reset)}, t0)
     hist = m.week_history_update(hist, {"used": 81.0, "resets_at": m.iso(reset)}, t0 + dt.timedelta(minutes=5))
@@ -3842,23 +3842,39 @@ def weekly_pace():
     hist = m.week_history_update([["garbage", 80.0, m.iso(reset)]], {"used": 90.0, "resets_at": m.iso(reset)},
                                  t0 + dt.timedelta(hours=1))
     assert len(hist) == 1 and hist[0][1] == 90.0      # the malformed entry is skipped, never fatal
-    many = [[m.iso(t0 + dt.timedelta(minutes=5 * i)), 1.0, m.iso(reset)] for i in range(350)]
-    assert len(m.week_history_update(many, None, t0 + dt.timedelta(hours=72))) == 300
+    many = [[m.iso(t0 + dt.timedelta(minutes=5 * i)), 1.0, m.iso(reset)] for i in range(450)]
+    assert len(m.week_history_update(many, None, t0 + dt.timedelta(hours=72))) == 400   # the cap
+    # a sample about 72 h old must survive the 80 h retention; one past it is dropped
+    three_days = [[m.iso(t0 - dt.timedelta(hours=78)), 1.0, m.iso(reset)]]
+    assert len(m.week_history_update(three_days, None, t0)) == 1
+    assert m.week_history_update([[m.iso(t0 - dt.timedelta(hours=82)), 1.0, m.iso(reset)]], None, t0) == []
 
-    # The weekly base sample: earliest within 24 h, same reset (10 min), at least 6 h before the measurement.
+    # The weekly base sample: earliest within 72 h (three days), same reset (10 min), at least 6 h before the
+    # measurement.
     hist8 = [[m.iso(fixed - dt.timedelta(hours=8)), 82.0, m.iso(reset)]]
     assert m.week_base_sample(hist8, reset, fixed) == (fixed - dt.timedelta(hours=8), 82.0)
     old = reset - dt.timedelta(days=7)                 # a sample from the previous week
     assert m.week_base_sample([[m.iso(fixed - dt.timedelta(hours=8)), 50.0, m.iso(old)]], reset, fixed) is None
     assert m.week_base_sample([[m.iso(fixed - dt.timedelta(hours=5)), 82.0, m.iso(reset)]], reset, fixed) is None
-    # After an idle day, the newest older sample with the same reset stands in for a flat week: zero pace,
-    # basis "the last 24 h" — only while the used value is unchanged (a change means the recent pace is unknown).
+    rw = fixed + dt.timedelta(hours=24)                 # a week with 24 h still to its reset
+    assert m.week_base_sample([[m.iso(fixed - dt.timedelta(hours=75)), 82.0, m.iso(rw)]], rw, fixed) is None
+    # three days back is the point: the earliest within 72 h wins over a nearer sample
+    mixed = [[m.iso(fixed - dt.timedelta(hours=60)), 60.0, m.iso(rw)],
+             [m.iso(fixed - dt.timedelta(hours=20)), 70.0, m.iso(rw)]]
+    assert m.week_base_sample(mixed, rw, fixed) == (fixed - dt.timedelta(hours=60), 60.0)
+    rate, basis = m.week_rate(mixed, 80.0, rw, fixed)
+    assert basis == "the last 2d 12h" and abs(rate - 20.0 / 3600) < 1e-12, (rate, basis)
+    # After the window, the newest older sample with the same reset stands in for a flat week: zero pace,
+    # basis "the last 3 d" — only while the used value is unchanged (a change means the recent pace is unknown).
     rr2 = fixed + dt.timedelta(hours=48)
-    idle = [[m.iso(fixed - dt.timedelta(hours=26)), 70.0, m.iso(rr2)]]
-    assert m.week_base_sample(idle, rr2, fixed, 70.0) == (fixed - dt.timedelta(hours=24), 70.0)
+    idle = [[m.iso(fixed - dt.timedelta(hours=75)), 70.0, m.iso(rr2)]]
+    assert m.week_base_sample(idle, rr2, fixed, 70.0) == (fixed - dt.timedelta(hours=72), 70.0)
     assert m.week_base_sample(idle, rr2, fixed, 71.0) is None
     rate, basis = m.week_rate(idle, 70.0, rr2, fixed)
-    assert basis == "the last 24 h" and rate == 0.0, (rate, basis)
+    assert basis == "the last 3 d" and rate == 0.0, (rate, basis)
+    assert m.week_recent_basis(3 * 24 * 60) == "the last 3 d"
+    assert m.week_recent_basis(8 * 60) == "the last 8 h"
+    assert m.week_recent_basis(6 * 60 + 30) == "the last 6h 30m"
 
     def week_snap(used, hours_left, hist=None):
         r = fixed + dt.timedelta(hours=hours_left)
@@ -4532,6 +4548,7 @@ done <<<"$review"
 
 echo "── registry & doctor"
 out=$($ORCH registry path); contains "$out" "registry/providers.yaml" "default registry path"
+out=$($ORCH registry diff); contains "$out" "No personal or project copy: the built-in registry is in effect." "registry diff with no copy names the built-in one"
 $ORCH registry show > "$T/registry-shown.yaml" || bad "registry show failed"
 reg_checks=$($PY - "$(native "$T/registry-shown.yaml")" <<'EOF'
 import re, sys
@@ -4555,6 +4572,11 @@ for k in PRO-ROUTE-OK FLASH-MAX-OK FLASH-HIGH-D4-OK; do
   contains "$reg_checks" "$k" "registry: $k"
 done
 $ORCH registry init >/dev/null; out=$($ORCH registry path); contains "$out" "$ORCH_HOME/providers.yaml" "user registry overrides default"
+marker=$(head -n 1 "$ORCH_HOME/providers.yaml")
+marker_re='^# orchestra-registry-base: [0-9]+\.[0-9]+\.[0-9]+ sha256:[0-9a-f]{16}$'
+[[ "$marker" =~ $marker_re ]] && ok "registry init writes the base marker" || bad "registry init marker: $marker"
+out=$($ORCH status --brief); lacks "$out" "the built-in registry has changed" "fresh registry copy: no warning in status"
+out=$($ORCH doctor); lacks "$out" "the built-in registry has changed" "fresh registry copy: no warning in doctor"
 out=$($ORCH doctor); ok "doctor runs (rc=$?)"
 contains "$out" "DEEPSEEK_API_KEY *set" "doctor sees the DeepSeek key"
 contains "$out" "Codex login *Logged in" "doctor checks the codex login"
@@ -4599,6 +4621,46 @@ EOF
 for k in MISSING-OK PRESENT-OK NOCODEX-ROW-OK NOCODEX-RC-OK; do
   contains "$doctor_paths" "$k" "doctor: $k"
 done
+
+echo "── registry copy staleness"
+reg_edit() {      # reg_edit CODE — run CODE with the copy's path as sys.argv[1]
+  $PY - "$(native "$ORCH_HOME/providers.yaml")" <<EOF
+import sys
+p = sys.argv[1]
+$1
+EOF
+}
+reg_edit 'lines = open(p, encoding="utf-8").read().splitlines()
+lines[0] = "# orchestra-registry-base: 9.9.9 sha256:0000000000000000"
+open(p, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")'
+out=$($ORCH status --brief); contains "$out" "the built-in registry has changed since this copy was made (9.9.9): orch registry diff" "a stale marker: status warns with the copy's version"
+out=$($ORCH doctor); contains "$out" "the built-in registry has changed since this copy was made (9.9.9)" "a stale marker: doctor warns"
+reg_edit 'text = open(p, encoding="utf-8").read().replace("version: 1", "version: 2", 1)
+open(p, "w", encoding="utf-8", newline="\n").write(text)'
+out=$($ORCH registry diff)
+contains "$out" "^+version: 2$" "registry diff shows a changed line"
+contains "$out" "^--- .*registry/providers.yaml" "registry diff names the built-in file in its header"
+contains "$out" "^+++ .*$ORCH_HOME/providers.yaml" "registry diff names the copy in its header"
+contains "$out" "This copy overrides the whole built-in registry" "registry diff says what a copy does"
+contains "$out" "orch registry diff --accept" "registry diff says how to accept"
+$ORCH registry diff --accept >/dev/null
+out=$($ORCH status --brief); lacks "$out" "the built-in registry has changed" "accept clears the status warning"
+out=$($ORCH doctor); lacks "$out" "the built-in registry has changed" "accept clears the doctor warning"
+marker=$(head -n 1 "$ORCH_HOME/providers.yaml")
+[[ "$marker" =~ $marker_re ]] && ok "accept writes the current marker" || bad "accept marker: $marker"
+# a copy without a marker: equal to the built-in is not stale, a changed one is
+cp "$PLUGIN/registry/providers.yaml" "$ORCH_HOME/providers.yaml"
+out=$($ORCH status --brief); lacks "$out" "the built-in registry has changed" "an unmarked copy equal to the built-in: no warning in status"
+out=$($ORCH doctor); lacks "$out" "the built-in registry has changed" "an unmarked copy equal to the built-in: no warning in doctor"
+printf '\n# local change\n' >> "$ORCH_HOME/providers.yaml"
+out=$($ORCH status --brief); contains "$out" "the built-in registry has changed since this copy was made (an older version)" "an unmarked copy that differs: status warns"
+out=$($ORCH doctor); contains "$out" "the built-in registry has changed since this copy was made (an older version)" "an unmarked copy that differs: doctor warns"
+# a project copy takes precedence over the personal one, and over the built-in one
+$ORCH registry init --project >/dev/null
+out=$($ORCH registry path); contains "$out" "\.orchestra/providers.yaml" "project registry copy takes precedence"
+rm -f "$REPO/.orchestra/providers.yaml"
+rm -f "$ORCH_HOME/providers.yaml"
+out=$($ORCH registry diff); contains "$out" "No personal or project copy: the built-in registry is in effect." "no copy in effect: diff says so"
 
 echo "── guide, footprint, plugin wiring"
 out=$($ORCH guide); contains "$out" "manual" "guide lists the reference parts"

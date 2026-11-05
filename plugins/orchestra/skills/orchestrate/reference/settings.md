@@ -115,7 +115,9 @@ rule in `SKILL.md`, with `prefer for` as the per-profile way to rank a provider 
 The built-in `providers.yaml` plus your personal copy. What is in effect for this project: `orch registry show`
 (the file) / `orch registry path` (its path). Precedence: `<project>/.orchestra/providers.yaml`, then
 `~/.orchestra/providers.yaml`, then the built-in one. Make a copy to edit: `orch registry init` (personal) or
-`--project` (this project).
+`--project` (this project). A copy overrides the whole built-in registry, so when the built-in one has changed since
+the copy was made, SessionStart and `orch doctor` say so; `orch registry diff` shows what the copy changes and
+`orch registry diff --accept` records the built-in registry as current once you have taken over what you need.
 
 It holds the **slots** (provider × model × effort, with cost, `max_difficulty`, `good_for`), the **routes**
 (`routing`), `policy.never_auto` (slots that need explicit permission), and the **`operator`** manual-lane parameters

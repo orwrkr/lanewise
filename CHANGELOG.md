@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.25.0
+
+- **The weekly pace is measured over three days, not one.** The projection of the week's limit takes its recent pace
+  from the earliest sample of the last 72 hours with the same reset and at least 6 hours before the measurement (the
+  history now keeps 80 hours, capped at 400 samples), so a single heavy or light day no longer swings it; a burst
+  still shows in the five-hour window. Longer bases read `the last 2d 12h`.
+- **A personal or project registry copy that went stale is named.** `orch registry init` writes the plugin version
+  and the built-in registry's hash into the copy. When the built-in one changes afterwards, SessionStart and
+  `orch doctor` warn that the copy is stale; `orch registry diff` shows what it changes against the built-in one, and
+  `orch registry diff --accept` records the built-in one as current once what is needed has been taken over.
+
 ## 0.24.0
 
 - **Flash is DeepSeek's default model, and Pro is taken only when it is known to be needed.** Flash is newer, ahead

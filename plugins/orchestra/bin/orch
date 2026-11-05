@@ -19,7 +19,8 @@ Subcommands
   guide [topic]              reference parts of the orchestrate skill
   footprint                  what Orchestra created outside Claude Code (cleanup list)
   worktree add NAME          isolated git worktree for a write task
-  registry path|show|init    model registry (providers.yaml)
+  registry path|show|init|diff
+                             model registry (providers.yaml); diff [--accept] compares a copy with the built-in one
   doctor                     environment check
 
 Runs in WSL/Linux/macOS and natively on Windows (shell adapters via Git Bash).
@@ -773,10 +774,10 @@ PROJECTION_MIN_ELAPSED = 60    # minutes of a five-hour window that must have pa
 RECENT_PACE = (30, 60)     # the recent pace: the oldest sample 30–60 minutes back
 ACTIVE_MIN = 15            # a session seen within this many minutes is active
 HISTORY_KEEP_H = 6
-WEEK_HISTORY_KEEP_H = 72   # hours a weekly sample is kept
-WEEK_HISTORY_CAP = 300     # most weekly samples kept
+WEEK_HISTORY_KEEP_H = 80   # hours a weekly sample is kept (a pace base about 72 h old must still be there)
+WEEK_HISTORY_CAP = 400     # most weekly samples kept (one per 15 min over 80 h is 320)
 WEEK_HISTORY_MIN_GAP = 15  # minutes between weekly samples
-WEEK_PACE_MAX_AGE = 24     # hours back a weekly base sample may sit
+WEEK_PACE_MAX_AGE = 72     # hours back a weekly base sample may sit
 WEEK_PACE_MIN_GAP = 6      # hours a weekly base sample must be before the measurement
 
 
@@ -869,10 +870,11 @@ def projected_at_reset(used, reset, rate, measured):
 
 
 def week_base_sample(history, reset, measured, used=None):
-    """The earliest week_history sample from the last 24 hours with the same reset (within 10 minutes) and at
-    least 6 hours before the measurement — the longest recent baseline. Without one, the newest older sample with
-    the same reset stands in for a flat week: if its used equals the current one, the recent pace is zero and the
-    base is (measured - 24 h, used), so the basis reads 'the last 24 h'. Malformed entries are skipped, never fatal."""
+    """The earliest week_history sample from the last 72 hours (three days) with the same reset (within 10 minutes)
+    and at least 6 hours before the measurement — the longest recent baseline: one heavy or light day does not swing
+    the pace. Without one, the newest older sample with the same reset stands in for a flat week: if its used equals
+    the current one, the recent pace is zero and the base is (measured - 72 h, used), so the basis reads 'the last
+    3 d'. Malformed entries are skipped, never fatal."""
     if reset is None or measured is None:
         return None
     lo = measured - dt.timedelta(hours=WEEK_PACE_MAX_AGE)
@@ -901,9 +903,16 @@ def week_base_sample(history, reset, measured, used=None):
 
 
 def week_recent_basis(mins):
-    """'the last 8 h' / 'the last 6h 30m' from the minutes between the base sample and the measurement."""
+    """'the last 8 h' / 'the last 6h 30m' / 'the last 2d 12h' from the minutes between the base sample and the
+    measurement. From 24 hours on the coarse scale is days and hours, minutes dropped ('the last 3 d' at a whole
+    number of days)."""
     total = int(round(mins))
     h, m = divmod(total, 60)
+    if total >= 24 * 60:
+        d, h = divmod(h, 24)
+        if h == 0:
+            return "the last %d d" % d
+        return "the last %dd %dh" % (d, h)
     if m == 0:
         return "the last %d h" % h
     if h:
@@ -7010,6 +7019,11 @@ def cmd_footprint(a):
 
 # ───────────────────────── registry ─────────────────────────
 
+REGISTRY_BUILTIN = PLUGIN_ROOT / "registry" / "providers.yaml"
+REGISTRY_MARKER_PREFIX = "# orchestra-registry-base:"
+REGISTRY_MARKER_RE = re.compile(r"^# orchestra-registry-base:\s*(\S+)\s+sha256:([0-9a-f]{16})\s*$")
+
+
 def registry_path():
     for p in (project_dir() / ".orchestra" / "providers.yaml", ORCH_HOME / "providers.yaml",
               PLUGIN_ROOT / "registry" / "providers.yaml"):
@@ -7018,8 +7032,98 @@ def registry_path():
     return PLUGIN_ROOT / "registry" / "providers.yaml"
 
 
+def plugin_version():
+    """The plugin version from .claude-plugin/plugin.json (for the registry marker), or '?' when unreadable."""
+    try:
+        data = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        return str(data.get("version") or "?")
+    except Exception:
+        return "?"
+
+
+def registry_builtin():
+    """(text, first 16 hex of the SHA-256) of the built-in registry."""
+    import hashlib
+    data = REGISTRY_BUILTIN.read_bytes()
+    return data.decode("utf-8"), hashlib.sha256(data).hexdigest()[:16]
+
+
+def registry_body(text):
+    """The registry's lines without the marker line: what a copy really adds or changes."""
+    return [line for line in text.splitlines() if not line.startswith(REGISTRY_MARKER_PREFIX)]
+
+
+def registry_marker(text):
+    """(version, hash) recorded in the copy's marker line, or None."""
+    for line in text.splitlines():
+        m = REGISTRY_MARKER_RE.match(line)
+        if m:
+            return m.group(1), m.group(2)
+    return None
+
+
+def registry_copy_state():
+    """(is_copy, stale, version) for the registry in effect: whether it is a personal/project copy, whether that
+    copy has gone stale against the built-in registry, and the version recorded in its marker (None without one).
+    Never raises: any error reads as "no copy, not stale"."""
+    try:
+        cur = registry_path()
+        if cur == REGISTRY_BUILTIN:
+            return False, False, None
+        text = cur.read_text(encoding="utf-8")
+        builtin_text, digest = registry_builtin()
+        marker = registry_marker(text)
+        if marker is not None:
+            return True, marker[1] != digest, marker[0]
+        return True, registry_body(text) != registry_body(builtin_text), None
+    except Exception:
+        return False, False, None
+
+
+def registry_stale_note():
+    """The one-line warning for status and doctor when the copy in effect lags the built-in registry, else None.
+    Never raises."""
+    _, stale, version = registry_copy_state()
+    if not stale:
+        return None
+    return ("the built-in registry has changed since this copy was made (%s): orch registry diff"
+            % (version or "an older version"))
+
+
+def registry_marker_line():
+    version, digest = plugin_version(), registry_builtin()[1]
+    return "# orchestra-registry-base: %s sha256:%s" % (version, digest)
+
+
+def registry_write(path, text):
+    """Write LF-only (the repository and its registry are LF, also on Windows)."""
+    with open(str(path), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def registry_diff(a):
+    if registry_path() == REGISTRY_BUILTIN:
+        print("No personal or project copy: the built-in registry is in effect.")
+        return 0
+    import difflib
+    cur = registry_path()
+    builtin_text, digest = registry_builtin()
+    copy_text = cur.read_text(encoding="utf-8")
+    if a.accept:
+        body = registry_body(copy_text)
+        registry_write(cur, registry_marker_line() + "\n" + ("\n".join(body) + "\n" if body else ""))
+        print("accepted: %s now records %s sha256:%s" % (cur, plugin_version(), digest))
+        return 0
+    lines = list(difflib.unified_diff(registry_body(builtin_text), registry_body(copy_text),
+                                      fromfile=str(REGISTRY_BUILTIN), tofile=str(cur), lineterm=""))
+    if lines:
+        print("\n".join(lines))
+    print("This copy overrides the whole built-in registry. Take over what you need from the built-in one, "
+          "then record it as current: orch registry diff --accept")
+    return 0
+
+
 def cmd_registry(a):
-    import shutil
     if a.action == "path":
         print(registry_path())
     elif a.action == "show":
@@ -7032,8 +7136,10 @@ def cmd_registry(a):
         if a.project:
             state_dir()
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(str(PLUGIN_ROOT / "registry" / "providers.yaml"), str(dest))
+        registry_write(dest, registry_marker_line() + "\n" + registry_builtin()[0])
         print("created: %s (edit it; it overrides the built-in registry)" % dest)
+    elif a.action == "diff":
+        return registry_diff(a)
     return 0
 
 
@@ -7045,7 +7151,11 @@ def cmd_status(a):
     data = load_avail()
     lines = [lead_line()] if lead_line() else []
     if a.brief:
-        lines.append("Orchestra: executor registry — %s" % registry_path())
+        line = "Orchestra: executor registry — %s" % registry_path()
+        note = registry_stale_note()
+        if note:
+            line += " · " + note
+        lines.append(line)
     mode, budget = claude_budget()
     if budget:
         lines.append(budget)
@@ -7149,6 +7259,9 @@ def cmd_doctor(a):
                         row("Codex@%s login" % name, False, str(ex), optional=True)
     row("orch on PATH", bool(shutil.which("orch")), shutil.which("orch") or orch_path_hint())
     row("registry", registry_path().exists(), str(registry_path()))
+    note = registry_stale_note()
+    if note:
+        print("⚠ %-22s %s" % ("registry copy", note))
     row("adapters", True, ", ".join(sorted({p.name for b in (ORCH_HOME / "adapters", PLUGIN_ROOT / "adapters")
                                              if b.exists() for p in b.iterdir()
                                              if p.is_file() and not p.name.startswith(("_", "."))})) or "none")
@@ -7435,10 +7548,14 @@ def parse_args(argv):
     x.add_argument("--force", action="store_true", help="remove the worktree even with uncommitted changes")
     x.set_defaults(fn=cmd_handoff_close)
 
-    g = sub.add_parser("registry", help="model registry")
-    g.add_argument("action", choices=("path", "show", "init"))
+    g = sub.add_parser("registry", help="model registry (providers.yaml)")
+    g.add_argument("action", choices=("path", "show", "init", "diff"),
+                   help="init: copy the built-in registry to edit; diff: what the copy in effect changes, vs. the "
+                        "built-in one")
     g.add_argument("--project", action="store_true", help="init into project .orchestra/ instead of ~/.orchestra/")
     g.add_argument("--force", action="store_true")
+    g.add_argument("--accept", action="store_true",
+                   help="diff: record the built-in registry's current version and hash in the copy as current")
     g.set_defaults(fn=cmd_registry)
 
     d = sub.add_parser("doctor", help="environment check")

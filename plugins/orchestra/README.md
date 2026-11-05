@@ -50,7 +50,7 @@ The script registers the marketplace, installs the plugin, puts `orch` into `~/.
 
 `install.sh` is safe to re-run, including after moving the folder: it re-registers the marketplace at the current location. Personal data lives in `~/.orchestra/`, not in the repository: limits, your model registry, API keys. WSL and Windows use separate folders. If you want limits, registry and keys to be shared, set `export ORCH_HOME=/mnt/c/Users/<you>/.orchestra` in WSL (in `~/.bashrc`).
 
-If you already have a personal registry `~/.orchestra/providers.yaml`, it overrides the built-in one. Copy new entries into it from `registry/providers.yaml`, or recreate it: `orch registry init --force`. Up to version 0.4 the marketplace was called `orchestra-local`; `install.sh` removes that installation before adding the current one.
+If you already have a personal registry `~/.orchestra/providers.yaml`, it overrides the built-in one. Copy new entries into it from `registry/providers.yaml`, or recreate it: `orch registry init --force`. When the built-in registry changes later, SessionStart and `orch doctor` warn that the copy is stale: `orch registry diff` shows the difference and `orch registry diff --accept` records the built-in one as current. Up to version 0.4 the marketplace was called `orchestra-local`; `install.sh` removes that installation before adding the current one.
 
 ### What the plugin changes and how to remove it
 
@@ -355,7 +355,7 @@ This way the rules don't drift apart, and each agent sees them exactly once.
 
 ## Model registry
 
-`orch registry path` shows which file is currently in effect. Precedence: `<project>/.orchestra/providers.yaml`, then `~/.orchestra/providers.yaml`, then the built-in one.
+`orch registry path` shows which file is currently in effect. Precedence: `<project>/.orchestra/providers.yaml`, then `~/.orchestra/providers.yaml`, then the built-in one. A copy records the version it was made from; when the built-in registry changes later, SessionStart and `orch doctor` warn that the copy is stale, and `orch registry diff` / `orch registry diff --accept` show the difference and record the built-in one as current.
 
 What it contains:
 - **slots** — provider × model × effort, each with a cost (`cost`: the load on the subscription limit; for DeepSeek, the relative token price), a difficulty ceiling (`max_difficulty`) and strengths (`good_for`);

@@ -80,6 +80,13 @@ elif mode == "first_done":
 elif mode == "capacity":
     emit({"type": "turn.failed", "error": {"message": "Selected model is at capacity. Please try a different model."}})
     sys.exit(1)
+elif mode in ("trace_fail", "trace_limit", "trace_only_limit"):
+    print("2026-11-05T14:12:02.128535Z ERROR codex_core::session: failed to load cloud-quotas skill", flush=True)
+    if mode == "trace_fail":
+        emit({"type": "turn.failed", "error": {"message": "An unrelated failure"}})
+    elif mode == "trace_limit":
+        emit({"type": "turn.failed", "error": {"message": "You've hit your usage limit. Try again in 2 hours."}})
+    sys.exit(1)
 elif mode == "limit":
     emit({"type": "error", "message": "You've hit your usage limit. Try again in 2 hours."})
     emit({"type": "turn.failed", "error": {"message": "You've hit your usage limit. Try again in 2 hours."}})
@@ -493,8 +500,9 @@ assert cx["session"] == "sess-test" and cx["model"] == "gpt-6.1-terra" and cx["u
 assert ds["usage"] == {"input_tokens": 150, "cached_input_tokens": 400, "output_tokens": 25, "model": "deepseek-v4-pro"}, ds
 EOF
 # a worktree holds no git-ignored files: an @import it lacks comes from the project folder
-IP="$T/import-proj"; mkdir -p "$IP/.local-notes" && git -C "$IP" init -q && git -C "$IP" config user.email t@t && git -C "$IP" config user.name t \
+IP="$T/import-proj"; mkdir -p "$IP/.local-notes" "$IP/docs" && git -C "$IP" init -q && git -C "$IP" config user.email t@t && git -C "$IP" config user.name t \
   && printf 'TRACKED-MARKER\n@.local-notes/env.md\n@.local-notes/own.md\n@.local-notes/missing.md\n' > "$IP/CLAUDE.md" \
+  && printf 'MAIN-DOC\n' > "$IP/docs/branch.md" \
   && printf '.local-notes/\n' > "$IP/.gitignore" && git -C "$IP" add . && git -C "$IP" -c commit.gpgsign=false commit -qm init \
   && git -C "$IP" worktree add -q "$T/import-wt" -b import-wt || die "cannot create the import fixture"
 printf 'ENV-MARKER\n@deeper.md\n' > "$IP/.local-notes/env.md"; printf 'DEEPER-MARKER\n' > "$IP/.local-notes/deeper.md"
@@ -514,6 +522,37 @@ assert "OWN-MAIN-MARKER" not in text, text
 text = m.build_context(main, set(), Path(out)).read_text(encoding="utf-8")
 assert "OWN-MAIN-MARKER" in text and "OWN-WORKTREE-MARKER" not in text, text
 EOF
+mkdir -p "$IP/docs" "$IP/.claude" "$T/import-wt/docs"
+printf 'AGENTS.md\n' >> "$IP/.git/info/exclude"
+printf '.claude/CLAUDE.md\n' >> "$IP/.gitignore"
+printf 'IGNORED-AGENTS\n@docs/branch.md\n' > "$IP/AGENTS.md"
+printf 'IGNORED-CLAUDE\n@../AGENTS.md\n' > "$IP/.claude/CLAUDE.md"
+printf 'MAIN-DOC\n' > "$IP/docs/branch.md"
+printf 'BRANCH-DOC\n' > "$T/import-wt/docs/branch.md"
+rm "$T/import-wt/CLAUDE.md"
+$PY - "$(native "$PLUGIN/bin/orch")" "$(native "$IP")" "$(native "$T/import-wt")" "$(native "$T/import-out.md")" <<'EOF' && ok "ignored instructions reach worktrees with branch imports" || bad "ignored instructions"
+import importlib.machinery, importlib.util, sys
+from pathlib import Path
+orch, main, wt, out = sys.argv[1:]
+loader = importlib.machinery.SourceFileLoader("orch_ignored", orch)
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(m)
+for native in (set(), {"AGENTS.md"}):
+    text = m.build_context(wt, native, Path(out)).read_text(encoding="utf-8")
+    assert text.count("IGNORED-AGENTS") == 1 and text.count("IGNORED-CLAUDE") == 1, text
+    assert "BRANCH-DOC" in text and "MAIN-DOC" not in text and "TRACKED-MARKER" not in text, text
+Path(wt, "AGENTS.md").write_text("WORKTREE-AGENTS\n", encoding="utf-8")
+text = m.build_context(wt, {"AGENTS.md"}, Path(out)).read_text(encoding="utf-8")
+assert "WORKTREE-AGENTS" not in text and "IGNORED-AGENTS" not in text, text
+EOF
+# a git-ignored AGENTS.md missing from a worktree reaches a real codex run: codex reads AGENTS.md natively, so
+# the file the adapter cannot find still goes into the run's context.md
+rm -f "$T/import-wt/AGENTS.md"
+out=$(FAKE_CODEX=ok $ORCH run codex --cd "$(native "$T/import-wt")" "review the form"); rc=$?
+expect_rc 0 $rc "a run in the worktree starts"
+RID=$(grep -o 'cod-[0-9]*-[0-9]*-[a-z0-9]*' <<<"$out" | head -1)
+[[ -n "$RID" ]] && grep -q "IGNORED-AGENTS" "$REPO/.orchestra/runs/$RID/context.md" \
+  && ok "the ignored AGENTS.md reaches the run's context.md" || bad "the ignored AGENTS.md is missing from the run's context.md ($RID)"
 CFG="$T/claude-cfg/projects/$(native "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"; mkdir -p "$CFG/sess-test/subagents"
 $PY - "$CFG" <<'EOF'
 import json, os, sys
@@ -670,6 +709,19 @@ out=$(printf 'x' | $ORCH handoff offer --title "next A"); AID=$(grep -o 'AG-[0-9
 out=$(printf 'x' | $ORCH handoff offer --title "next B" --fallback "deepseek flash"); BID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
 out=$($ORCH handoff check --peek); grep -q "Manual pool: no task taken" <<<"$out" && bad "pool check too early" || ok "no pool check within the first 5 min"
 backdate_pool 5
+$ORCH handoff hold "$AID" --until +1h --note later >/dev/null
+$ORCH handoff hold "$BID" >/dev/null
+out=$($ORCH handoff list); contains "$out" "$AID.*held by the operator until" "hold shown in list"
+out=$($ORCH status --brief); contains "$out" "$AID.*held by the operator" "hold shown in status"
+contains "$(cat "$REPO/.orchestra/MANUAL.md")" "$AID.*held by the operator" "hold shown on board"
+before=$(cat "$REPO/.orchestra/handoffs/.pool.json")
+out=$($ORCH handoff check --peek); grep -q "Manual pool: no task taken" <<<"$out" && bad "held pool checked" || ok "only held tasks produce no pool check"
+after=$(cat "$REPO/.orchestra/handoffs/.pool.json")
+[[ "$before" == "$after" ]] && ok "held pool leaves state untouched" || bad "held pool changed state"
+$ORCH handoff hold "$BID" --off >/dev/null
+out=$($ORCH handoff check --peek); contains "$out" "$BID “next B”" "unheld task remains in check"
+grep -q "$AID “next A”" <<<"$out" && bad "held task in check" || ok "held task omitted"
+$ORCH handoff hold "$AID" --off >/dev/null
 out=$($ORCH handoff check)
 contains "$out" "Manual pool: no task taken for [5-9] min (since the pool opened; check 1, every 5 min)" "first pool check after 5 min without a take"
 contains "$out" "$BID “next B” — .*fallback: deepseek flash" "the check lists the untaken tasks"
@@ -697,6 +749,25 @@ out=$($ORCH handoff reclaim "$DID" --next); expect_rc 75 $? "next task still run
 $ORCH handoff done "$BID" >/dev/null
 $ORCH handoff reclaim "$DID" --next >/dev/null; expect_rc 0 $? "orch handoff done frees the slot too"
 $ORCH handoff done "$DID" >/dev/null
+# hold transitions: an expired --until does not hold, take and reclaim clear the hold, and a non-pooled task refuses
+out=$(printf 'x' | $ORCH handoff offer --title "hold A"); HLD1=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
+$ORCH handoff hold "$HLD1" --until "2020-01-01 00:00" >/dev/null
+backdate_pool 5
+out=$($ORCH handoff check --peek); contains "$out" "$HLD1 “hold A”" "an expired --until leaves the task in the check"
+$ORCH handoff hold "$HLD1" >/dev/null
+$ORCH handoff take "$HLD1" --max-open 99 >/dev/null
+lacks "$(cat "$REPO/.orchestra/handoffs/$HLD1/meta.json")" '"hold"' "take clears a hold"
+out=$(printf 'x' | $ORCH handoff offer --title "hold B"); HLD2=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
+$ORCH handoff hold "$HLD2" >/dev/null
+$ORCH handoff reclaim "$HLD2" >/dev/null
+lacks "$(cat "$REPO/.orchestra/handoffs/$HLD2/meta.json")" '"hold"' "reclaim clears a hold"
+out=$(printf 'x' | $ORCH handoff new --title "not pooled" --max-open 99); HLD3=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
+out=$($ORCH handoff hold "$HLD3"); rc=$?
+expect_rc 1 $rc "hold on a task not in the pool fails"
+contains "$out" "not in the pool" "hold refusal says not in the pool"
+$ORCH handoff cancel "$HLD1" >/dev/null; $ORCH handoff close "$HLD1" >/dev/null
+$ORCH handoff cancel "$HLD2" >/dev/null; $ORCH handoff close "$HLD2" >/dev/null
+$ORCH handoff cancel "$HLD3" >/dev/null; $ORCH handoff close "$HLD3" >/dev/null
 for i in 1 2 3 4 5; do printf 'x' | $ORCH handoff offer --title "bulk $i" --check-min 999 >/dev/null; done
 printf 'x' | $ORCH handoff offer --title "too many" >/dev/null; expect_rc 75 $? "pool size limited (max_offers)"
 git -C "$REPO" rm -q CLAUDE.md && git -C "$REPO" commit -qm "drop rules"
@@ -2197,6 +2268,9 @@ fb "$FA" quota clear deepseek >/dev/null
 fb "$FA" quota set deepseek@client/deepseek-v4-pro exhausted >/dev/null
 out=$(fb "$FA" profile show); contains "$out" "client (project)" "availability: an entry on one model of the profile is no reason to switch"
 fb "$FA" quota clear deepseek@client/deepseek-v4-pro >/dev/null
+fb "$FA" quota set deepseek@client/deepseek-v4-pro busy >/dev/null
+out=$(fb "$FA" profile show); contains "$out" "client (project)" "availability: a busy model is no reason to switch"
+fb "$FA" quota clear deepseek@client/deepseek-v4-pro >/dev/null
 # the entry orch records itself when the provider reports an empty balance (402)
 out=$(FAKE_CLAUDE=402 fb_run "$FA" "empty"); expect_rc 75 $? "an empty balance (402) is exit 75"
 out=$(fb "$FA" profile show); contains "$out" "personal (fallback: client is exhausted)" "a recorded 402 moves the project to its fallback"
@@ -3695,7 +3769,7 @@ def worker_guard():
     hid = offered()
     before = meta(hid)
     for args in (["list"], ["show", hid], ["check"], ["wait", "--any"], ["done", hid], ["cancel", hid],
-                 ["close", hid], ["take", hid], ["reclaim", hid], ["new", "--title", "x"], ["offer", "--title", "x"]):
+                 ["close", hid], ["take", hid], ["reclaim", hid], ["hold", hid], ["new", "--title", "x"], ["offer", "--title", "x"]):
         rc, out = run(["handoff"] + args, extra={"ORCH_WORKER":"review-worker"})
         assert rc != 0 and "only the orchestrator may use orch handoff" in out, (args, rc, out)
     assert meta(hid) == before
@@ -3937,9 +4011,29 @@ def run_outcomes():
         assert entries[-1]["status"] == status
         assert status in good(["usage"])
     rc, out = run(["run", "codex", "--model", "capacity-model", "review"], extra={"FAKE_CODEX":"capacity"})
-    assert rc == 75 and "QUOTA_EXHAUSTED" in out, out
+    assert rc == 75 and "CAPACITY" in out, out
     entries = m.read_json(m.AVAIL_FILE, {})["entries"]
     assert set(entries) == {"codex/capacity-model"}, entries
+    assert entries["codex/capacity-model"]["status"] == "busy"
+    assert "CAPACITY" in run(["run", "codex", "--model", "capacity-model", "review"])[1]
+    assert "CAPACITY" in good(["usage"])
+    # capacity with an unknown model id: no --model and no model in the codex config → no block is recorded
+    before = m.read_json(m.AVAIL_FILE, {})["entries"]
+    rc, out = run(["run", "codex", "review"], extra={"FAKE_CODEX": "capacity"})
+    assert rc == 75 and "CAPACITY" in out and "no availability block was recorded" in out, out
+    assert m.read_json(m.AVAIL_FILE, {})["entries"] == before, out
+    rc, out = run(["run", "codex", "--model", "trace-model", "review"], extra={"FAKE_CODEX":"trace_fail"})
+    assert rc != 75 and "[FAILED]" in out, out
+    assert set(m.read_json(m.AVAIL_FILE, {})["entries"]) == {"codex/capacity-model"}
+    rc, out = run(["run", "codex", "--model", "trace-model", "review"], extra={"FAKE_CODEX":"trace_limit"})
+    assert rc == 75 and "[QUOTA_EXHAUSTED]" in out, out
+    assert "subscription limit: You've hit your usage limit" in out, out
+    assert all("cloud-quotas" not in line for line in out.splitlines() if "subscription limit:" in line), out
+    assert m.read_json(m.AVAIL_FILE, {})["entries"]["codex"]["status"] == "exhausted"
+    good(["quota", "clear", "codex"])
+    rc, out = run(["run", "codex", "--model", "trace-model", "review"], extra={"FAKE_CODEX":"trace_only_limit"})
+    assert rc == 75 and "[QUOTA_EXHAUSTED]" in out, out
+    good(["quota", "clear", "codex"])
     until = m.parse_iso(entries["codex/capacity-model"]["until"])
     assert 9 * 60 < (until - m.now()).total_seconds() <= 10 * 60
     assert run(["quota", "check", "codex/sibling"])[0] == 0

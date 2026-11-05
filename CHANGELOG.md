@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.23.0
+
+- **A model at capacity is not a used-up limit.** The run ends `[CAPACITY]`, still exit 75, and the entry on that model
+  alone is the new status `busy` for about ten minutes; it never moves a profile to its fallback. The report says that
+  whatever the run already changed stays in its folder.
+- **Only Codex's real messages decide what a failure was.** Its own tracing lines (a timestamp, then `ERROR`) were read
+  as errors: a skill folder or a file named like `quota` turned any failed run into a recorded limit, and the limit
+  message showed startup noise instead of the reason. They now count only when nothing else explains the failure.
+- **A git-ignored `CLAUDE.md` or `AGENTS.md` reaches a worker in a worktree.** It comes from the project folder, also
+  for Codex, which can't read it there itself; its `@` imports resolve on the branch first. A tracked file missing on
+  the branch stays missing.
+- **`orch handoff hold <id>`** keeps a pooled task out of the pool checks while the operator means to take it later
+  (`--until WHEN`, `--off`). A take or a reclaim ends the hold.
+
 ## 0.22.0
 
 - **Session budgets for accounts with a balance API.** Profile fields `session_soft`, `session_hard` and

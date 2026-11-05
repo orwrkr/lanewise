@@ -630,7 +630,7 @@ def find_codex():
 # ───────────────────────── availability (quota) ─────────────────────────
 
 AVAIL_FILE = ORCH_HOME / "availability.json"
-STATUSES = ("ok", "low", "exhausted", "disabled", "away")
+STATUSES = ("ok", "low", "exhausted", "disabled", "away", "busy")
 
 
 @locked("home")
@@ -705,6 +705,10 @@ def describe_entry(k, e):
         "until cleared manually"
     note = (" — " + e["note"]) if e.get("note") else ""
     return "%-28s %-9s %s%s" % (k, e.get("status"), when, note)
+
+
+def availability_status(entry):
+    return "CAPACITY" if entry.get("status") == "busy" else "QUOTA_EXHAUSTED"
 
 
 @locked("home")
@@ -2899,7 +2903,7 @@ IMPORT_RE = re.compile(r"^@(\S+)\s*$", re.M)
 CONTEXT_LIMIT = 40000
 
 
-def instruction_files(cwd):
+def instruction_files(cwd, twin=None):
     """Existing instruction files for a working directory: repository top level first, then cwd."""
     cwd = Path(cwd).resolve()
     dirs = [cwd]
@@ -2908,7 +2912,19 @@ def instruction_files(cwd):
         top = Path(r.stdout.strip()).resolve()
         if top != cwd:
             dirs.insert(0, top)
-    return [(d, name) for d in dirs for name in INSTRUCTION_FILES if (d / name).is_file()]
+    result = []
+    for d in dirs:
+        for name in INSTRUCTION_FILES:
+            path = d / name
+            if path.is_file():
+                result.append((d, name, path))
+            elif twin:
+                copy = twin(path)
+                if copy != path and copy.is_file():
+                    check = git(["check-ignore", "-q", "--", str(copy)], copy.parent)
+                    if check is not None and check.returncode == 0:
+                        result.append((d, name, copy))
+    return result
 
 
 def main_folder_twin(cwd):
@@ -2931,18 +2947,18 @@ def main_folder_twin(cwd):
     return twin
 
 
-def expand_imports(path, native, seen, depth=0, twin=None):
+def expand_imports(path, native, seen, depth=0, twin=None, source=None):
     """Text of an instruction file with whole-line @imports inlined (files the agent reads itself are skipped)."""
     seen.add(path.resolve())
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = (source or path).read_text(encoding="utf-8", errors="replace")
 
     def inline(m):
         target = (path.parent / os.path.expanduser(m.group(1))).resolve()
-        if twin and not target.is_file():
-            target = twin(target)
-        if target.name in native or target in seen or depth >= 3 or not target.is_file():
-            return "" if target.name in native or target in seen else m.group(0)
-        return expand_imports(target, native, seen, depth + 1, twin)
+        source = twin(target) if twin and not target.is_file() else target
+        native_present = target.name in native and target.is_file()
+        if native_present or target in seen or depth >= 3 or not source.is_file():
+            return "" if native_present or target in seen else m.group(0)
+        return expand_imports(target, native, seen, depth + 1, twin, source)
     return IMPORT_RE.sub(inline, text)
 
 
@@ -2950,11 +2966,11 @@ def build_context(cwd, native, out):
     """Write the project instructions an agent does not load natively to `out`; None if there are none."""
     parts, seen = [], set()
     twin = main_folder_twin(cwd)
-    for d, name in instruction_files(cwd):
+    for d, name, source in instruction_files(cwd, twin):
         p = (d / name).resolve()
-        if name in native or p in seen:
+        if (name in native and source.resolve() == p) or p in seen:     # a native file the agent can't find still goes in
             continue
-        text = expand_imports(p, native, seen, twin=twin).strip()
+        text = expand_imports(p, native, seen, twin=twin, source=source).strip()
         if text:
             if len(text) > CONTEXT_LIMIT:
                 text = text[:CONTEXT_LIMIT] + "\n…[truncated]"
@@ -5044,7 +5060,7 @@ def cmd_run(a):
     key = prof.label + ("/" + model if model else "")
     ok, e, k = availability(key)
     if not ok and not a.force:
-        print("QUOTA_EXHAUSTED %s — %s" % (key, describe_entry(k, e)))
+        print("%s %s — %s" % (availability_status(e), key, describe_entry(k, e)))
         print("Pick a fallback from the registry or wait for the reset (orch quota show).")
         return EXIT_QUOTA
 
@@ -5201,7 +5217,9 @@ def cmd_run(a):
             except SystemExit:
                 pass
         if hit:
-            status = "QUOTA_EXHAUSTED"
+            kind_file = run_dir / "quota_kind"
+            capacity = kind_file.exists() and kind_file.read_text(encoding="utf-8", errors="replace").strip() == "capacity"
+            status = "CAPACITY" if capacity else "QUOTA_EXHAUSTED"
             # An adapter may narrow an availability failure to the selected model (never widen its scope).
             scoped_model = read_json(run_dir / "quota_model.json", None)
             block = (prof.label + "/" + scoped_model if isinstance(scoped_model, str) and scoped_model
@@ -5214,7 +5232,9 @@ def cmd_run(a):
             if scoped_model == "":
                 quota_note = " (model id unknown — no availability block recorded)"
             else:
-                set_avail(block, "exhausted", until, "auto: limit detected in the output of %s" % run_id, source="auto")
+                set_avail(block, "busy" if capacity else "exhausted", until,
+                          ("auto: model at capacity at the provider, not a limit (%s)" if capacity else
+                           "auto: limit detected in the output of %s") % run_id, source="auto")
             rc = EXIT_QUOTA
     if rc == EXIT_TIMEOUT:
         status = "TIMEOUT"
@@ -5265,6 +5285,11 @@ def cmd_run(a):
     if status == "QUOTA_EXHAUSTED":
         print("Limit exhausted (subscription or balance), recorded in orch quota%s. Reassign the task to a fallback."
               % quota_note)
+    if status == "CAPACITY":
+        scope_note = ("no availability block was recorded because the model id is unknown" if scoped_model == "" else
+                      "only this model is blocked until %s" % until.astimezone().strftime("%H:%M"))
+        print("Model at capacity at the provider, not your limit; %s. Take a fallback or another model of the provider. "
+              "Whatever the run already changed stays in its folder: check it before running the task again." % scope_note)
     if status == "SPEND_LIMIT":
         config = load_spend_limits()[0]
         print("Spend limit reached (%s; %s) — %s." % (scope_name(scope), counter_cover(config, scope, cwd),
@@ -5351,8 +5376,8 @@ def cmd_launch(a):
     key = prof.label + ("/" + model if model else "")
     ok, e, k = availability(key)
     if not ok and not a.force:
-        raise SystemExit("orch: QUOTA_EXHAUSTED %s — %s (orch quota show; --force starts anyway)"
-                         % (k, describe_entry(k, e)))
+        raise SystemExit("orch: %s %s — %s (orch quota show; --force starts anyway)"
+                         % (availability_status(e), k, describe_entry(k, e)))
     scope = profile_api_scope(prof, provider, cwd)
     if scope:
         allowed, line = spend_lead_start(scope, cwd)
@@ -5869,7 +5894,7 @@ def manual_gate(provider, model_key, override, max_open, force, check_operator=T
     prov_key = prof.label + ("/" + model_key if model_key else "")
     ok, e, k = availability(prov_key)
     if not ok and not force:
-        print("QUOTA_EXHAUSTED %s — %s" % (prov_key, describe_entry(k, e)))
+        print("%s %s — %s" % (availability_status(e), prov_key, describe_entry(k, e)))
         return None, EXIT_QUOTA
     return (prof, max_open), None
 
@@ -5954,7 +5979,7 @@ def assign_handoff(m, prof):
     task_dir = proj / rel
     task_dir.mkdir(parents=True, exist_ok=True)
     body = (handoffs_root() / hid / "BODY.md").read_text(encoding="utf-8")
-    rules = list(dict.fromkeys(name for _, name in instruction_files(workdir)))
+    rules = list(dict.fromkeys(name for _, name, _ in instruction_files(workdir)))
     header = "# %s — %s\n\n%s\n" % (hid, m["title"], MANUAL_ROLE)
     header += "- Working folder: `%s`\n" % workdir
     if branch:
@@ -6061,6 +6086,7 @@ def cmd_handoff_reclaim(a):
                   "orch run … --handoff %s, or orch handoff done %s, marks it finished). Without --next reclaim only a "
                   "task no longer worth waiting for." % (busy["id"], busy["title"], busy["id"], busy["id"]))
             return EXIT_QUOTA
+    m.pop("hold", None)
     m["reclaim"] = {"kind": "next" if a.next else "all", "at": iso(now()), "run": None, "finished": None}
     save_meta(m)
     cmd_handoff_done(SimpleNamespace(id=m["id"], status="REASSIGNED", force=True, note=a.note or (
@@ -6092,6 +6118,7 @@ def _finish_reclaimed(hid, status, run_id):
 
 def claim_handoff(m, prof):
     """Reserve both ownership and capacity before slow work; a competing take/reclaim now fails."""
+    m.pop("hold", None)
     m.update(taken=iso(now()), assigning=rand_suffix(16), profile=prof.name if prof.explicit else None)
     save_meta(m)
 
@@ -6165,11 +6192,41 @@ def cmd_handoff_take(a):
     return 0
 
 
+def held(m):
+    hold = m.get("hold")
+    if not isinstance(hold, dict):
+        return False
+    until = parse_iso(hold.get("until"))
+    return not until or until > now()
+
+
+def hold_mark(m):
+    if not held(m):
+        return ""
+    until = parse_iso(m["hold"].get("until"))
+    return " · held by the operator" + (" until " + until.astimezone().strftime("%H:%M") if until else "")
+
+
+@locked("project")
+def cmd_handoff_hold(a):
+    m = load_meta(a.id.upper())
+    if result_status(m) != "OFFERED" or m.get("archived"):
+        print("%s is not in the pool (%s) — nothing to hold." % (m["id"], effective_state(m)))
+        return 1
+    if a.off:
+        m.pop("hold", None)
+    else:
+        m["hold"] = {"at": iso(now()), "until": iso(parse_until(a.until)) if a.until else None, "note": a.note}
+    save_meta(m)
+    print(handoff_line(m))
+    return 0
+
+
 def handoff_line(m):
     st = effective_state(m)
     if st == "OFFERED":
-        return "%-9s %-11s %-10s %s · suggested: %s" % (m["id"], st, human_delta(parse_iso(m["created"])),
-                                                        m["title"][:50], suggestion(m))
+        return ("%-9s %-11s %-10s %s · suggested: %s" % (m["id"], st, human_delta(parse_iso(m["created"])),
+                                                        m["title"][:50], suggestion(m))) + hold_mark(m)
     act = last_activity(m) if st not in TERMINAL else None
     act_s = ("activity %s" % human_delta(act)) if act else "no activity"
     who = agent_reported(m) or suggestion(m)
@@ -6237,9 +6294,11 @@ def next_running(metas):
 def pool_event(metas, mark=True):
     """⌛ once per check interval without a take: reclaim every task no longer worth waiting for, else the next one."""
     pool = sorted((m for m in metas if result_status(m) == "OFFERED"), key=lambda m: m.get("offered") or m["created"])
-    if not pool:
+    eligible = [m for m in pool if not held(m)]
+    if not eligible:
         return None
     state = pool_state(sorted(m["id"] for m in pool))
+    pool = eligible
     every = max(int(state.get("check_min") or POOL_CHECK_MIN), 1)
     anchor, took = pool_clock(metas, state)
     t = now()
@@ -6291,7 +6350,7 @@ def write_board():
         lines.append("- **%s** · %s — %s%s · %s in the pool%s" % (
             m["id"], m["title"], suggestion(m), " (changes files, in its own worktree)" if task_writes(m) else "",
             human_delta(parse_iso(m["created"])).replace(" ago", ""),
-            " · fallback: %s" % m["fallback"] if m.get("fallback") else ""))
+            (" · fallback: %s" % m["fallback"] if m.get("fallback") else "") + hold_mark(m)))
     lines += ([] if pool else ["_empty_"]) + ["", "## Handed out (%d)" % len(out)]
     for m in out:
         lines.append("- **%s** · %s — %s · %s" % (m["id"], m["title"], states[m["id"]], agent_reported(m) or suggestion(m)))
@@ -7134,7 +7193,7 @@ def parse_args(argv):
     qs = q.add_subparsers(dest="action", required=True)
     x = qs.add_parser("set")
     x.add_argument("key", help="provider[/model], e.g. codex, codex/gpt-5.6-sol, antigravity/gemini-4-argon, claude/opus, operator")
-    x.add_argument("status", help="|".join(STATUSES))
+    x.add_argument("status", help="|".join(STATUSES) + "; busy is set automatically for capacity and lifts by itself")
     x.add_argument("--until", help="+3h | 18:00 | 2026-10-26 09:00 | tomorrow 09:00")
     x.add_argument("--note")
     x = qs.add_parser("clear")
@@ -7335,6 +7394,12 @@ def parse_args(argv):
                    help="the one-at-a-time reclaim of a pool check (refused while the previous one is running)")
     x.add_argument("--note")
     x.set_defaults(fn=cmd_handoff_reclaim)
+    x = hs.add_parser("hold", help="hold a pooled task at the operator's request")
+    x.add_argument("id")
+    x.add_argument("--until", help="when the hold expires (as for orch quota set --until)")
+    x.add_argument("--off", action="store_true")
+    x.add_argument("--note")
+    x.set_defaults(fn=cmd_handoff_hold)
     x = hs.add_parser("list")
     x.add_argument("--all", action="store_true")
     x.add_argument("--json", action="store_true")

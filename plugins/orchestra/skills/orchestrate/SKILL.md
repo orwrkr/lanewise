@@ -85,8 +85,8 @@ the project rules (CLAUDE.md, AGENTS.md) itself — put only the task in the pro
    `--allow 'Bash(<command>:*)'`. Permission denials are listed at the end of its answer; if needed, rerun with
    `--allow`. Codex is confined by its sandbox (`read-only` / `workspace-write`) and needs no `--allow`.
 5. While the executor works, do something else. Outcome: `[OK]/[BLOCKED]/[PARTIAL]` (exit 0; read the report),
-   `[FAILED]/[QUOTA_EXHAUSTED]/[SPEND_LIMIT]/[TIMEOUT]`, tokens, the answer, paths to `output.md` and `log.txt`.
-   On timeout or a spend limit `orch` stops the executor's whole process tree.
+   `[FAILED]/[QUOTA_EXHAUSTED]/[CAPACITY]/[SPEND_LIMIT]/[TIMEOUT]`, tokens, the answer, paths to `output.md` and
+   `log.txt`. On timeout or a spend limit `orch` stops the executor's whole process tree.
 6. Exit 75: limit/balance/capacity — take the fallback; `orch quota` records the block (a profile has its own key,
    `deepseek@work`) — go straight to the fallback. `SPEND_LIMIT` — the scope hit its USD cap (`orch spend`,
    `orch guide spend`): route to a lane that doesn't bill that key. `SESSION_BUDGET` — the account's session budget
@@ -108,6 +108,7 @@ that means a ban under Google's ToS). Files only: TASK.md → operator → agent
 - By default — **to the pool**: `orch handoff offer …`; the operator picks and takes tasks ("AG-0004 to
   Antigravity" → `orch handoff take AG-0004 --clip`, show the card). Immediately (`orch handoff new`) — only at
   their request.
+- The operator says they'll take a task later → `orch handoff hold <id>`.
 - Don't wait for manual tasks: hooks detect completion via RESULT.md. Handle "Orchestra" events (`✅` done,
   `⏰` not started, `⚠`) per `orch guide manual`.
 - `⌛` pool check — every 5 min without a take from the pool: reclaim every task no longer worth waiting for (in

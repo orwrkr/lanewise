@@ -105,7 +105,8 @@ rule in `SKILL.md`, with `prefer for` as the per-profile way to rank a provider 
 "Codex is out until 18:00", "topped up DeepSeek", "I'm away" → `orch quota set|clear`.
 
 - Keys: a provider (`codex`), provider/model (`codex/gpt-6.1-sol`), a profile (`deepseek@work` — its own key), or
-  `operator` (the whole manual lane). Statuses: `low`, `exhausted`, `disabled`, `away`.
+  `operator` (the whole manual lane). Statuses: `low`, `exhausted`, `disabled`, `away`; `busy` is set by `orch`
+  for a model at capacity and lifts by itself.
 - "I'm away" → `orch quota set operator away --until 19:00`; "I'm back" → `orch quota clear operator`.
 - Stored in `~/.orchestra/availability.json`, shared by all projects; `--until` lifts on its own.
 
@@ -153,9 +154,9 @@ the place for plugin state, not for the project's own notes. There are three pla
 - A profile's `rules` belong to that key and lapse with its fallback. `orch` shows them to you the same way.
 
 A project's read ban (`permissions.deny` in `.claude/settings*.json`) covers only what its rules name; other
-git-ignored files, such as notes on the machine's environment, stay readable. A worktree holds only tracked files. What
-the project's instructions import with `@` still reaches a worker there, from the project folder; carry anything else
-it needs into its task. The bans bind DeepSeek and Claude executors, not Codex or manual agents, so keep tasks near
+git-ignored files, such as notes on the machine's environment, stay readable. A worktree holds only tracked files.
+The project's git-ignored `CLAUDE.md` or `AGENTS.md` and what its instructions import with `@` still reach a worker
+there, from the project folder; carry anything else it needs into its task. The bans bind DeepSeek and Claude executors, not Codex or manual agents, so keep tasks near
 banned files away from those two; in a worktree only the tracked `settings.json` applies. A secret committed to the
 repository is already compromised: the project replaces and removes it, and no ban fixes that. Until it is gone, keep a
 reminder in the project rules, so every session warns about it.

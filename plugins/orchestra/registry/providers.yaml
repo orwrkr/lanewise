@@ -113,7 +113,7 @@ providers:
       Run in the background (run_in_background); long tasks — up to 45 min. Writing tasks
       in parallel with others — only in a separate worktree (orch worktree add <name>).
       The subscription limit is detected automatically (exit 75) and goes into orch quota.
-      A model at capacity exits 75 and blocks only that model for about 10 minutes: take the fallback.
+      A model at capacity reports CAPACITY, exits 75 and blocks only that model for about 10 minutes: take the fallback.
       Native Windows write workers use a separate sandbox account that may not stat parents of the default temp
       directory or projects under the operator's home; Git and mkdir -p in Git Bash can fail, and WSL is unreachable.
       For tests creating temp repositories, grant a scratch directory with readable parents (e.g. C:/Users/Public/orch-scratch)

@@ -1,6 +1,6 @@
 ---
 description: Manual task pool (Antigravity and similar) — show it, take a task, mark one handed off, done or cancelled
-argument-hint: "[show | AG-0004 to Antigravity | AG-0004 to Cursor | AG-0004 done | AG-0004 cancel]"
+argument-hint: "[show | AG-0004 to Antigravity | AG-0004 to Cursor | AG-0004 done | AG-0004 cancel | AG-0004 later]"
 ---
 The operator about manual tasks: "$ARGUMENTS"
 
@@ -16,3 +16,5 @@ Workflow — per `orch guide manual`.
    then verify and integrate the result per `orch guide manual`.
 4. "AG-… cancel" / "not doing it" → `orch handoff cancel <ID>`; if the task is still needed, run it automatically
    (the fallback from the card) and say whom you gave it to.
+5. "AG-… later" / "I'll take it later" → `orch handoff hold <ID> [--until WHEN]`: pool checks leave it out
+   until then; don't reclaim it. "Hold off" → `orch handoff hold <ID> --off`.

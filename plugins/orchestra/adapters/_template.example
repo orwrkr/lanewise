@@ -26,6 +26,8 @@
 #         (goes into orch usage — which model, what for and how much it spent)
 #   exit: 0 ok · 75 subscription/balance limit (the reset time can be written to $ORCH_RUN_DIR/quota_until,
 #         format: "18:00", "+2h", "2026-10-26 09:00"; "manual" — until a manual `orch quota clear`) · other — error
+#   Optional quota_kind contains "capacity" for provider model capacity; quota_model.json contains the model id as a
+#   JSON string, or an empty string when unknown (no availability block is recorded).
 #   Even without exit 75, orch itself scans the log for phrases like "usage limit", "429", "rate limit".
 #
 # Directives in the header comments (first 40 lines):

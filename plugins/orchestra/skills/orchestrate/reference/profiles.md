@@ -9,6 +9,7 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 
 | The operator says | Command |
 |---|---|
+| "move off this account above 30% per session, always stop at 90% or a balance of 1" | `orch profile set deepseek client --session-soft 30 --session-hard 90 --balance-floor 1` (balance API required; see `orch guide spend`) |
 | "don't use DeepSeek in this project" | `orch profile use deepseek off` |
 | "DeepSeek here — with the work key" | `orch profile use deepseek work` |
 | "put it back to the default" | `orch profile use deepseek inherit` |

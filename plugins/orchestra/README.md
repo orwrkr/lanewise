@@ -258,6 +258,7 @@ Project rules are private requirements for the orchestrator, independent of prof
 
 | Field | Meaning | Enforced by |
 |---|---|---|
+| `session_soft`, `session_hard`, `balance_floor` | optional session account decrease percentages (above 0 to 100; soft below hard) and nonnegative floor in the account currency; DeepSeek balance API only. Soft yields to Claude TIGHT; hard/floor always apply. Fresh balance required before a run; exit 75 `SESSION_BUDGET`, fallback takes over. Each session has its own baseline and counts all account spending; spend limits still apply. Empty CLI values clear fields. See `orch guide spend`. | `orch` |
 | `key` | name of the variable holding the API key (from the environment or `secrets.env`); the adapter receives its value as `DEEPSEEK_API_KEY` (`ANTHROPIC_API_KEY` for `claude`, `CODEX_API_KEY` for `codex`) | `orch` |
 | `home`, `codex_profile` | Codex account (`CODEX_HOME`) and the `codex --profile` settings layer; for `claude`, its config directory (`CLAUDE_CONFIG_DIR`) | `orch` |
 | `fast_model`, `base_url` | DeepSeek: model for light background calls, endpoint | `orch` |

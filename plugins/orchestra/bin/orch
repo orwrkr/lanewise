@@ -50,6 +50,8 @@ SPEND_FILE = ORCH_HOME / "spend_limits.json"
 SPEND_CACHE_FILE = ORCH_HOME / "spend_cache.json"
 SPEND_EVENTS_FILE = ORCH_HOME / "spend_events.json"
 BALANCE_FILE = ORCH_HOME / "balances.json"      # the providers' own figures for API keys (orch balance)
+SESSION_BUDGET_FILE = ORCH_HOME / "session_budget.json"
+SESSION_BUDGET_FIELDS = ("session_soft", "session_hard", "balance_floor")
 BALANCE_STALE_SECONDS = 10 * 60   # orch status / spend show / SessionStart fetch again when the figure is older
 BALANCE_FRESH_SECONDS = 30 * 60   # the status line adds "(3h ago)" to a figure older than this
 BALANCE_TIMEOUT = 5               # seconds a provider gets to answer; every fetch is bounded by it
@@ -1021,7 +1023,23 @@ def claude_consumers():
     return out
 
 
+_claude_budget_active = False
+
+
 def claude_budget(where=None):
+    # SURPLUS routing resolves API profiles, whose soft budgets ask about Claude again.
+    # TIGHT returns before that routing step, so a recursive query is necessarily not TIGHT.
+    global _claude_budget_active
+    if _claude_budget_active:
+        return "normal", None
+    _claude_budget_active = True
+    try:
+        return _claude_budget(where)
+    finally:
+        _claude_budget_active = False
+
+
+def _claude_budget(where=None):
     """(mode, line): projections stay anchored to measurements; either limit can make Claude tight."""
     kvar = profile_key("claude", where, follow=False)
     if kvar:
@@ -1931,6 +1949,7 @@ def cmd_statusline(a):
     parts = []
     try:
         data = json.loads(raw or "{}")
+        learn_session_id(data)
         rl = data.get("rate_limits") if isinstance(data.get("rate_limits"), dict) else {}
         windows = {}
         for name in ("five_hour", "seven_day"):
@@ -2005,7 +2024,7 @@ def cmd_statusline(a):
 PROFILES_FILE = ORCH_HOME / "profiles.json"
 EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 LIST_FIELDS = ("models", "use_for", "prefer_for")
-RULE_FIELDS = ("models", "max_effort", "write", "use_for", "prefer_for", "rules", "fallback")
+RULE_FIELDS = ("models", "max_effort", "write", "use_for", "prefer_for", "rules", "fallback") + SESSION_BUDGET_FIELDS
 MANUAL_PROVIDERS = ("antigravity",)
 PROFILE_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,39}")
 VAR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -2268,12 +2287,13 @@ def _profile_exhaustion(prof, where):
     limit = _limit_number(eff)
     if limit is not None and eff.get("mode") in ("stop", "evaluate") and current_spend(scope, where) >= limit:
         return "limit"
-    return None
+    return session_budget_cause(prof, where)
 
 
 def fallback_cause_words(cause):
     """'at its limit' | 'exhausted' | 'disabled'."""
-    return "at its limit" if cause == "limit" else str(cause)
+    return {"limit": "at its limit", "floor": "at its balance floor",
+            "session-hard": "at its hard session budget", "session-soft": "over its session budget"}.get(cause, str(cause))
 
 
 def fallback_cause_text(name, cause):
@@ -2415,6 +2435,9 @@ def describe_profile(prof, profs=None):
         parts.append("prefer for: " + ", ".join(map(str, d["prefer_for"])))
     if d.get("max_open") not in (None, ""):
         parts.append("manual tasks ≤ %s" % d["max_open"])
+    if has_session_budget(prof):
+        known = balance_known(balance_cache().get(prof.label))
+        parts.append("session budget: " + session_budget_settings(prof, known[1] if known else "USD"))
     if d.get("fallback") and not prof.fallback_from:       # a profile used as a fallback does not chain further
         part = "fallback: %s" % d["fallback"]
         if profs is not None and fallback_target(prof, profs) is None:
@@ -2425,8 +2448,9 @@ def describe_profile(prof, profs=None):
     return " · ".join(parts)
 
 
-def profile_lines(where, data=None):
-    """Effective profile of every provider for a directory (orch status, profile show)."""
+def profile_lines(where, data=None, budget=True):
+    """Effective profile of every provider for a directory (orch status, profile show). `orch status` passes
+    budget=False: its API keys lines already carry the session budget."""
     if data is None:
         data, err = load_profiles()
         if err:
@@ -2443,6 +2467,9 @@ def profile_lines(where, data=None):
             continue
         lines.append("  %-12s %s" % (display_name(provider),
                                       describe_profile(prof, provider_section(data, provider)[1])))
+        budget_prof = resolve_profile(provider, where, data=data, follow=False) if budget else None
+        if budget_prof and has_session_budget(budget_prof):
+            lines.append("  %-12s session: %s" % ("", session_budget_text(budget_prof)))
         configured = provider_section(data, provider)[1].get(prof.fallback_from) if prof.fallback_from else None
         if isinstance(configured, dict) and configured.get("rules"):
             lines.append("  %-12s rules of %s are not in force while it is exhausted" % ("", prof.fallback_from))
@@ -2456,6 +2483,16 @@ def parse_profile_value(field, raw):
     raw = raw.strip()
     if raw == "":
         return None
+    if field in SESSION_BUDGET_FIELDS:
+        import math
+        try:
+            value = float(raw)
+            if not math.isfinite(value) or (value < 0 if field == "balance_floor" else not 0 < value <= 100):
+                raise ValueError
+            return value
+        except ValueError:
+            raise SystemExit("orch: --%s must be %s" % (field.replace("_", "-"),
+                             "a nonnegative amount" if field == "balance_floor" else "a percentage above 0 and up to 100"))
     if field in LIST_FIELDS:
         return [x.strip() for x in raw.split(",") if x.strip()]
     if field == "write":
@@ -2668,6 +2705,12 @@ def cmd_profile(a):
             try:
                 p = resolve_profile(provider, where, data=data)
                 out[provider] = {"profile": p.name, "source": p.source, "label": p.label, "settings": p.data}
+                configured = resolve_profile(provider, where, data=data, follow=False)
+                if has_session_budget(configured):
+                    out[provider]["session_budget"] = dict(session_budget_figure(configured) or {},
+                                                         text=session_budget_text(configured),
+                                                         settings={f: configured.data[f] for f in SESSION_BUDGET_FIELDS
+                                                                   if f in configured.data})
                 if p.fallback_from:
                     out[provider].update({"fallback_from": p.fallback_from, "fallback_cause": p.fallback_cause})
             except ProfileError as ex:
@@ -2772,12 +2815,16 @@ def cmd_profile(a):
                                    ("write", a.write), ("use_for", a.use_for), ("prefer_for", a.prefer_for),
                                    ("rules", a.rules), ("max_open", a.max_open), ("home", a.home),
                                    ("codex_profile", a.codex_profile), ("fast_model", a.fast_model),
-                                   ("base_url", a.base_url), ("fallback", a.fallback)) if v is not None}
+                                   ("base_url", a.base_url), ("fallback", a.fallback),
+                                   ("session_soft", a.session_soft), ("session_hard", a.session_hard),
+                                   ("balance_floor", a.balance_floor)) if v is not None}
         for opt in a.opt or []:
             f, sep, v = opt.partition("=")
             if not sep:
                 raise SystemExit("orch: --opt FIELD=VALUE")
             given[f.strip()] = v
+        if provider not in BALANCE_PROVIDERS and any(f in given for f in SESSION_BUDGET_FIELDS):
+            raise SystemExit("orch: %s has no balance API; session budgets require a provider balance" % provider)
         bad = [f for f in given if f not in allowed]
         if bad:
             raise SystemExit("orch: %s profiles have no field %s (available: %s)" % (provider, ", ".join(bad),
@@ -2795,6 +2842,9 @@ def cmd_profile(a):
                 if f == "fallback":
                     notes += check_fallback(provider, name, v, sec["profiles"])
                 prof[f] = v
+        if prof.get("session_soft") is not None and prof.get("session_hard") is not None \
+                and prof["session_soft"] >= prof["session_hard"]:
+            raise SystemExit("orch: session-soft must be below session-hard")
         if a.default:
             sec["default"] = name
         save_profiles(data)
@@ -2861,27 +2911,50 @@ def instruction_files(cwd):
     return [(d, name) for d in dirs for name in INSTRUCTION_FILES if (d / name).is_file()]
 
 
-def expand_imports(path, native, seen, depth=0):
+def main_folder_twin(cwd):
+    """f(path) → that path's copy in the project folder, when a worktree lacks it: a worktree holds no git-ignored files,
+    such as notes on this machine. None outside a worktree."""
+    cwd = Path(cwd).resolve()
+    r = git(["rev-parse", "--show-toplevel"], cwd) if cwd.is_dir() else None
+    if r is None or r.returncode != 0 or not r.stdout.strip():
+        return None
+    top, main = Path(r.stdout.strip()).resolve(), project_root(cwd).resolve()
+    if top == main:
+        return None
+
+    def twin(target):
+        try:
+            copy = main / target.relative_to(top)
+        except ValueError:
+            return target
+        return copy if copy.is_file() else target
+    return twin
+
+
+def expand_imports(path, native, seen, depth=0, twin=None):
     """Text of an instruction file with whole-line @imports inlined (files the agent reads itself are skipped)."""
     seen.add(path.resolve())
     text = path.read_text(encoding="utf-8", errors="replace")
 
     def inline(m):
         target = (path.parent / os.path.expanduser(m.group(1))).resolve()
+        if twin and not target.is_file():
+            target = twin(target)
         if target.name in native or target in seen or depth >= 3 or not target.is_file():
             return "" if target.name in native or target in seen else m.group(0)
-        return expand_imports(target, native, seen, depth + 1)
+        return expand_imports(target, native, seen, depth + 1, twin)
     return IMPORT_RE.sub(inline, text)
 
 
 def build_context(cwd, native, out):
     """Write the project instructions an agent does not load natively to `out`; None if there are none."""
     parts, seen = [], set()
+    twin = main_folder_twin(cwd)
     for d, name in instruction_files(cwd):
         p = (d / name).resolve()
         if name in native or p in seen:
             continue
-        text = expand_imports(p, native, seen).strip()
+        text = expand_imports(p, native, seen, twin=twin).strip()
         if text:
             if len(text) > CONTEXT_LIMIT:
                 text = text[:CONTEXT_LIMIT] + "\n…[truncated]"
@@ -2903,6 +2976,11 @@ USAGE_FILE = ORCH_HOME / "usage.jsonl"
 
 def session_id():
     return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("ORCH_SESSION_ID") or None
+
+
+def learn_session_id(data):
+    if not session_id() and data.get("session_id"):
+        os.environ["ORCH_SESSION_ID"] = str(data["session_id"])
 
 
 def ledger_append(rec):
@@ -3888,15 +3966,26 @@ def fallback_event(announce=True):
     events, changed = [], False
     for provider in managed_providers(data):
         key = "%s|%s" % (canon, provider)
-        was = seen.get(key) if isinstance(seen.get(key), dict) else None
         try:
+            configured = resolve_profile(provider, where, data=data, follow=False)
             prof = resolve_profile(provider, where, data=data)
         except ProfileError:
             continue
+        if has_session_budget(configured) and session_id():
+            key += "|" + session_id()
+        was = seen.get(key) if isinstance(seen.get(key), dict) else None
         shown = display_name(provider)
         if prof.fallback_from:
             moved = {"from": prof.fallback_from, "to": prof.name}
-            if was == moved:
+            if was and all(was.get(k) == v for k, v in moved.items()):
+                continue
+            if prof.fallback_cause in ("floor", "session-hard", "session-soft"):
+                fig = session_budget_figure(configured) or {}
+                moved.update(cause=prof.fallback_cause, baseline_at=fig.get("baseline_at"), amount=fig.get("amount"))
+                seen[key], changed = moved, True
+                events.append("💡 %s moved to %s: %s (%s)" % (shown, prof.name,
+                              fallback_cause_text(prof.fallback_from, prof.fallback_cause),
+                              session_budget_text(configured, settings=False)))
                 continue
             seen[key], changed = moved, True
             label = provider + "@" + prof.fallback_from
@@ -3915,6 +4004,17 @@ def fallback_event(announce=True):
             del seen[key]
             changed = True
             if prof.name == was.get("from"):         # still bound to the configured profile: it is usable again
+                if was.get("cause") in ("floor", "session-hard", "session-soft"):
+                    fig = session_budget_figure(prof) or {}
+                    topped_up = fig.get("baseline_at") != was.get("baseline_at") or (
+                        fig.get("amount") is not None and was.get("amount") is not None
+                        and round(fig["amount"] - was["amount"], 8) >= 0.01)
+                    reason = "topped up" if topped_up else (
+                        "Claude is TIGHT" if was["cause"] == "session-soft" and claude_budget(where)[0] == "tight"
+                        else "budget clear")
+                    events.append("💡 %s returned to %s: %s (%s)" % (
+                                  shown, prof.name, reason, session_budget_text(prof, settings=False)))
+                    continue
                 events.append("💡 %s is usable again — %s in this project is back on it (it was on its fallback %s)"
                               % (scope_name(provider + "@" + prof.name), shown,
                                  scope_name(provider + "@" + str(was.get("to")))))
@@ -4170,6 +4270,183 @@ def balance_checked(entry):
     return max(times) if times else None
 
 
+def has_session_budget(prof):
+    return prof.provider in BALANCE_PROVIDERS and any(prof.data.get(f) is not None for f in SESSION_BUDGET_FIELDS)
+
+
+def session_budget_store():
+    """Read and validate without repairing: a broken baseline must never silently reset a budget."""
+    try:
+        import math
+        data = read_json(SESSION_BUDGET_FILE, {}, object_required=True)
+        for sessions in data.values():
+            if not isinstance(sessions, dict):
+                raise ValueError("expected sessions by scope")
+            for entry in sessions.values():
+                if not isinstance(entry, dict) or not balance_known({"amount": entry.get("baseline"),
+                        "currency": entry.get("currency")}) or not balance_known({"amount": entry.get("last"),
+                        "currency": entry.get("currency")}) or not parse_iso(str(entry.get("at") or "")):
+                    raise ValueError("invalid session baseline")
+                if not all(math.isfinite(entry[f]) for f in ("baseline", "last")):
+                    raise ValueError("invalid session baseline")
+        return data
+    except (StateError, ValueError, TypeError) as ex:
+        warn_state(SESSION_BUDGET_FILE, str(ex))
+        return None
+
+
+def session_budget_record(prof):
+    """Only hooks and run preflight write baselines. Lock, re-read, prune, then update this session."""
+    sid = session_id()
+    if not sid or not has_session_budget(prof) or balance_off():
+        return True
+    entry = balance_cache().get(prof.label)
+    known = balance_known(entry)
+    if not known or not parse_iso(str(entry.get("at") or "")) or balance_age(entry) or entry.get("error"):
+        return False
+    amount, currency = known
+    try:
+        with state_lock(ORCH_HOME / ".session_budget.lock"):
+            data = session_budget_store()
+            if data is None:
+                return False
+            cutoff = now() - dt.timedelta(days=7)
+            data = {scope: {s: e for s, e in sessions.items() if parse_iso(e["at"]) >= cutoff}
+                    for scope, sessions in data.items()}
+            data = {scope: sessions for scope, sessions in data.items() if sessions}
+            sessions = data.setdefault(prof.label, {})
+            old = sessions.get(sid)
+            if not old or old["currency"] != currency or round(amount - old["last"], 8) >= 0.01:
+                new = {"baseline": amount, "currency": currency, "at": iso_precise(now()), "last": amount}
+            else:
+                new = dict(old, last=amount)
+            if new == old:                # hooks run after every tool call: no change, no write
+                return True
+            sessions[sid] = new
+            write_json(SESSION_BUDGET_FILE, data)
+        _exhaustion_memo.clear()
+        return True
+    except (StateError, OSError) as ex:
+        warn_state(SESSION_BUDGET_FILE, str(ex))
+        return False
+
+
+def session_budget_figure(prof):
+    """The last known figure, however old: a balance only rises with a top-up, so age can't clear a budget and a failed
+    read can't make a session flap. A run fetches a fresh one first; only a baseline insists on a recent figure."""
+    if not has_session_budget(prof) or balance_off():
+        return None
+    entry = balance_cache().get(prof.label)
+    known = balance_known(entry)
+    if not known or not parse_iso(str(entry.get("at") or "")):
+        return None
+    amount, currency = known
+    figure = {"amount": amount, "currency": currency}
+    if session_id():
+        data = session_budget_store()
+        baseline = (data or {}).get(prof.label, {}).get(session_id())
+        if data is None:
+            return None
+        if baseline and baseline["currency"] == currency and parse_iso(baseline["at"]) >= now() - dt.timedelta(days=7):
+            base = baseline["baseline"]
+            down = max(base - amount, 0)
+            figure.update(baseline=base, baseline_at=baseline["at"], down=down,
+                          percent=round(100 * down / base, 10) if base > 0 else 0)
+    return figure
+
+
+def session_budget_settings(prof, currency="USD"):
+    parts = []
+    for field, name in (("session_soft", "soft"), ("session_hard", "hard")):
+        if prof.data.get(field) is not None:
+            parts.append("%s %g%%" % (name, prof.data[field]))
+    if prof.data.get("balance_floor") is not None:
+        parts.append("floor " + money(prof.data["balance_floor"], currency).replace(".00", ""))
+    return ", ".join(parts)
+
+
+def session_budget_text(prof, settings=True):
+    fig = session_budget_figure(prof)
+    if not fig:
+        text = "no budget figure available"
+    elif "baseline" in fig:
+        text = "account down %s of %s (%.1f%%" % (money(fig["down"], fig["currency"]),
+                money(fig["baseline"], fig["currency"]), fig["percent"])
+        return text + ("; " + session_budget_settings(prof, fig["currency"]) if settings else "") + ")"
+    else:
+        text = "account " + money(fig["amount"], fig["currency"]) + "; no session baseline"
+    return text + (" (" + session_budget_settings(prof, fig["currency"] if fig else "USD") + ")" if settings else "")
+
+
+def session_budget_cause(prof, where):
+    fig = session_budget_figure(prof)
+    if not fig:
+        return None
+    floor = prof.data.get("balance_floor")
+    if floor is not None and fig["amount"] <= floor:
+        return "floor"
+    if "percent" not in fig:
+        return None
+    hard, soft = prof.data.get("session_hard"), prof.data.get("session_soft")
+    if hard is not None and fig["percent"] >= hard:
+        return "session-hard"
+    if soft is not None and fig["percent"] > soft and claude_budget(where)[0] != "tight":
+        return "session-soft"
+    return None
+
+
+def session_budget_hooks(where):
+    data, err = load_profiles()
+    if err or balance_off():
+        return
+    for provider in managed_providers(data):
+        try:
+            prof = resolve_profile(provider, where, data=data, follow=False)
+            if not has_session_budget(prof):
+                continue
+            session_budget_record(prof)
+            active = resolve_profile(provider, where, data=data)
+            if active.name != prof.name:
+                session_budget_record(active)
+        except ProfileError:
+            continue
+
+
+def session_budget_preflight(provider, where, override):
+    """Fresh figures before a run. The configured key comes first even while the project is on its fallback, or a top-up
+    would never bring it back; its failed read refuses only a run that would use it. Then a fallback's own budget."""
+    configured = resolve_profile(provider, where, override, follow=False)
+    prof = resolve_profile(provider, where, override)
+    if balance_off():
+        if has_session_budget(configured) or has_session_budget(prof):
+            print("warning: ORCH_BALANCE=off — running with no session budget")
+        return prof, None
+
+    def refresh(target):
+        var = target.data.get("key") or BALANCE_PROVIDERS[provider].get("key")
+        results = balance_refresh([{"scope": target.label, "provider": provider, "var": str(var or "")}])
+        data, error = results.get(target.label, (None, "no fresh balance"))
+        fresh = not error and balance_known(data) and session_budget_record(target)
+        _exhaustion_memo.clear()
+        return fresh
+
+    no_figure = "no fresh balance was available (or the session baseline is unreadable)"
+    fresh = refresh(configured) if has_session_budget(configured) else True
+    prof = resolve_profile(provider, where, override)
+    if prof.label == configured.label:
+        if not fresh:
+            return prof, no_figure
+    elif has_session_budget(prof) and not refresh(prof):
+        return prof, no_figure
+    cause = session_budget_cause(prof, where)
+    if cause in ("floor", "session-hard"):
+        return prof, "%s: %s" % (fallback_cause_words(cause), session_budget_text(prof))
+    if cause == "session-soft":
+        print("warning: %s is over its session budget; %s; no fallback move available" % (
+              prof.label, session_budget_text(prof)))
+    return prof, None
+
+
 def balance_age(entry):
     """'3h ago' once a figure is older than BALANCE_FRESH_SECONDS, else ''."""
     at = parse_iso(str(entry.get("at") or "")) if isinstance(entry, dict) else None
@@ -4240,7 +4517,13 @@ def balance_status_lines(where):
                 err = entry.get("error") if isinstance(entry, dict) else None
                 if isinstance(err, dict) and err.get("message"):
                     parts.append("last fetch failed: %s" % err["message"])
+            if has_session_budget(prof):
+                parts.append("session: " + session_budget_text(prof))
             lines.append("  %-18s %s" % (scope_name(scope), " · ".join(parts)))
+            if prof.fallback_from:
+                configured = resolve_profile(prof.provider, where, follow=False)
+                if has_session_budget(configured):
+                    lines.append("  %-18s session: %s" % (scope_name(configured.label), session_budget_text(configured)))
         return lines
     except Exception:
         return []
@@ -4734,7 +5017,13 @@ def cmd_run(a):
     cwd = Path(a.cd).resolve() if a.cd else project_dir()
     # profile of the project the worker works on: off / allowed models, write, effort cap / key or account
     try:
-        prof = resolve_profile(provider, cwd, a.profile)
+        prof, budget_denied = session_budget_preflight(provider, cwd, a.profile)
+        if budget_denied:
+            print("[SESSION_BUDGET] %s — %s. Take the fallback; do not work around it." % (prof.label, budget_denied))
+            ledger_append({"kind": "run", "session": session_id(), "project": canon_path(project_root(cwd)),
+                           "provider": provider, "label": prof.label, "model": a.model, "mode": a.mode,
+                           "status": "SESSION_BUDGET", "cost_usd": 0, "elapsed_s": 0})
+            return EXIT_QUOTA
         if prof.name == "off":
             print("PROFILE_OFF %s — executor disabled by the profile (%s) for %s." % (
                 provider, prof.source, canon_path(project_root(cwd))))
@@ -6158,6 +6447,7 @@ def cmd_hook(a):
         return 0      # inside a worker the plugin (if loaded at all) must stay silent: events belong to the orchestrator
     try:
         data = hook_input()
+        learn_session_id(data)
         if data.get("cwd") and not os.environ.get("ORCH_PROJECT_DIR") and not os.environ.get("CLAUDE_PROJECT_DIR"):
             os.environ["ORCH_PROJECT_DIR"] = data["cwd"]
         sid = data.get("session_id") or session_id()
@@ -6169,6 +6459,10 @@ def cmd_hook(a):
         entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT") or ""
         if not entrypoint.startswith("sdk"):
             heartbeat(sid)            # an active instance (for the budget's consumer count); a headless run doesn't count
+        try:
+            session_budget_hooks(project_dir())
+        except Exception:             # a budget problem must not cost this hook its other work
+            pass
         if a.event == "session-start":
             out = io_capture(lambda: cmd_status(SimpleNamespace(brief=True)))
             print(out.rstrip())
@@ -6711,7 +7005,7 @@ def cmd_status(a):
     if PROFILES_FILE.exists():
         where = project_dir()
         lines.append("Executor profiles for %s (orch profile show):" % canon_path(project_root(where)))
-        lines += profile_lines(where)
+        lines += profile_lines(where, budget=False)
     metas =[m for m in all_metas() if result_status(m) not in TERMINAL] if (project_dir() / ".orchestra").exists() else []
     if metas:
         lines.append("Open manual tasks (pooled and handed out; board .orchestra/MANUAL.md):")
@@ -6943,6 +7237,9 @@ def parse_args(argv):
     xg.add_argument("--default", action="store_true", help="provider default for every project")
     xg.add_argument("--path", help="bind to this directory (covers its subdirectories)")
     x = fs.add_parser("set", help="create or update a profile ('' removes a field)")
+    x.add_argument("--session-soft", help="account balance decrease in percent; ignored while Claude is TIGHT")
+    x.add_argument("--session-hard", help="maximum account balance decrease in percent, including TIGHT")
+    x.add_argument("--balance-floor", help="minimum account balance in its currency, including TIGHT")
     x.add_argument("provider")
     x.add_argument("name")
     x.add_argument("--key", help="NAME of the variable in secrets.env holding the API key (not the key itself)")

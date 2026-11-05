@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.0
+
+- **Session budgets for accounts with a balance API.** Profile fields `session_soft`, `session_hard` and
+  `balance_floor` move a project to its fallback as the account falls from its session baseline. Claude TIGHT
+  suspends only the soft threshold; top-ups reset the baseline, and hooks announce moves both ways with figures.
+  Budgeted runs require a fresh balance and refuse with exit 75 `SESSION_BUDGET` on a failed read or a hard stop,
+  including with `--force` or explicit `--profile`. Status and profile show expose the account changes; the status
+  line remains read-only for this budget. The existing spend limit continues independently.
+- **An `@` import reaches a worker in a worktree.** A worktree holds no git-ignored files, so an import of one, such
+  as notes on the machine's environment, stayed a dead line. It now comes from the project folder.
+- **What a read ban covers, in the settings guide.** Only what its rules name, and only for DeepSeek and Claude
+  executors. A secret committed to the repository is the project's to replace and remove, not something a ban fixes;
+  until then, a reminder in the project rules warns every session.
+
 ## 0.21.0
 
 - **Project rules survive a key change.** `orch profile rules --set "TEXT"` records private directory requirements

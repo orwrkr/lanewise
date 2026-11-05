@@ -92,6 +92,52 @@ and refuses at the limit as usual, naming the fallback that takes over without t
 `spend_limits.json` is not exhaustion: nothing moves and runs refuse as above. Two 💡 events: when a project moves to
 its fallback and when it returns.
 
+## Per-session account budget
+
+For a provider with a balance API (currently DeepSeek), set any of these independent profile fields:
+
+```bash
+orch profile set deepseek client --session-soft 30 --session-hard 90 --balance-floor 1 --fallback personal
+```
+
+Percentages must be above 0 and at most 100, with soft below hard when both are set; the floor is nonnegative
+and uses the account's currency. An empty value removes a field. Other providers refuse these fields because
+they have no balance API.
+
+The first balance recorded by a hook or run preflight in a session becomes its baseline. It lives in
+`~/.orchestra/session_budget.json`, keyed by scope and session id, so compaction keeps it. Entries older than
+seven days are pruned on writes. A rise of at least 0.01 over the last recorded balance is a top-up and starts a
+new baseline. With no session id (a plain terminal), only the floor applies.
+
+After existing availability and spend-limit checks, the causes are checked in this order:
+
+1. `floor`: the account balance is at or below `balance_floor`.
+2. `session-hard`: the account has fallen by at least `session_hard` percent of the baseline.
+3. `session-soft`: the account has fallen by more than `session_soft` percent, unless Claude is **TIGHT**.
+
+A cause moves the project to its fallback, including that profile's key and routing rules. While Claude is TIGHT,
+the soft cause clears and the project returns; when TIGHT ends it moves again if still over soft. Hard and floor
+apply during TIGHT too. A top-up clears the old percentage baseline. Hooks announce each move in either direction
+once, with figures and the reason for returning. No quota entry is needed for these causes.
+
+`orch status` and `orch profile show` (including `--json`) show, for example,
+`session: account down $0.42 of $15.50 (2.7%; soft 30%, hard 90%, floor $1)`.
+These are **account changes**, including other tools and people, not the session's own spending. Parallel sessions
+have separate baselines and count each other's account spending too; this errs on the safe side.
+
+Every run on a budgeted profile fetches a fresh balance synchronously (five-second timeout). A failed fetch or a
+broken baseline store refuses with exit **75**, header and usage status `SESSION_BUDGET`; take the fallback and
+do not work around it. A hard cause without an available fallback, or with explicit `--profile`, refuses the same
+way. Soft without a fallback only warns. `--force` never bypasses these checks. `ORCH_BALANCE=off` deliberately
+disables the session budget: runs warn once and proceed. Before the first figure, profile resolution infers no
+exhaustion. An old figure or a failed read keeps the last known amount, so nothing moves because of it: a balance
+rises only with a top-up. A run always reads the configured key first, even while the project is on its fallback,
+so a top-up brings the project back. The status line adds nothing and only reads the cache and baseline;
+it never fetches a balance or writes a baseline.
+
+The spend limit continues alongside this budget, unchanged: either can stop or reroute a run first, and
+`continue`/`stop`/`evaluate` retain their existing meanings for the estimate of `orch`'s own runs.
+
 ## Prices
 
 `prices.json` holds dated entries (a price `from` a date, for promotions that end) and, for DeepSeek, peak windows:
@@ -126,7 +172,8 @@ profile has a `fallback` to that profile.
   status`) and the 💡 events are unchanged.
 - **When fetched**: `orch balance [SCOPE …] [--json]` always; `orch status` and `orch spend` when the figure is older
   than 10 minutes; the end of each `orch run` for its scope; SessionStart starts a detached `orch balance --quiet`
-  when it is stale. 5-second timeout everywhere; a failure never fails the command. The status line only reads the
+  when it is stale. A budgeted run also fetches before starting. 5-second timeout everywhere; outside session-budget
+  preflight a failure never fails the command. The status line only reads the
   file. `ORCH_BALANCE=off` stops every request.
 - **Which providers**: only what an ordinary key can read: DeepSeek. OpenAI (Codex key), Anthropic (Claude key) and
   Google (Gemini API, Vertex AI) offer none, so those scopes show "no balance API: see `orch spend`" and keep the

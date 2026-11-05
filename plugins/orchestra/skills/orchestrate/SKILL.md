@@ -89,7 +89,8 @@ the project rules (CLAUDE.md, AGENTS.md) itself — put only the task in the pro
    On timeout or a spend limit `orch` stops the executor's whole process tree.
 6. Exit 75: limit/balance/capacity — take the fallback; `orch quota` records the block (a profile has its own key,
    `deepseek@work`) — go straight to the fallback. `SPEND_LIMIT` — the scope hit its USD cap (`orch spend`,
-   `orch guide spend`): route to a lane that doesn't bill that key. `PROFILE_OFF` / `PROFILE_DENIED` — the profile
+   `orch guide spend`): route to a lane that doesn't bill that key. `SESSION_BUDGET` — the account's session budget
+   or no fresh balance: take the fallback, don't work around it. `PROFILE_OFF` / `PROFILE_DENIED` — the profile
    doesn't allow it: pick an allowed slot, don't work around it.
 7. **Always verify** the result (diff, tests, build), then cross-review if the code is significant.
 8. Executors don't delegate further: a BLOCKED asking for another executor or for permissions is yours to resolve.

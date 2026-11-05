@@ -51,6 +51,8 @@ tasks to use it for, free-form rules.
   project / directory binding → provider default → the built-in `default`.
 - `orch` enforces `off`, `models`, the effort ceiling, the write ban and `max_open`; you honour `use_for`,
   `prefer_for` and `rules` when routing. A broken `profiles.json` refuses runs rather than silently re-enabling.
+- Session account budgets: `--session-soft PCT`, `--session-hard PCT`, `--balance-floor N` (DeepSeek only;
+  empty values clear fields). Baselines live in `~/.orchestra/session_budget.json`; see `orch guide spend`.
 - `orch profile rules --set "TEXT"` records project-wide operator requirements; `--path /path/to/dir` covers a directory,
   and `--clear` removes the entry. `orch profile rules` shows all applicable entries.
 - A `fallback` is resolved by `orch` itself: while the profile's key is exhausted (spend limit reached, or an
@@ -149,3 +151,11 @@ the place for plugin state, not for the project's own notes. There are three pla
 - Project rules (`orch profile rules`) are private to this machine and survive a key change. `orch` shows them only
   to you, the orchestrator: follow them when routing, and carry what an executor needs into its task.
 - A profile's `rules` belong to that key and lapse with its fallback. `orch` shows them to you the same way.
+
+A project's read ban (`permissions.deny` in `.claude/settings*.json`) covers only what its rules name; other
+git-ignored files, such as notes on the machine's environment, stay readable. A worktree holds only tracked files. What
+the project's instructions import with `@` still reaches a worker there, from the project folder; carry anything else
+it needs into its task. The bans bind DeepSeek and Claude executors, not Codex or manual agents, so keep tasks near
+banned files away from those two; in a worktree only the tracked `settings.json` applies. A secret committed to the
+repository is already compromised: the project replaces and removes it, and no ban fixes that. Until it is gone, keep a
+reminder in the project rules, so every session warns about it.

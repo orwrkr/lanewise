@@ -66,8 +66,8 @@ else
   say "orch → ~/.local/bin/orch"
 fi
 case ":$PATH:" in
-  *":$HOME/.local/bin:"*) ;;
-  *) warn "~/.local/bin is not in PATH. Add to ~/.bashrc:  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  *":$HOME/.local/bin:"*) OFF_PATH=0 ;;
+  *) OFF_PATH=1 ;;
 esac
 
 HOME_DIR="${ORCH_HOME:-$HOME/.orchestra}"
@@ -82,10 +82,24 @@ if [[ $had_registry == 1 ]]; then
   warn "Your personal registry $HOME_DIR/providers.yaml overrides the built-in one: copy new entries into it"
   warn "  from plugins/orchestra/registry/providers.yaml or recreate it: $PY \"$ORCH\" registry init --force"
 fi
-grep -q '✔ codex CLI' <<<"$DOCTOR" || warn "Codex CLI not found: npm i -g @openai/codex && codex login"
-grep -q '✔ DEEPSEEK_API_KEY\|✔ deepseek@' <<<"$DOCTOR" || \
+grep -q '✔ Codex CLI' <<<"$DOCTOR" || warn "Codex CLI not found: npm i -g @openai/codex && codex login"
+grep -q '✔ DEEPSEEK_API_KEY\|✔ DeepSeek@' <<<"$DOCTOR" || \
   warn "DeepSeek: put the key as a DEEPSEEK_API_KEY=sk-… line in $HOME_DIR/secrets.env (not in the repository)"
 say "Executor profiles: orch profile show · manual task pool: /orchestra:manual · session usage: orch usage"
 say "DeepSeek as the lead instead of Claude: orch launch deepseek [--no-claude] (from a terminal)"
 say "Claude budget mode (use the 5-hour window before it expires): set \"orch statusline\" as your status line (orch guide budget)"
 say "What the plugin created outside Claude Code: orch footprint · uninstall: bash uninstall.sh [--purge]"
+if [[ $OFF_PATH == 1 ]]; then       # last, so that it is the line the user reads
+  echo
+  warn "~/.local/bin is not in PATH, so orch is not found yet. Add it in Git Bash / bash:"
+  cat <<'EOF'
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+  then run: source ~/.bashrc   (or open a new terminal)
+EOF
+  if [[ $WIN == 1 ]]; then
+    echo "  In PowerShell / cmd (orch.cmd) add it to your user PATH, then open a new terminal:"
+    cat <<'EOF'
+    [Environment]::SetEnvironmentVariable('Path', "$env:USERPROFILE\.local\bin;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
+EOF
+  fi
+fi

@@ -611,6 +611,7 @@ TW="$REPO"
 grep -q "an executor in the Orchestra system" "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "TASK.md: executor role for the manual agent" || bad "role missing"
 grep -q 'Project rules.*`CLAUDE.md`' "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "TASK.md points to the project rules" || bad "rules pointer missing"
 grep -q "AGENT:" "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "protocol asks the agent to name itself" || bad "AGENT line missing"
+grep -q "only that task.s RESULT.md and, for a task that changes files, its own worktree" "$TW/.agents/rules/orchestra-task.md" 2>/dev/null && ok "the rule allows a writing task its own worktree" || bad "rule does not mention the task worktree"
 grep -q "trigger: always_on" "$TW/.agents/rules/orchestra-task.md" 2>/dev/null && ok "Antigravity workspace rule in the project folder" || bad "rule file missing"
 git -C "$TW" status --porcelain | grep -q "orchestra\|\.agents" && bad "git status shows task files: $(git -C "$TW" status --porcelain)" || ok "rule and task files stay out of git status"
 out=$($ORCH handoff take "$PID"); expect_rc 1 $? "second take refuses an already assigned task"
@@ -4069,6 +4070,47 @@ $ORCH registry init >/dev/null; out=$($ORCH registry path); contains "$out" "$OR
 out=$($ORCH doctor); ok "doctor runs (rc=$?)"
 contains "$out" "DEEPSEEK_API_KEY *set" "doctor sees the DeepSeek key"
 contains "$out" "Codex login *Logged in" "doctor checks the codex login"
+contains "$out" "✔ Codex CLI" "doctor prints the Codex CLI row the way install.sh greps for it"
+# install.sh greps doctor's output: each pattern it greps for must occur in a real doctor table (no drift in the wording)
+INSTALL_SH="$PLUGIN/../../install.sh"
+cx_pat=$(sed -n "s/^grep -q '\([^']*\)' <<<\"\$DOCTOR\" || warn \"Codex CLI not found.*/\1/p" "$INSTALL_SH")
+[[ -n "$cx_pat" ]] && ok "install.sh: the Codex pattern is found ($cx_pat)" || bad "install.sh: Codex pattern not found"
+contains "$out" "$cx_pat" "install.sh's Codex pattern occurs in doctor's output"
+ds_pat=$(sed -n "s/^grep -q '\([^']*\)' <<<\"\$DOCTOR\" || .*/\1/p" "$INSTALL_SH" | grep -F DEEPSEEK | head -1)
+contains "$out" "$ds_pat" "install.sh's DeepSeek pattern occurs in doctor's output"
+bash -n "$INSTALL_SH" && ok "install.sh parses" || bad "install.sh has a syntax error"
+tail_install=$(tail -14 "$INSTALL_SH")
+contains "$tail_install" "OFF_PATH == 1" "install.sh: the PATH warning is the last thing it prints"
+doctor_paths=$($PY -B - "$(native "$PLUGIN/bin/orch")" "$(native "$T/doctor-paths")" <<'EOF'
+import contextlib, importlib.machinery, importlib.util, io, os, shutil, sys
+from pathlib import Path
+from unittest import mock
+loader = importlib.machinery.SourceFileLoader("orch", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("orch", loader)); loader.exec_module(m)
+root = Path(sys.argv[2]); (root / ".local" / "bin").mkdir(parents=True)
+# 1. launchers missing: the old hint; present: the folder is off PATH
+hint = m.orch_path_hint(root)
+print("MISSING-OK" if "install.sh" in hint or "ln -s" in hint else "MISSING-BAD " + hint)
+(root / ".local" / "bin" / ("orch.cmd" if m.IS_WINDOWS else "orch")).write_text("x", encoding="utf-8")
+hint = m.orch_path_hint(root)
+print("PRESENT-OK" if "not on PATH" in hint and "install.sh" not in hint else "PRESENT-BAD " + hint)
+# 2. no Codex found: the row is optional ("·"), and it alone does not fail doctor
+real_which = shutil.which
+def which(name, *a, **k):
+    return "/path/to/orch" if name == "orch" else None if name == "codex" else real_which(name, *a, **k)
+buf = io.StringIO()
+with mock.patch.object(m, "find_codex", lambda: (None, "")), mock.patch("shutil.which", which), \
+     contextlib.redirect_stdout(buf):
+    rc = m.cmd_doctor(None)
+out = buf.getvalue()
+row = [l for l in out.splitlines() if "Codex CLI" in l]
+print("NOCODEX-ROW-OK" if row and row[0].startswith("·") else "NOCODEX-ROW-BAD %r" % row)
+print("NOCODEX-RC-OK" if rc == 0 else "NOCODEX-RC-BAD rc=%s\n%s" % (rc, out))
+EOF
+)
+for k in MISSING-OK PRESENT-OK NOCODEX-ROW-OK NOCODEX-RC-OK; do
+  contains "$doctor_paths" "$k" "doctor: $k"
+done
 
 echo "── guide, footprint, plugin wiring"
 out=$($ORCH guide); contains "$out" "manual" "guide lists the reference parts"

@@ -5181,7 +5181,7 @@ The task file is `.orchestra/handoffs/<id>/TASK.md`; carry it out strictly by th
 - At the start — `.orchestra/handoffs/<id>/RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: <product · model>`.
 - At the end — the same file with `STATUS: DONE | BLOCKED | FAILED` and the report sections: without it the
   orchestrator will not know the task is finished.
-- The project rules ({rules}) are mandatory; scope — that task only; in `.orchestra/` — only that task's RESULT.md.
+- The project rules ({rules}) are mandatory; scope — that task only; in `.orchestra/` — only that task's RESULT.md and, for a task that changes files, its own worktree.
 - A task that changes files names its own worktree: work only inside it.
 """
 AGENT_RE = re.compile(r"^\s*AGENT:\s*(.+?)\s*$", re.M)
@@ -6635,6 +6635,17 @@ def cmd_status(a):
     return 0
 
 
+def orch_path_hint(home=None):
+    """The doctor hint for an `orch` that is not on PATH: the launchers may exist already, with their folder off PATH."""
+    bindir = Path(home or Path.home()) / ".local" / "bin"
+    if (bindir / ("orch.cmd" if IS_WINDOWS else "orch")).exists():
+        return ("the launcher exists in ~/.local/bin, but that folder is not on PATH: add it, then open a new terminal "
+                "(README: If orch isn't found)")
+    if IS_WINDOWS:
+        return "bash install.sh (creates the orch and orch.cmd launchers in ~/.local/bin)"
+    return "ln -s %s ~/.local/bin/orch" % Path(__file__).resolve()
+
+
 def cmd_doctor(a):
     import shutil
     import subprocess
@@ -6652,7 +6663,8 @@ def cmd_doctor(a):
         bash = find_bash()
         row("bash (shell adapters)", bool(bash), bash or "needed only for shell adapters: Git for Windows", optional=True)
     cx, note = find_codex()
-    row("Codex CLI", bool(cx), (cx + note) if cx else "npm i -g @openai/codex && codex login (or ORCH_CODEX_BIN)")
+    row("Codex CLI", bool(cx), (cx + note) if cx else "optional: npm i -g @openai/codex && codex login (or ORCH_CODEX_BIN)",
+        optional=True)
     if cx:
         try:
             r = subprocess.run(exe_command(cx) + ["login", "status"], capture_output=True, text=True, timeout=20,
@@ -6692,9 +6704,7 @@ def cmd_doctor(a):
                             "%s — %s" % (info, login_hint(home)), optional=True)
                     except Exception as ex:
                         row("Codex@%s login" % name, False, str(ex), optional=True)
-    hint = "bash install.sh (creates the orch and orch.cmd launchers in ~/.local/bin)" if IS_WINDOWS else \
-        "ln -s %s ~/.local/bin/orch" % Path(__file__).resolve()
-    row("orch on PATH", bool(shutil.which("orch")), shutil.which("orch") or hint)
+    row("orch on PATH", bool(shutil.which("orch")), shutil.which("orch") or orch_path_hint())
     row("registry", registry_path().exists(), str(registry_path()))
     row("adapters", True, ", ".join(sorted({p.name for b in (ORCH_HOME / "adapters", PLUGIN_ROOT / "adapters")
                                              if b.exists() for p in b.iterdir()

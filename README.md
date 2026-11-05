@@ -28,7 +28,8 @@ Executor reports beginning `STATUS: BLOCKED` or `PARTIAL` keep that outcome in t
 A Codex model at capacity exits 75 and blocks only that model for about 10 minutes. Native Windows sandbox
 setup for tests using temporary repositories is described in the Codex [registry notes](plugins/orchestra/registry/providers.yaml).
 
-Works with Claude Code in WSL/Linux and natively on Windows. Python ≥ 3.8 (standard library only) and git.
+Works with Claude Code in WSL/Linux and natively on Windows. Needs Claude Code itself (installed and logged in),
+Python ≥ 3.8 (standard library only) and git; npm only for the optional Codex line below.
 
 ## Quick start
 
@@ -37,13 +38,27 @@ git clone https://github.com/orwrkr/orchestra && cd orchestra
 bash install.sh                 # Git Bash on Windows; inside WSL for a WSL installation
 ```
 
+If `orch` isn't found in a new terminal, `~/.local/bin` is not on your PATH (Claude Code's own installer
+puts `claude` in that folder too, so you may already have it there). In Git Bash or bash:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+```
+
+In PowerShell on Windows (for `orch.cmd`; then open a new terminal):
+
+```powershell
+[Environment]::SetEnvironmentVariable('Path', "$env:USERPROFILE\.local\bin;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
+```
+
 Or from inside Claude Code, without a clone (no terminal `orch` command then):
 
 ```
 /plugin install orchestra --marketplace orwrkr/orchestra
 ```
 
-Then just give Claude Code a multi-step task — the `orchestrate` skill takes over. Optional executors:
+Then `cd` into your project, start `claude` and run `/orchestra:status`; `claude plugin list` shows whether the
+plugin is enabled. Give Claude Code a multi-step task and the `orchestrate` skill takes over. Optional executors:
 
 ```bash
 npm i -g @openai/codex && codex login     # Codex
@@ -51,6 +66,8 @@ npm i -g @openai/codex && codex login     # Codex
 # Codex / Claude on an API key: orch profile set codex work --key CODEX_API_KEY_WORK && orch profile use codex work
 orch doctor                               # what is available
 ```
+
+In `orch doctor`, `✔` is fine, `·` is optional and not set up, `✘` is a problem to fix.
 
 | In a session | |
 |---|---|

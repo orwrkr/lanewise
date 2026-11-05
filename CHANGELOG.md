@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.1
+
+- **`orch` on PATH, said where a new user looks.** `install.sh` now prints the PATH advice last, after the doctor
+  table and the pointers (only when `~/.local/bin` is really off PATH), with `source ~/.bashrc` or a new terminal and,
+  on Windows, the PowerShell line. The root README's Quick start has the same under "If `orch` isn't found", worded
+  as conditional, and the plugin README points to it. The doctor row `orch on PATH` no longer tells you to re-run
+  `install.sh` when the launcher already exists: it says the folder is off PATH.
+- **No false alarms about Codex.** `install.sh` grepped for `Codex CLI` in the wrong case and warned that Codex was
+  missing on every machine; fixed, and the DeepSeek profile pattern had the same mismatch. The `Codex CLI` row of
+  `orch doctor` is optional (`·`, no exit 1), as the README says. The self-test checks that the patterns `install.sh`
+  greps for occur in doctor's output.
+- **What to do after installing.** The Quick start names Claude Code among the requirements, says what to run next
+  (`claude`, `/orchestra:status`, `claude plugin list`) and how to read `✔`, `·` and `✘` in `orch doctor`.
+- **The Antigravity rule no longer contradicts a writing task**: outside the task's RESULT.md it allows the task's
+  own worktree under `.orchestra/`.
+
 ## 0.20.0
 
 - **The agent's window stays on the project folder.** The operator keeps one folder open in the agent and never

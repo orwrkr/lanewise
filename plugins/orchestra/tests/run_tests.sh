@@ -1356,8 +1356,11 @@ m.fmt_tok = str
 m.session_tokens = lambda sid, path, native: {"a@work": {"input": 1, "output": 10}, "B@Work": {"input": 2, "output": 20}}
 spend = [("a@work", "Same@work", "est. $1"), ("b@work", "Same@work", "est. $9"), ("c@work", "Same@work", "est. $2")]
 out = m.session_status_part("s", None, None, spend)
-assert "Same@work 1/10 (est. $1)" in out and "Same@work 2/20 (est. $9)" in out, out
-assert out.index("2/20") < out.index("Same@work (est. $2)"), out
+# "B@Work" sorts before "a@work" (the account key as given), then the spend-only scope c@work
+assert out == "Session in/out: Same@work 2/20 (est. $9)\n  Same@work 1/10 (est. $1)\n  Same@work (est. $2)", out
+m.session_tokens = lambda sid, path, native: {}
+assert m.session_status_part("s", None, None, spend) == "Same@work (est. $1)\n  Same@work (est. $9)\n  Same@work (est. $2)", "no tokens: no heading, one line each"
+assert m.session_status_part("s", None, None, []) is None, "nothing to show"
 EOF
 $PY -B - "$PLUGIN/bin/orch" <<'EOF' && ok "directory keys equal in Windows and WSL; profile quota keys" || bad "canon_path / key_chain"
 import importlib.machinery, importlib.util, sys
@@ -2211,8 +2214,9 @@ contains "$out" "^Session in/out: DeepSeek 1.5k/988 (est. \$3.0[0-9]/\$10, accou
   "status line: the money joins the counter of the same scope, in one pair of parentheses"
 [[ $(grep -o "DeepSeek" <<<"$out" | wc -l) -eq 1 ]] && ok "status line: the name is not repeated" || bad "status line: the name repeats: $out"
 out=$(sl_sess s-sl-other)
-contains "$out" "^Session in/out: Codex 400/40 · DeepSeek (est. \$3.0[0-9]/\$10, account \$15.09, 3h ago)\$" \
-  "status line: a scope with money and no tokens follows the counters"
+contains "$out" "^Session in/out: Codex 400/40" "status line: a scope with money and no tokens follows the counters"
+contains "$out" "^  DeepSeek (est. \$3.0[0-9]/\$10, account \$15.09, 3h ago)" \
+  "status line: a spend-only scope gets a line of its own, indented"
 ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend limit deepseek off >/dev/null
 out=$(sl_sess s-sl-same); contains "$out" "^Session in/out: DeepSeek 1.5k/988 (est. \$3.0[0-9], account \$15.09, 3h ago)\$" \
   "status line: the limit off leaves the estimate and the account figure"
@@ -2518,9 +2522,10 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
     f.write(json.dumps(rec) + "\n")
 EOF
 out=$(fb_sl_tok "$SXA")
-contains "$out" "^Session in/out: .* · DeepSeek@sy (fallback: DeepSeek@sx at its limit; est. \$0.00/\$5)\$" "on the fallback: the note and the estimate join the session in/out line"
-grep -q "^DeepSeek@sy" <<<"$out" && bad "on the fallback: with session tokens the note has a line of its own" \
-  || ok "on the fallback: with session tokens it has no line of its own"
+contains "$out" "^Session in/out: .*" "on the fallback: the session in/out heading carries the first counter"
+contains "$out" "^  DeepSeek@sy (fallback: DeepSeek@sx at its limit; est. \$0.00/\$5)" "on the fallback: the note and the estimate get an account line of their own"
+grep -q "^  DeepSeek@sy" <<<"$out" && ok "on the fallback: with session tokens the note is indented under the counters" \
+  || bad "on the fallback: with session tokens the note is not under the counters"
 # the fallback's own spend follows the note, at any level
 fb_spent deepseek@sy 4.5
 out=$(fb_sl "$SXA")
@@ -2543,7 +2548,7 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
                         "usage": {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10}}) + "\n")
 EOF2
 out=$(fb_sl_tok "$SXA")
-contains "$out" " · DeepSeek@sy 100/10 (fallback: DeepSeek@sx at its limit; est. \$4.5[0-9]/\$5, account \$9.75)\$" \
+contains "$out" "^  DeepSeek@sy 100/10 (fallback: DeepSeek@sx at its limit; est. \$4.5[0-9]/\$5, account \$9.75)\$" \
   "on the fallback: the tokens, the note, the estimate and the account figure share one pair of parentheses"
 rm -f "$FDIR/balances.json"
 # the cause words of the other causes
@@ -2728,7 +2733,8 @@ BWHERE="$BD"; out=$(BAL_MODE=off bal status); BWHERE=""
 contains "$out" "DeepSeek@fresh  *est. \$0.00 of \$10 (manual.*) · account balance not fetched yet" "status: a key scope with no balance still has its line"
 # a provider with no balance API: our part, and orch status says so
 bal profile use codex work --path "$BE" >/dev/null
-out=$(sl_bal "$BE"); contains "$out" "^Codex@work (est. \$0.00/\$10) · DeepSeek@client (est. " "status line: a provider with no balance API shows only our part"
+out=$(sl_bal "$BE"); contains "$out" "^Codex@work (est. \$0.00/\$10)\$" "status line: a provider with no balance API shows only our part"
+contains "$out" "^  DeepSeek@client (est. " "status line: the next scope is on its own indented line"
 lacks "$out" "Codex@work (est. \$0.00/\$10, account" "status line: and no account figure follows it"
 BWHERE="$BE"; out=$(BAL_MODE=off bal status); BWHERE=""
 contains "$out" "Codex@work  *est. \$0.00 of \$10 (manual.*) · no balance API" "status: a provider with no balance API says so"
@@ -3146,9 +3152,15 @@ out=$(printf '{"session_id":"sess-tok","transcript_path":"%s","workspace":{"curr
       "$(native "$TCFG/sess-tok.jsonl")" "$(native "$REPO")" | $ORCH statusline)
 contains "$out" "Codex · 5h 81%" "status line: codex limits part"
 contains "$out" "week 20%" "status line: codex week part"
-contains "$out" "Session in/out: Claude 1.5k/150 +6.0k cache · Codex 400/40 · DeepSeek 500/60" "session tokens: claude from the transcript (with its cache reads), runs from the ledger"
+contains "$out" "Session in/out: Claude 1.5k/150 +6.0k cache" "session tokens: claude from the transcript (with its cache reads), runs from the ledger"
 [[ "$(sed -n 2p <<<"$out")" == "Codex · 5h 81%"* && "$(sed -n 3p <<<"$out")" == "Session in/out: "* ]] \
   && ok "Codex limits and session tokens are on lines of their own" || bad "status line layout: $out"
+sl3=$(sed -n 3p <<<"$out"); sl4=$(sed -n 4p <<<"$out"); sl5=$(sed -n 5p <<<"$out")
+sl3=${sl3%$'\r'}; sl4=${sl4%$'\r'}; sl5=${sl5%$'\r'}
+[[ "$sl3" == "Session in/out: Claude 1.5k/150 +6.0k cache" &&
+   "$sl4" == "  Codex 400/40" && "$sl5" == "  DeepSeek 500/60"* && "$(wc -l <<<"$out")" -eq 5 ]] \
+  && ok "session tokens: three accounts are three lines, the later ones indented by two spaces in the same order" \
+  || bad "session tokens: account lines: $out"
 out=$(printf '{"session_id":"sess-tok","transcript_path":"%s","workspace":{"current_dir":"%s"}}' \
       "$(native "$TCFG/sess-tok.jsonl")" "$(native "$REPO")" | $ORCH statusline --then "echo mine")
 contains "$out" "^mine  " "statusline --then: the operator's own line stays first"
@@ -3229,27 +3241,30 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
         f.write(line + "\n")
 EOF
 out=$(acct_sl sess-acct)
-contains "$out" "Session in/out: Claude 1.7k/170 +6.0k cache · Codex 500/50 · Codex@work 90/10 · DeepSeek@client 520/65 · DeepSeek@personal 100/10" \
-  "session tokens: one counter per account, plain account first, labels alphabetical, cache only where there is some"
+acct_block="Session in/out: Claude 1.7k/170 +6.0k cache"$'\n  Codex 500/50\n  Codex@work 90/10\n  DeepSeek@client 520/65\n  DeepSeek@personal 100/10'
+[[ "${out//$'\r'/}" == *"$acct_block"* ]] \
+  && ok "session tokens: one counter per account, plain account first, labels alphabetical, cache only where there is some" \
+  || bad "session tokens: account lines: $out"
 grep -qE "DeepSeek [0-9]|DeepSeek@other" <<<"$out" && bad "session tokens: a sum over the keys, or another session's run: $out" \
   || ok "session tokens: two keys of one provider are not added up"
-contains "$out" "Codex 500/50 · Codex@work" "a run without a label counts under its provider, with the plain codex runs"
+contains "$out" "^  Codex 500/50" "a run without a label counts under its provider, with the plain codex runs"
 contains "$out" "Claude 1.7k/170" "orch run claude on the default login adds up with the native thread"
 out2=$(acct_sl sess-acct); [[ "$out2" == "$out" ]] && ok "session tokens: a second refresh changes nothing" || bad "session tokens drifted on refresh: $out2"
 # a native session billed to a key profile counts under that profile's label, the default-login run stays apart
 acct profile set claude work --key ANTHROPIC_API_KEY_WORK >/dev/null
 out=$(acct_sl sess-acct ORCH_PROFILES=claude=work)
-contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 +6.0k cache (est. \$0.00/\$10) · Codex" "a native session on a key profile shows its label, with its money in the same parentheses"
+contains "$out" "^Session in/out: Claude 200/20" "a native session on a key profile keeps the default-login counter on the heading line"
+contains "$out" "^  Claude@work 1.5k/150 +6.0k cache (est. \$0.00/\$10)" "a native session on a key profile shows its label, with its money in the same parentheses"
 # its apiKeyHelper names that profile, so the thread keeps billing there while runs have moved to the fallback
 acct profile set claude personal >/dev/null
 acct profile set claude work --fallback personal >/dev/null
 acct quota set claude@work exhausted >/dev/null
 out=$(acct_sl sess-acct ORCH_PROFILES=claude=work)
-contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 +6.0k cache · Codex" "a native session keeps its key's label while runs use the fallback"
+contains "$out" "^  Claude@work 1.5k/150 +6.0k cache" "a native session keeps its key's label while runs use the fallback"
 acct quota clear claude@work >/dev/null
 acct profile set claude work --fallback none >/dev/null
 out=$(acct_sl sess-acct)
-contains "$out" "Session in/out: Claude 1.7k/170 +6.0k cache · Codex" "the same session on the default login adds up again"
+contains "$out" "^Session in/out: Claude 1.7k/170 +6.0k cache" "the same session on the default login adds up again"
 # an old-format cache entry (keyed by provider, no format mark) is rebuilt from the ledger with labels
 $PY - "$AH" <<'EOF'
 import json, os, sys, time
@@ -3265,7 +3280,8 @@ data = {"sess-old": {"files": {}, "ledger": {"deepseek": {"input": 600, "output"
 json.dump(data, open(cache, "w", encoding="utf-8"))
 EOF
 out=$(acct_sl sess-old)
-contains "$out" "Session in/out: DeepSeek@client 500/60 · DeepSeek@personal 100/10" "an old-format cache entry is rebuilt with labels"
+contains "$out" "^Session in/out: DeepSeek@client 500/60" "an old-format cache entry is rebuilt with labels"
+contains "$out" "^  DeepSeek@personal 100/10" "an old-format cache entry gives each account its own line"
 grep -qE "DeepSeek [0-9]" <<<"$out" && bad "old cache: the stale provider sum survived: $out" || ok "old cache: no stale provider sum next to the keys"
 out2=$(acct_sl sess-old); [[ "$out2" == "$out" ]] && ok "a rebuilt entry is not read twice" || bad "rebuilt entry drifted: $out2"
 $PY - "$AH" <<'EOF' && ok "the rebuilt entry carries the format mark" || bad "the rebuilt entry has no format mark"
@@ -3294,8 +3310,10 @@ data["sess-bad"] = {"format": 3, "files": {"x": "junk", "y": {"in": "a", "out": 
 json.dump(data, open(cache, "w", encoding="utf-8"))
 EOF
 out=$(acct_sl sess-bad); rc=$?
-[[ $rc -eq 0 ]] && contains "$out" "Session in/out: Codex 4/1 · Codex@work 10/2 · DeepSeek 3/1" "the status line survives a malformed cache entry and ledger lines" \
+[[ $rc -eq 0 ]] && contains "$out" "Session in/out: Codex 4/1" "the status line survives a malformed cache entry and ledger lines" \
   || bad "malformed entry: rc=$rc out=$out"
+[[ "${out//$'\r'/}" == *"Session in/out: Codex 4/1"$'\n  Codex@work 10/2\n  DeepSeek 3/1'* ]] \
+  && ok "malformed entry: the accounts keep their own lines and their order" || bad "malformed entry: account lines: $out"
 # end to end: the labels `orch run` writes (two deepseek keys, the default claude login) reach the status line
 acct profile set deepseek client --key DEEPSEEK_KEY_CLIENT >/dev/null
 acct profile set deepseek personal --key DEEPSEEK_KEY_PERSONAL >/dev/null
@@ -3304,10 +3322,12 @@ e2e() { CLAUDE_CODE_SESSION_ID=sess-e2e FAKE_CLAUDE=ok DEEPSEEK_KEY_CLIENT=sk-a 
 e2e deepseek --profile client "x"; expect_rc 0 $? "run on the first deepseek key"
 e2e deepseek --profile personal "x"; expect_rc 0 $? "run on the second deepseek key"
 e2e claude "x"; expect_rc 0 $? "run claude on the default login"
-line=$(acct_sl sess-e2e | grep "^Session in/out:")
-grep -qE "^Session in/out: Claude 1\.[0-9]k/[0-9]+ \+6\.4k cache · DeepSeek@client [0-9]+/[0-9]+ \+400 cache · DeepSeek@personal [0-9]+/[0-9]+ \+400 cache$" <<<"$line" \
-  && ok "end to end: two keys and the native login, three counters" || bad "end to end session line: $line"
-[[ "$line" == *"Claude 1.5k/150"* ]] && bad "end to end: the claude run did not add to the native thread: $line" \
+line=$(acct_sl sess-e2e); block=$(grep -A2 "^Session in/out:" <<<"$line")
+grep -qE "^Session in/out: Claude 1\.[0-9]k/[0-9]+ \+6\.4k cache" <<<"$block" &&
+  grep -qE "^  DeepSeek@client [0-9]+/[0-9]+ \+400 cache" <<<"$block" &&
+  grep -qE "^  DeepSeek@personal [0-9]+/[0-9]+ \+400 cache" <<<"$block" \
+  && ok "end to end: two keys and the native login, three counters on three lines" || bad "end to end session lines: $block"
+[[ "$block" == *"Claude 1.5k/150"* ]] && bad "end to end: the claude run did not add to the native thread: $block" \
   || ok "end to end: orch run claude adds to the native Claude counter"
 
 echo "── session tokens: cache reads (a third figure per account)"
@@ -3337,8 +3357,10 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
     f.write(rec("sess-cache", "codex", None, 400, 0, 40) + "\n")            # no cache reads: no third figure
 EOF
 out=$(acct_sl sess-cache)
-contains "$out" "Session in/out: Claude 1.3k/150 +28k cache · Codex 400/40 · DeepSeek@client 500/60 +3.0k cache" \
-  "session cache: the thread and its subagents add up, and a run's cache follows its account"
+cache_block="Session in/out: Claude 1.3k/150 +28k cache"$'\n  Codex 400/40\n  DeepSeek@client 500/60 +3.0k cache'
+[[ "${out//$'\r'/}" == *"$cache_block"* ]] \
+  && ok "session cache: the thread and its subagents add up, and a run's cache follows its account on its own line" \
+  || bad "session cache: account lines: $out"
 lacks "$out" "Codex 400/40 +" "session cache: an account with no cache reads shows no third figure"
 out2=$(acct_sl sess-cache); [[ "$out2" == "$out" ]] && ok "session cache: a second refresh counts the cache once" \
   || bad "session cache drifted on refresh: $out2"
@@ -3349,7 +3371,7 @@ $PY - "$(native "$T/cache-usage.json")" "$(native "$T/cache-line.txt")" <<'EOF' 
   && ok "session cache: the figures equal orch usage's cache column" || bad "session cache disagrees with orch usage"
 import json, sys
 rows = json.load(open(sys.argv[1], encoding="utf-8"))["rows"]
-line = [l for l in open(sys.argv[2], encoding="utf-8").read().splitlines() if l.startswith("Session in/out:")][0]
+line = open(sys.argv[2], encoding="utf-8").read()          # every account line of the session block
 def fmt(n):
     if n < 1000:
         return str(n)

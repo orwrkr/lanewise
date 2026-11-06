@@ -175,11 +175,25 @@ session doesn't write its numbers into the shared snapshot.
 Codex's limits are read the same way from its own session logs (`$CODEX_HOME/sessions/…`, an undocumented format
 parsed defensively) and shown as a `Codex subscription: …` line next to the Claude one, with `TIGHT: treat Codex
 as low` when a window or its projection reaches the reserve — see the `codex` profile's `reserve`/`week_reserve`.
-The status line gets two more lines: the Codex limits, and the current session's tokens per account,
-`Session in/out: Claude 370k/111k +28M cache · Codex 450k/84k`, cache reads as a third figure and left out when an
-account had none, which agrees with `orch usage`. An account is a profile label, so a provider whose usage goes to
-different accounts shows one counter each, never a sum: with a subscription login and two DeepSeek keys,
-`Session in/out: Claude 1.5k/150 +6.0k cache · Codex 400/40 · DeepSeek@client 500/60 · DeepSeek@personal 100/10`.
+The status line gets two more blocks: the Codex limits, and the current session's tokens per account, one account per
+line — the first on the heading line, each further one indented by two spaces — with cache reads as a third figure and
+left out when an account had none, which agrees with `orch usage`:
+
+```
+Session in/out: Claude 370k/111k +28M cache
+  Codex 450k/84k
+```
+
+An account is a profile label, so a provider whose usage goes to different accounts shows one counter each, never a
+sum: with a subscription login and two DeepSeek keys,
+
+```
+Session in/out: Claude 1.5k/150 +6.0k cache
+  Codex 400/40
+  DeepSeek@client 500/60
+  DeepSeek@personal 100/10
+```
+
 The plain account (the built-in profile) comes first within a provider, then the labels alphabetically. This session's
 own Claude thread counts under its key profile's label when it bills to a key, else as `Claude`, together with
 `orch run claude` on the same default login.

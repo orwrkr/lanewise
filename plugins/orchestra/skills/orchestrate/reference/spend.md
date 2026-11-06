@@ -166,7 +166,7 @@ profile has a `fallback` to that profile.
   `DeepSeek@client 1.5M/988k (est. $1.47/$10, account $15.09)`, joined to the session counter of the same name
   (`, 3h ago` after 30 minutes; `(est. $1.47, account $15.09)` when the limit is `off`; no account part before the
   first fetch or for a provider with no balance API; a limit that is not whole shows as it is, `$12.16`; a scope
-  with no tokens in this session follows the counters, and with no tokens at all it stands alone). `orch status` has a line per such scope under an `API keys (...)` heading that says where
+  with no tokens in this session follows the counters on a line of its own, and with no tokens at all it stands alone). `orch status` has a line per such scope under an `API keys (...)` heading that says where
   each number comes from: `est. $1.47 of $10 (manual, since Nov 03) · account $15.09 (checked 3m ago)`, or `no balance
   API`, or `last fetch failed: ...`. `orch spend` has an `account` column. The warning at 80% (`API spend:` in `orch
   status`) and the 💡 events are unchanged.

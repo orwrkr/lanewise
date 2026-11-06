@@ -1934,13 +1934,14 @@ def quietly(fn, *args):
 
 
 def session_status_part(sid, transcript_path, where=None, spend=None):
-    """'Session in/out: Claude 370k/111k +28M cache · DeepSeek@work 90k/9k (est. $0.99/$12, account $9.73)', or None
+    """'Session in/out: Claude 370k/111k +28M cache\n  DeepSeek@work 90k/9k (est. $0.99/$12, account $9.73)', or None
     with nothing to show. One counter per account (profile label), never a sum over a provider's accounts; cache reads
-    follow the in/out pair as '+N cache', left out when there are none. `spend` is
-    [(account label, display name, text)] from spend_status_items: each text joins the counter of the same account, in
-    parentheses, matched on the lowercase label (the ledger's key), since two accounts can display alike; a scope with
-    money but no tokens in this session follows the counters, and with no tokens at all the line is only those, with no
-    'Session in/out:' heading. Any error in the tokens costs only the tokens."""
+    follow the in/out pair as '+N cache', left out when there are none. One account per line: the first on the heading
+    line, each further one indented by two spaces. `spend` is [(account label, display name, text)] from
+    spend_status_items: each text joins the counter of the same account, in parentheses, matched on the lowercase label
+    (the ledger's key), since two accounts can display alike; a scope with money but no tokens in this session follows
+    the counters on a line of its own, and with no tokens at all the line is only those, with no 'Session in/out:'
+    heading. Any error in the tokens costs only the tokens."""
     counters = []
     if sid:
         try:
@@ -1960,7 +1961,7 @@ def session_status_part(sid, transcript_path, where=None, spend=None):
     loose = ["%s (%s)" % (name, text) for label, name, text in spend or () if label in extra]
     if not parts and not loose:
         return None
-    return ("Session in/out: " if parts else "") + " · ".join(parts + loose)
+    return ("Session in/out: " if parts else "") + "\n  ".join(parts + loose)
 
 
 def cmd_statusline(a):

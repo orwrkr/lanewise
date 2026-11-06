@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.29.0
+
+- **The session line gives each account its own line.** Since 0.27.0 every account's counter carried its cache reads,
+  so a session with a subscription login and several API accounts produced one long line
+  (`Session in/out: Claude 1.2M/180k +40M cache · DeepSeek@personal 805k/242k +28M cache (est. $3.81/$12.16,
+  account $6.84) · Codex 224k/19k +4.8M cache`) that the terminal wrapped at arbitrary places. The first account now
+  stands on the `Session in/out:` heading line and each further one follows on its own line, indented by two spaces; a
+  scope with money but no tokens in this session gets such a line too, and a session with no tokens at all has no
+  heading and starts with its first item. The order of the accounts, the filtering and each account's text are
+  unchanged, the spend estimate still in parentheses on its account's line.
+
 ## 0.28.0
 
 - **`orch` compiles once and reuses the bytecode.** Python never caches the bytecode of the script it is started

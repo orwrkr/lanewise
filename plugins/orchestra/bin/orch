@@ -1573,7 +1573,7 @@ def codex_event(session, announce=True):
 
 # ───────────────────────── session tokens per provider (second status line) ─────────────────────────
 #
-# The second status line shows this session's cumulative input/output per provider, without cache reads. The
+# The second status line shows this session's cumulative input/output per provider, with cache reads beside them. The
 # numbers must agree with `orch usage`: the orchestrator thread + subagents come from the transcript (each message
 # counted once), the CLI executors from ~/.orchestra/usage.jsonl. Transcripts grow to many megabytes, so each file
 # is parsed incrementally: ~/.orchestra/session_tokens/<session>.json holds the byte offset already parsed and the
@@ -1632,9 +1632,9 @@ def trim_ids(state, keep):
 
 
 def parse_append(path, state, limit=None):
-    """Count assistant usage appended to a transcript file; state: {offset, ids, floor, in, out, provider}. At most about
-    `limit` bytes are read. Returns (changed, behind): the state changed (bytes consumed, the file was reset after
-    shrinking, ids dropped), and the limit left bytes unread.
+    """Count assistant usage appended to a transcript file; state: {offset, ids, floor, in, out, cache, provider}. At
+    most about `limit` bytes are read. Returns (changed, behind): the state changed (bytes consumed, the file was reset
+    after shrinking, ids dropped), and the limit left bytes unread.
 
     The lines of one message share an id and carry its usage so far: the last one replaces the earlier ones. Only the
     newest IDS_PER_FILE ids are kept, none once the file is idle, so an id seen again after being dropped cannot be
@@ -1656,6 +1656,7 @@ def parse_append(path, state, limit=None):
         state.pop("floor", None)
         state["in"] = 0
         state["out"] = 0
+        state["cache"] = 0
         changed = True
     behind = limit is not None and size - offset > limit
     data = b""
@@ -1684,19 +1685,21 @@ def parse_append(path, state, limit=None):
             mid = msg.get("id") or ev.get("requestId") or ev.get("uuid")
             stamp = ev.get("timestamp") if isinstance(ev.get("timestamp"), str) else None
             u = claude_tokens(msg.get("usage") or {})
-            inp, out = int(u["input_tokens"]), int(u["output_tokens"])
+            inp, out, cache = int(u["input_tokens"]), int(u["output_tokens"]), int(u["cached_input_tokens"])
             if mid:
                 old = ids.pop(mid, None)   # put back below as the newest
                 if isinstance(old, dict):
                     inp -= tok_int(old.get("i"))
                     out -= tok_int(old.get("o"))
+                    cache -= tok_int(old.get("c"))
                 elif floor_t and stamp and (stamp < floor_t or (stamp == floor_t and mid == floor.get("id"))):
                     continue
-                ids[mid] = {"i": u["input_tokens"], "o": u["output_tokens"]}
+                ids[mid] = {"i": u["input_tokens"], "o": u["output_tokens"], "c": u["cached_input_tokens"]}
                 if stamp:
                     ids[mid]["t"] = stamp
             state["in"] = tok_int(state.get("in")) + inp
             state["out"] = tok_int(state.get("out")) + out
+            state["cache"] = tok_int(state.get("cache")) + cache
             if not state.get("provider"):
                 state["provider"] = transcript_provider(model)
         state["offset"] = offset + len(data)
@@ -1716,9 +1719,9 @@ def tok_int(v):
 
 
 def parse_ledger_append(offset, sid, limit=None):
-    """(new_offset, {label: {input, output}}, changed, behind) from run records of sid appended to the ledger; `behind`:
-    the limit left bytes unread. The key is the record's profile label (deepseek@work, codex, …), the provider for a
-    record without one: usage on different accounts stays apart."""
+    """(new_offset, {label: {input, output, cache}}, changed, behind) from run records of sid appended to the ledger;
+    `behind`: the limit left bytes unread. The key is the record's profile label (deepseek@work, codex, …), the provider
+    for a record without one: usage on different accounts stays apart."""
     out = {}
     try:
         size = USAGE_FILE.stat().st_size
@@ -1751,15 +1754,17 @@ def parse_ledger_append(offset, sid, limit=None):
         if not isinstance(u, dict):
             continue
         acct = str(rec.get("label") or rec.get("provider") or "?").lower()
-        t = out.setdefault(acct, {"input": 0, "output": 0})
+        t = out.setdefault(acct, {"input": 0, "output": 0, "cache": 0})
         t["input"] += tok_int(u.get("input_tokens"))
         t["output"] += tok_int(u.get("output_tokens"))
+        t["cache"] += tok_int(u.get("cached_input_tokens"))
     return offset + len(data), out, True, behind
 
 
-# Version of the cached ledger part. 2 = keyed by the run record's profile label; an entry without it was keyed by
-# provider, so its ledger part restarts from offset 0 (transcript offsets stay).
-SESSION_TOKENS_FORMAT = 2
+# Version of the cached entry. 2 = keyed by the run record's profile label (an entry without it was keyed by provider);
+# 3 = cache reads counted too, in the ledger and in each transcript file. An older entry's totals have no cache, so
+# both its ledger part and its transcript files restart from offset 0.
+SESSION_TOKENS_FORMAT = 3
 
 
 def account_sort_key(label):
@@ -1817,7 +1822,7 @@ def save_session_entry(sid, entry, t, always):
 
 
 def session_tokens(sid, transcript_path, native="claude"):
-    """Refresh this session's token counters and return {account: {input, output}}: account is a profile label
+    """Refresh this session's token counters and return {account: {input, output, cache}}: account is a profile label
     (deepseek@work, codex), so one provider's separate accounts stay separate. The session's own Claude thread counts
     under `native`. See above for when the counters are saved; a backlog over PARSE_BYTES_PER_RUN (a long transcript
     seen for the first time) is the exception, its progress is saved at once, so runs that get killed still get through it."""
@@ -1841,9 +1846,10 @@ def session_tokens(sid, transcript_path, native="claude"):
     changed = False
     if entry.get("format") != SESSION_TOKENS_FORMAT or not isinstance(entry.get("ledger"), dict) \
             or not isinstance(entry.get("ledger_offset"), int):
-        changed = True                      # an old-format (or damaged) entry: rebuild its ledger part by label
+        changed = True                      # an old-format (or damaged) entry: rebuild ledger and transcripts
         entry["ledger"] = {}
         entry["ledger_offset"] = 0
+        entry["files"] = {}                 # their saved totals carry no cache: parse the transcripts from 0 again
         entry["format"] = SESSION_TOKENS_FORMAT
     files = []
     if transcript_path and Path(transcript_path).is_file():
@@ -1876,9 +1882,10 @@ def session_tokens(sid, transcript_path, native="claude"):
     for acct, d in ledg.items():
         tt = entry["ledger"].get(acct)
         if not isinstance(tt, dict):
-            tt = entry["ledger"][acct] = {"input": 0, "output": 0}
+            tt = entry["ledger"][acct] = {"input": 0, "output": 0, "cache": 0}
         tt["input"] = tok_int(tt.get("input")) + d["input"]
         tt["output"] = tok_int(tt.get("output")) + d["output"]
+        tt["cache"] = tok_int(tt.get("cache")) + d["cache"]
     if first or behind or (changed and not session_entry_saved_recently(entry, t)):
         try:
             save_session_entry(sid, entry, t, first or behind)
@@ -1886,18 +1893,19 @@ def session_tokens(sid, transcript_path, native="claude"):
             pass
     totals = {}
 
-    def add(acct, inp, out):
-        tt = totals.setdefault(acct, {"input": 0, "output": 0})
+    def add(acct, inp, out, cache):
+        tt = totals.setdefault(acct, {"input": 0, "output": 0, "cache": 0})
         tt["input"] += tok_int(inp)
         tt["output"] += tok_int(out)
+        tt["cache"] += tok_int(cache)
 
     for f in entry["files"].values():
         if isinstance(f, dict):
             prov = f.get("provider") or "claude"
-            add(native if prov == "claude" else prov, f.get("in"), f.get("out"))
+            add(native if prov == "claude" else prov, f.get("in"), f.get("out"), f.get("cache"))
     for acct, d in entry["ledger"].items():
         if isinstance(d, dict):
-            add(acct, d.get("input"), d.get("output"))
+            add(acct, d.get("input"), d.get("output"), d.get("cache"))
     return totals
 
 
@@ -1926,8 +1934,9 @@ def quietly(fn, *args):
 
 
 def session_status_part(sid, transcript_path, where=None, spend=None):
-    """'Session in/out: Claude 370k/111k · DeepSeek@work 90k/9k (est. $0.99/$12, account $9.73)', or None with nothing
-    to show. One counter per account (profile label), never a sum over a provider's accounts. `spend` is
+    """'Session in/out: Claude 370k/111k +28M cache · DeepSeek@work 90k/9k (est. $0.99/$12, account $9.73)', or None
+    with nothing to show. One counter per account (profile label), never a sum over a provider's accounts; cache reads
+    follow the in/out pair as '+N cache', left out when there are none. `spend` is
     [(account label, display name, text)] from spend_status_items: each text joins the counter of the same account, in
     parentheses, matched on the lowercase label (the ledger's key), since two accounts can display alike; a scope with
     money but no tokens in this session follows the counters, and with no tokens at all the line is only those, with no
@@ -1936,7 +1945,9 @@ def session_status_part(sid, transcript_path, where=None, spend=None):
     if sid:
         try:
             totals = session_tokens(sid, transcript_path, native_account(where))
-            counters = [(str(acct).lower(), scope_name(acct), "%s/%s" % (fmt_tok(d["input"]), fmt_tok(d["output"])))
+            counters = [(str(acct).lower(), scope_name(acct),
+                         "%s/%s%s" % (fmt_tok(d["input"]), fmt_tok(d["output"]),
+                                      (" +%s cache" % fmt_tok(d["cache"])) if d.get("cache") else ""))
                         for acct, d in sorted(totals.items(), key=lambda kv: account_sort_key(kv[0]))
                         if d["input"] + d["output"] > 0]
         except Exception:
@@ -3021,14 +3032,17 @@ def ledger_append(rec):
 
 
 def ledger_read():
+    """The ledger's records: a line that isn't a JSON object (damaged, or a stray value) is skipped, never fatal."""
     out = []
     try:
         with USAGE_FILE.open(encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
-                    out.append(json.loads(line))
+                    rec = json.loads(line)
                 except ValueError:
                     continue
+                if isinstance(rec, dict):
+                    out.append(rec)
     except OSError:
         pass
     return out

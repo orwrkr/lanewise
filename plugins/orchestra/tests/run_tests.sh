@@ -3076,7 +3076,7 @@ out=$(printf '{"session_id":"sess-tok","transcript_path":"%s","workspace":{"curr
       "$(native "$TCFG/sess-tok.jsonl")" "$(native "$REPO")" | $ORCH statusline)
 contains "$out" "Codex · 5h 81%" "status line: codex limits part"
 contains "$out" "week 20%" "status line: codex week part"
-contains "$out" "Session in/out: Claude 1.5k/150 · Codex 400/40 · DeepSeek 500/60" "session tokens: claude from the transcript, runs from the ledger"
+contains "$out" "Session in/out: Claude 1.5k/150 +6.0k cache · Codex 400/40 · DeepSeek 500/60" "session tokens: claude from the transcript (with its cache reads), runs from the ledger"
 [[ "$(sed -n 2p <<<"$out")" == "Codex · 5h 81%"* && "$(sed -n 3p <<<"$out")" == "Session in/out: "* ]] \
   && ok "Codex limits and session tokens are on lines of their own" || bad "status line layout: $out"
 out=$(printf '{"session_id":"sess-tok","transcript_path":"%s","workspace":{"current_dir":"%s"}}' \
@@ -3090,10 +3090,11 @@ rows = json.load(open(sys.argv[1], encoding="utf-8"))["rows"]
 by = {}
 for r in rows:
     u = r.get("usage") or {}
-    by[r["who"]] = (int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0))
-assert by["orchestrator"] == (1500, 150), by
-assert by["codex"] == (400, 40), by
-assert by["deepseek"] == (500, 60), by
+    by[r["who"]] = (int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0),
+                    int(u.get("cached_input_tokens") or 0))
+assert by["orchestrator"] == (1500, 150, 6000), by
+assert by["codex"] == (400, 40, 0), by
+assert by["deepseek"] == (500, 60, 0), by
 assert {r["model"] for r in rows} == {"claude-opus-5-5", "gpt-6.1-terra", "deepseek-v4-pro"}, [r["model"] for r in rows]
 EOF
 INCF="$TCFG/sess-inc.jsonl"
@@ -3105,7 +3106,7 @@ open(sys.argv[1], "w", encoding="utf-8").write(c({"type": "assistant", "timestam
                 "usage": {"input_tokens": 1000, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 5000, "output_tokens": 100}}}) + "\n")
 EOF
 out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
-contains "$out" "Session in/out: Claude 1.2k/100" "first run counts the transcript once"
+contains "$out" "Session in/out: Claude 1.2k/100 +5.0k cache" "first run counts the transcript once, cache reads too"
 $PY - "$(native "$INCF")" <<'EOF'
 import json, sys
 c = lambda o: json.dumps(o, separators=(",", ":"))
@@ -3115,7 +3116,7 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
                            "usage": {"input_tokens": 300, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 1000, "output_tokens": 50}}}) + "\n")
 EOF
 out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
-contains "$out" "Session in/out: Claude 1.5k/150" "appended lines are counted once (not re-read)"
+contains "$out" "Session in/out: Claude 1.5k/150 +6.0k cache" "appended lines are counted once (not re-read)"
 $PY - "$(native "$INCF")" <<'EOF'
 import json, sys
 c = lambda o: json.dumps(o, separators=(",", ":"))
@@ -3125,6 +3126,7 @@ open(sys.argv[1], "w", encoding="utf-8").write(c({"type": "assistant", "timestam
 EOF
 out=$(printf '{"session_id":"sess-inc","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$INCF")" "$(native "$REPO")" | $ORCH statusline)
 contains "$out" "Session in/out: Claude 500/30" "a shrunken transcript restarts from scratch"
+lacks "$out" " cache" "a shrunken transcript resets its cache reads too"
 out=$(printf '{"session_id":"sess-empty","workspace":{"current_dir":"%s"}}' "$(native "$REPO")" | $ORCH statusline)
 grep -q "Session in/out:" <<<"$out" && bad "session line shown with no tokens" || ok "no session line with no tokens"
 
@@ -3157,8 +3159,8 @@ with open(sys.argv[1], "a", encoding="utf-8") as f:
         f.write(line + "\n")
 EOF
 out=$(acct_sl sess-acct)
-contains "$out" "Session in/out: Claude 1.7k/170 · Codex 500/50 · Codex@work 90/10 · DeepSeek@client 520/65 · DeepSeek@personal 100/10" \
-  "session tokens: one counter per account, plain account first, labels alphabetical"
+contains "$out" "Session in/out: Claude 1.7k/170 +6.0k cache · Codex 500/50 · Codex@work 90/10 · DeepSeek@client 520/65 · DeepSeek@personal 100/10" \
+  "session tokens: one counter per account, plain account first, labels alphabetical, cache only where there is some"
 grep -qE "DeepSeek [0-9]|DeepSeek@other" <<<"$out" && bad "session tokens: a sum over the keys, or another session's run: $out" \
   || ok "session tokens: two keys of one provider are not added up"
 contains "$out" "Codex 500/50 · Codex@work" "a run without a label counts under its provider, with the plain codex runs"
@@ -3167,17 +3169,17 @@ out2=$(acct_sl sess-acct); [[ "$out2" == "$out" ]] && ok "session tokens: a seco
 # a native session billed to a key profile counts under that profile's label, the default-login run stays apart
 acct profile set claude work --key ANTHROPIC_API_KEY_WORK >/dev/null
 out=$(acct_sl sess-acct ORCH_PROFILES=claude=work)
-contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 (est. \$0.00/\$10) · Codex" "a native session on a key profile shows its label, with its money in the same parentheses"
+contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 +6.0k cache (est. \$0.00/\$10) · Codex" "a native session on a key profile shows its label, with its money in the same parentheses"
 # its apiKeyHelper names that profile, so the thread keeps billing there while runs have moved to the fallback
 acct profile set claude personal >/dev/null
 acct profile set claude work --fallback personal >/dev/null
 acct quota set claude@work exhausted >/dev/null
 out=$(acct_sl sess-acct ORCH_PROFILES=claude=work)
-contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 · Codex" "a native session keeps its key's label while runs use the fallback"
+contains "$out" "Session in/out: Claude 200/20 · Claude@work 1.5k/150 +6.0k cache · Codex" "a native session keeps its key's label while runs use the fallback"
 acct quota clear claude@work >/dev/null
 acct profile set claude work --fallback none >/dev/null
 out=$(acct_sl sess-acct)
-contains "$out" "Session in/out: Claude 1.7k/170 · Codex" "the same session on the default login adds up again"
+contains "$out" "Session in/out: Claude 1.7k/170 +6.0k cache · Codex" "the same session on the default login adds up again"
 # an old-format cache entry (keyed by provider, no format mark) is rebuilt from the ledger with labels
 $PY - "$AH" <<'EOF'
 import json, os, sys, time
@@ -3199,7 +3201,7 @@ out2=$(acct_sl sess-old); [[ "$out2" == "$out" ]] && ok "a rebuilt entry is not 
 $PY - "$AH" <<'EOF' && ok "the rebuilt entry carries the format mark" || bad "the rebuilt entry has no format mark"
 import json, os, sys
 e = json.load(open(os.path.join(sys.argv[1], "session_tokens", "sess-old.json"), encoding="utf-8"))
-assert e.get("format") == 2 and "deepseek" not in e["ledger"] and set(e["ledger"]) == {"deepseek@client", "deepseek@personal"}, e
+assert e.get("format") == 3 and "deepseek" not in e["ledger"] and set(e["ledger"]) == {"deepseek@client", "deepseek@personal"}, e
 EOF
 # a malformed cache entry and malformed ledger lines never break the status line
 $PY - "$AH" <<'EOF'
@@ -3216,7 +3218,7 @@ with open(os.path.join(home, "usage.jsonl"), "a", encoding="utf-8") as f:
                             "usage": {"input_tokens": i, "output_tokens": 1}}) + "\n")
 cache = os.path.join(home, "session_tokens.json")
 data = json.load(open(cache, encoding="utf-8"))
-data["sess-bad"] = {"format": 2, "files": {"x": "junk", "y": {"in": "a", "out": None, "provider": 5}},
+data["sess-bad"] = {"format": 3, "files": {"x": "junk", "y": {"in": "a", "out": None, "cache": None, "provider": 5}},
                     "ledger": {"deepseek": "junk", "codex": {"input": "x", "output": None}, "claude": [1]},
                     "ledger_offset": 0, "updated": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}
 json.dump(data, open(cache, "w", encoding="utf-8"))
@@ -3233,10 +3235,114 @@ e2e deepseek --profile client "x"; expect_rc 0 $? "run on the first deepseek key
 e2e deepseek --profile personal "x"; expect_rc 0 $? "run on the second deepseek key"
 e2e claude "x"; expect_rc 0 $? "run claude on the default login"
 line=$(acct_sl sess-e2e | grep "^Session in/out:")
-grep -qE "^Session in/out: Claude 1\.[0-9]k/[0-9]+ · DeepSeek@client [0-9]+/[0-9]+ · DeepSeek@personal [0-9]+/[0-9]+$" <<<"$line" \
+grep -qE "^Session in/out: Claude 1\.[0-9]k/[0-9]+ \+6\.4k cache · DeepSeek@client [0-9]+/[0-9]+ \+400 cache · DeepSeek@personal [0-9]+/[0-9]+ \+400 cache$" <<<"$line" \
   && ok "end to end: two keys and the native login, three counters" || bad "end to end session line: $line"
 [[ "$line" == *"Claude 1.5k/150"* ]] && bad "end to end: the claude run did not add to the native thread: $line" \
   || ok "end to end: orch run claude adds to the native Claude counter"
+
+echo "── session tokens: cache reads (a third figure per account)"
+CC="$TCFG/sess-cache.jsonl"
+$PY - "$(native "$CC")" "$(native "$TCFG/sess-cache")" <<'EOF'
+import json, os, sys
+c = lambda o: json.dumps(o, separators=(",", ":"))
+def a(mid, inp, cr, out):
+    return c({"type": "assistant", "timestamp": "2026-11-02T10:00:00.000Z",
+              "message": {"id": mid, "model": "claude-opus-5-5",
+                          "usage": {"input_tokens": inp, "cache_creation_input_tokens": 0,
+                                    "cache_read_input_tokens": cr, "output_tokens": out}}})
+open(sys.argv[1], "w", encoding="utf-8").write(a("k1", 1000, 20000, 100) + "\n")
+os.makedirs(os.path.join(sys.argv[2], "subagents"), exist_ok=True)          # a subagent's own transcript
+open(os.path.join(sys.argv[2], "subagents", "agent-k1.jsonl"), "w", encoding="utf-8").write(a("k2", 300, 8000, 50) + "\n")
+EOF
+$PY - "$AH/usage.jsonl" <<'EOF'
+import json, sys
+def rec(sid, prov, label, inp, cache, out):
+    r = {"kind": "run", "session": sid, "provider": prov, "model": "m",
+         "usage": {"input_tokens": inp, "cached_input_tokens": cache, "output_tokens": out}}
+    if label is not None:
+        r["label"] = label
+    return json.dumps(r)
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(rec("sess-cache", "deepseek", "deepseek@client", 500, 3000, 60) + "\n")
+    f.write(rec("sess-cache", "codex", None, 400, 0, 40) + "\n")            # no cache reads: no third figure
+EOF
+out=$(acct_sl sess-cache)
+contains "$out" "Session in/out: Claude 1.3k/150 +28k cache · Codex 400/40 · DeepSeek@client 500/60 +3.0k cache" \
+  "session cache: the thread and its subagents add up, and a run's cache follows its account"
+lacks "$out" "Codex 400/40 +" "session cache: an account with no cache reads shows no third figure"
+out2=$(acct_sl sess-cache); [[ "$out2" == "$out" ]] && ok "session cache: a second refresh counts the cache once" \
+  || bad "session cache drifted on refresh: $out2"
+# the figures are the `cache` column of `orch usage` for the same session
+ORCH_HOME="$AH" $ORCH usage --session sess-cache --json > "$T/cache-usage.json"
+printf '%s\n' "$out" > "$T/cache-line.txt"
+$PY - "$(native "$T/cache-usage.json")" "$(native "$T/cache-line.txt")" <<'EOF' \
+  && ok "session cache: the figures equal orch usage's cache column" || bad "session cache disagrees with orch usage"
+import json, sys
+rows = json.load(open(sys.argv[1], encoding="utf-8"))["rows"]
+line = [l for l in open(sys.argv[2], encoding="utf-8").read().splitlines() if l.startswith("Session in/out:")][0]
+def fmt(n):
+    if n < 1000:
+        return str(n)
+    if n < 10000:
+        return "%.1fk" % (n / 1000.0)
+    if n < 1000000:
+        return "%dk" % round(n / 1000.0)
+    return "%.1fM" % (n / 1000000.0)
+fig = {}
+for r in rows:
+    u = r.get("usage") or {}
+    key = "claude" if r["who"] == "orchestrator" or r["who"].startswith("subagent ") else r["who"]
+    t = fig.setdefault(key, [0, 0, 0])
+    for i, k in enumerate(("input_tokens", "output_tokens", "cached_input_tokens")):
+        t[i] += int(u.get(k) or 0)
+def counter(key, name):
+    i, o, c = fig[key]
+    return "%s %s/%s%s" % (name, fmt(i), fmt(o), (" +%s cache" % fmt(c)) if c else "")
+assert counter("claude", "Claude") in line, (counter("claude", "Claude"), line)
+assert counter("deepseek@client", "DeepSeek@client") in line, (fig, line)
+assert counter("codex", "Codex") in line, (fig, line)
+EOF
+# a message re-sent with growing usage counts its cache once, at its last figure
+CF="$TCFG/sess-cache-again.jsonl"
+$PY - "$(native "$CF")" <<'EOF'
+import json, sys
+c = lambda o: json.dumps(o, separators=(",", ":"))
+open(sys.argv[1], "w", encoding="utf-8").write(c({"type": "assistant", "timestamp": "2026-11-02T10:00:00.000Z",
+    "message": {"id": "r1", "model": "claude-opus-5-5",
+                "usage": {"input_tokens": 1000, "cache_read_input_tokens": 100000, "output_tokens": 10}}}) + "\n")
+EOF
+out=$(acct_sl sess-cache-again)
+contains "$out" "Session in/out: Claude 1.0k/10 +100k cache" "a message's first copy counts its cache"
+$PY - "$(native "$CF")" <<'EOF'
+import json, sys
+c = lambda o: json.dumps(o, separators=(",", ":"))
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(c({"type": "assistant", "timestamp": "2026-11-02T10:00:01.000Z",
+               "message": {"id": "r1", "model": "claude-opus-5-5",
+                           "usage": {"input_tokens": 1200, "cache_read_input_tokens": 250000, "output_tokens": 20}}}) + "\n")
+EOF
+out=$(acct_sl sess-cache-again)
+contains "$out" "Session in/out: Claude 1.2k/20 +250k cache" "a re-sent message counts its cache once, at its last figure"
+# an entry saved in the previous format has no cache in its totals: it is parsed again from offset 0
+$PY - "$AH" <<'EOF'
+import json, os, sys, time
+home = sys.argv[1]
+os.makedirs(os.path.join(home, "session_tokens"), exist_ok=True)
+entry = {"format": 2, "files": {"old-transcript": {"offset": 1, "in": 7000, "out": 900, "provider": "claude"}},
+         "ledger": {"deepseek@client": {"input": 900, "output": 90}}, "ledger_offset": 0,
+         "updated": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 120))}
+json.dump(entry, open(os.path.join(home, "session_tokens", "sess-cache-again.json"), "w", encoding="utf-8"))
+EOF
+out=$(acct_sl sess-cache-again)
+contains "$out" "Session in/out: Claude 1.2k/20 +250k cache" "an entry in the previous format is rebuilt from the transcript, cache included"
+lacks "$out" "7.0k/900" "the previous format's cache-less totals are gone"
+$PY - "$AH" <<'EOF' && ok "the rebuilt entry is saved in the new format, with cache in its files" || bad "the rebuilt entry keeps the old format"
+import json, os, sys
+e = json.load(open(os.path.join(sys.argv[1], "session_tokens", "sess-cache-again.json"), encoding="utf-8"))
+assert e.get("format") == 3, e
+assert e["files"] and all("cache" in s for s in e["files"].values() if isinstance(s, dict)), e
+EOF
+out2=$(acct_sl sess-cache-again); [[ "$out2" == "$out" ]] && ok "a rebuilt entry is not parsed twice" || bad "rebuilt entry drifted: $out2"
 
 echo "── a fast status line (no process, small writes, bounded ids, kills)"
 SLH="$(native "$T/sl-home")"; SLN="$(native "$T/sl-no-codex")"; SLCFG="$(native "$T/sl-cfg")"; SLR="$T/sl-repo"
@@ -3318,7 +3424,7 @@ elif cmd == "kill":              # mode, orch: die in the middle of writing the 
         dump = json.dump
         def die_dumping(data, f, **kw):
             if "session_tokens" in str(getattr(f, "name", "")):
-                f.write('{"format": 2, "fil'); f.flush(); os._exit(9)
+                f.write('{"format": 3, "fil'); f.flush(); os._exit(9)
             return dump(data, f, **kw)
         m.json.dump = die_dumping
     sys.exit(m.main(["statusline"]))
@@ -3395,16 +3501,17 @@ out=$(sl_run speed-one); contains "$out" "Session in/out: Claude 30/9" "the refr
 cmp -s "$SLD/speed-one.json" "$T/sl-a.snap" && bad "no save after 30 seconds" || ok "after 30 seconds the refresh saves"
 cmp -s "$SLD/speed-two.json" "$T/sl-b.snap" && ok "a refresh leaves other sessions' data alone" || bad "a refresh rewrote another session's file"
 out=$(sl_run speed-one); contains "$out" "Session in/out: Claude 30/9" "the saved state continues without a drift"
-# a session running across the upgrade keeps its totals, from the old shared cache
+# a session running across the upgrade: its entry has no cache, so both its ledger part and its transcript files are
+# parsed again from 0 (a long one catches up over a few updates, with lower numbers until then)
 $PY "$SLT" gen "$(native "$SLP/speed-mig.jsonl")" 0 1
 $PY "$SLT" old-cache "$SLH" speed-mig "$(native "$SLP/speed-mig.jsonl")"
 cp "$T/sl-home/session_tokens.json" "$T/sl-old.snap"
 $PY "$SLT" gen "$(native "$SLP/speed-mig.jsonl")" 1 1
-out=$(sl_run speed-mig); contains "$out" "Session in/out: Claude 7.0k/903 · Codex 40/4" "migration: a running session keeps its totals and goes on counting"
-n=$($PY "$SLT" ids "$(sl_file speed-mig)"); [[ "${n%$'\r'}" -le 100 ]] && ok "migration: the old ids are trimmed ($n of 150)" || bad "migration ids: $n"
+out=$(sl_run speed-mig); contains "$out" "Session in/out: Claude 20/6" "migration: an entry in the previous format is parsed again from the transcript"
+n=$($PY "$SLT" ids "$(sl_file speed-mig)"); [[ "${n%$'\r'}" -le 100 ]] && ok "migration: the rebuilt file state holds only the real messages ($n of 150 old ids)" || bad "migration ids: $n"
 cmp -s "$T/sl-home/session_tokens.json" "$T/sl-old.snap" && ok "migration: other sessions' old entries stay where they are" || bad "migration rewrote the old cache"
 $PY "$SLT" backdate "$(native "$T/sl-home/session_tokens.json")" 90000
-out=$(sl_run speed-mig); contains "$out" "Session in/out: Claude 7.0k/903 · Codex 40/4" "migration: totals survive the old cache going away"
+out=$(sl_run speed-mig); contains "$out" "Session in/out: Claude 20/6" "migration: totals survive the old cache going away"
 [[ -e "$T/sl-home/session_tokens.json" ]] && bad "the old cache outlived its last day" || ok "migration: the old cache goes once a day old"
 # a kill in the middle of a save leaves valid state, and the next refresh is right
 next_message=100
@@ -4084,6 +4191,8 @@ def run_outcomes():
     entries = m.read_json(m.AVAIL_FILE, {})["entries"]
     assert set(entries) == {"codex/capacity-model"}, entries
     assert entries["codex/capacity-model"]["status"] == "busy"
+    until = m.parse_iso(entries["codex/capacity-model"]["until"])     # checked at once: the runs below take time
+    assert 9 * 60 < (until - m.now()).total_seconds() <= 10 * 60, (until, m.now())
     assert "CAPACITY" in run(["run", "codex", "--model", "capacity-model", "review"])[1]
     assert "CAPACITY" in good(["usage"])
     # capacity with an unknown model id: no --model and no model in the codex config → no block is recorded
@@ -4103,8 +4212,6 @@ def run_outcomes():
     rc, out = run(["run", "codex", "--model", "trace-model", "review"], extra={"FAKE_CODEX":"trace_only_limit"})
     assert rc == 75 and "[QUOTA_EXHAUSTED]" in out, out
     good(["quota", "clear", "codex"])
-    until = m.parse_iso(entries["codex/capacity-model"]["until"])
-    assert 9 * 60 < (until - m.now()).total_seconds() <= 10 * 60
     assert run(["quota", "check", "codex/sibling"])[0] == 0
     assert run(["run", "codex", "--model", "sibling", "review"], extra={"FAKE_CODEX":"fail"})[0] == 3
     notes = (Path(orch).parent.parent / "registry/providers.yaml").read_text(encoding="utf-8")

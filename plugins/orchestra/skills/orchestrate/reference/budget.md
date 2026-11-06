@@ -98,7 +98,8 @@ while the `codex` profile isn't `off`; `orch run codex` itself is not blocked by
 adapter's exit 75).
 
 The status line shows the limits on a line of their own, and a further `Session in/out:` line with this session's
-tokens per account, without cache reads: one counter per profile label (`Codex`, `Codex@work`, `DeepSeek@client`,
+tokens per account: input and output, then the cache reads as `+N cache` (`Claude 370k/111k +28M cache`), left out
+when an account had none. One counter per profile label (`Codex`, `Codex@work`, `DeepSeek@client`,
 `DeepSeek@personal`), never a sum over a provider's accounts. The session's own Claude thread counts as `Claude`, or
 under its key profile's label when it bills to a key. The same line carries every API-billed scope active in the
 directory, always, in parentheses after the counter of the same name: `DeepSeek@client 1.5M/988k (est. $1.47/$10,
@@ -106,8 +107,9 @@ account $15.09)` (our estimate and limit, then the provider's figure for the acc
 `, 3h ago` once it is old; `orch guide spend`). A scope with money but no tokens in this session follows the counters
 (`DeepSeek@client (est. $1.47/$10, account $15.09)`), and with no session tokens at all the line is only that, with no
 `Session in/out:` heading. While a provider's active profile is a fallback it says so inside the parentheses:
-`DeepSeek@personal 1.5M/988k (fallback: DeepSeek@client at its limit; est. $0.99/$12, account $9.73)` (the cause:
-`at its limit`, `exhausted` or `disabled`). None of this costs tokens: the status line never reaches the model.
+`DeepSeek@personal 1.5M/988k +28M cache (fallback: DeepSeek@client at its limit; est. $0.99/$12, account $9.73)`
+(the cause: `at its limit`, `exhausted` or `disabled`). None of this costs tokens: the status line never reaches the
+model.
 
 ## The status line format
 

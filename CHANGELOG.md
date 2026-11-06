@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.27.0
+
+- **The session line shows cache reads too.** After the input/output pair comes the account's cache reads:
+  `Session in/out: Claude 370k/111k · DeepSeek@personal 805k/242k +28M cache (est. $3.81/$12.16, account $6.84) ·
+  Codex 224k/19k`, left out for an account whose cache reads are zero, with the spend text in parentheses where it
+  was. The transcript side takes `cache_read_input_tokens` through `claude_tokens`, like `orch usage`, and the run
+  records their `cached_input_tokens`, so the figures agree with that report's `cache` column. A project that
+  budgets tasks in tokens of all kinds warned at 34.1 million while the line showed hundreds of thousands: the same
+  five runs had 1.03M input, 261k output and 32.8M cache reads. The saved entry format is 3, so an older entry is
+  rebuilt from the start: its ledger part and also its transcript files, whose totals have no cache; a long
+  transcript catches up over a few updates, and until then the counters may show less.
+- **`orch usage` survives a ledger line that isn't an object.** A stray JSON value in `usage.jsonl`, such as a list,
+  made the report fail with `AttributeError`; such a line is now skipped, as a malformed one already was.
+- **A timing check no longer races slower runs.** The test of a capacity block's ten minutes now reads the block
+  right after the run that set it, not after four more runs, which on a loaded machine took over a minute.
+
 ## 0.26.0
 
 - **Hooks and the status line stop paying for the Microsoft Store `python3` alias.** In Git Bash `command -v python3`

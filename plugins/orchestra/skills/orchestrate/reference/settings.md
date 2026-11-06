@@ -133,8 +133,8 @@ One line in Claude Code's settings, set once (or ask `/statusline`):
 ```
 
 It feeds the budget mode and the session count from every session that shows it, and prints the limits, the mode and
-`Session in/out` tokens; it never reaches the model, so it costs nothing. Keep your own: `orch statusline --then
-"<your command>"`.
+`Session in/out` tokens with their cache reads as `+N cache` (`Claude 370k/111k +28M cache`); it never reaches the
+model, so it costs nothing. Keep your own: `orch statusline --then "<your command>"`.
 
 ## What is not a setting
 

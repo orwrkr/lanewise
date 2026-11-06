@@ -32,9 +32,9 @@ Requirements: Claude Code, Python ≥ 3.8 and git; optionally Codex CLI and a De
 git clone https://github.com/orwrkr/orchestra && cd orchestra && bash install.sh
 ```
 
-Or, without a clone, from inside Claude Code: `/plugin install orchestra --marketplace orwrkr/orchestra`. The plugin's
-`orch` is then available to the session's Bash tool, but not in your terminal: for `orch launch` and the terminal
-commands below use the clone and `install.sh`.
+Or, without a clone, from a terminal: `claude plugin install orchestra --marketplace orwrkr/orchestra`. The
+plugin's `orch` is then available to the session's Bash tool, but not in your terminal: for `orch launch` and the
+terminal commands below use the clone and `install.sh`.
 
 You can keep the clone anywhere: the plugin is installed straight from this folder, and edits in it are "live" — they take effect after `/reload-plugins` or in a new session. Both environments are supported: Claude Code in **WSL** and Claude Code running **natively on Windows** (where its Bash tool is Git Bash). Each environment has its own Claude Code installation, so run `install.sh` in every environment you work in:
 
@@ -155,6 +155,9 @@ window and 10% of the week by default) is kept for your other sessions and as a 
   projection reaches it after the first 24 hours. Weekly TIGHT works without current five-hour numbers. The
   orchestrator treats Claude as low and offloads to Codex and DeepSeek.
 
+Each figure is used with its own measurement time: a five-hour sample older than 20 minutes shows its age and cannot
+enable SURPLUS, while a weekly overrun raises TIGHT without current five-hour numbers.
+
 The mode appears in `orch status` and at session start, and the orchestrator gets an event when it changes. The
 numbers come from Claude Code itself, which passes them to the status line command (`rate_limits`). Set Orchestra's
 command as your status line once, in `~/.claude/settings.json`:
@@ -228,13 +231,24 @@ not work on the DeepSeek endpoint, and Claude Code's cost estimate in `orch usag
 The launch environment drops `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN`; the lead still uses the operator's config
 directory and tools, so this is credential hygiene, not a sandbox.
 
-Parallel sessions serialize shared state through bounded OS locks and atomic JSON writes; busy hooks and the
-status line skip their update silently. Manual `new` and `take` obey the profile's hard `max_open` even with
-`--force`. `handoff wait --any` returns an existing unreported final result once.
+Parallel sessions serialize shared state through bounded OS locks and atomic JSON writes, so tasks and usage survive
+them; busy hooks and the status line skip their update silently. Manual `new` and `take` obey the profile's hard
+`max_open` even with `--force`. `handoff wait --any` returns an existing unreported final result once.
 
 ## Executor profiles: keys, accounts, rules, projects
 
 A profile describes **how** the orchestrator uses an executor: with which API key or account, which models and effort levels are allowed, whether it may change files, which tasks to use it for. Each provider (`claude`, `deepseek`, `codex`, `antigravity`) has a default profile, and a project can pin a different profile or switch the executor off entirely (`off`). With no configuration the built-in `default` profile applies: the normal environment (`~/.codex`, `DEEPSEEK_API_KEY`) with no restrictions, so everything works out of the box.
+
+An executor on an API key instead of a login is a profile too — Codex here, and the same shape for Claude:
+
+```bash
+# `work` is a free label, not a fixed word; the key itself goes into ~/.orchestra/secrets.env as
+#   CODEX_API_KEY_WORK=sk-…  (never into the command, the repository or your shell history)
+orch profile set codex work --key CODEX_API_KEY_WORK
+orch profile use codex work       # binds the profile to the project in the current directory
+```
+
+None of this is needed with the usual ChatGPT login (`codex login`): the built-in `default` profile uses it.
 
 You can manage profiles right in the session, in plain words or with `/orchestra:profile`: "don't use DeepSeek in this project", "use DeepSeek with the work key here", "don't offer Antigravity in this project", "leave Codex alone by default". The orchestrator turns this into commands:
 
@@ -307,7 +321,7 @@ binds a profile for `orch run claude` only and says so.
 Tasks that are worth doing by hand in Antigravity (UI checks in a browser, a broad review, a second opinion from another model family, long autonomous work) go **into a pool** instead of being dumped on you right away. You choose what to take and when.
 
 1. **Browse the pool:** `/orchestra:manual` (or "what's in the pool?"). The same list is in `<project>/.orchestra/MANUAL.md`, which you can keep open in your editor. It shows each task, the suggested agent and model, and how long it has been waiting.
-2. **Take a task:** "AG-0004 to Antigravity" (or "AG-0004 to Cursor"). The orchestrator runs `orch handoff take`: it completes TASK.md in the project folder and shows a card with the folder, the model and thinking level, and the line to paste (already on your clipboard).
+2. **Take a task:** "AG-0004 to Antigravity" (or "AG-0004 to Cursor"). The orchestrator runs `orch handoff take`: it completes TASK.md in the project folder and shows a card with the folder, the model and thinking level, and the line to paste — on your clipboard only with `--clip`, which `/orchestra:manual` passes.
 3. You keep the project folder open in the agent, pick the model and paste the line. **That's it.** You don't need to report back when it's done: the agent writes `RESULT.md` itself.
 
 The pool has a clock that runs from your last take (or from when the pool opened). Each time 5 minutes pass without a take, the orchestrator checks the pool. It takes back every task that is no longer worth waiting for — you are away, the task now blocks other work, or an automated executor would do it just as well — and runs them, in parallel where that is allowed. If there is no such task, it takes back only the next one, and only once the previous one it took this way has finished. So while you are picking tasks nothing is taken away, and an ignored pool drains one task at a time. A take restarts the clock. It hands a task straight to you, bypassing the pool, only when you ask (`orch handoff new`).
@@ -351,7 +365,7 @@ Session 3f9a1c2e · “Config parser” · 29.10 12:01–16:40
 - **A DeepSeek-led session** shows `lead: deepseek…` in its header and DeepSeek model ids for the main thread and subagents.
 - **Manual agents** don't report tokens. For them you see who did the work (the `AGENT:` line from RESULT.md), with which model and how long it took.
 
-There are other modes too: `orch usage --list` shows the project's recent sessions, `--session <id>` a specific one, `--json` gives output for your own reports. Claude Code deletes old transcripts over time, so the SessionEnd hook saves the session's numbers to the log when the session ends. To disable the log, set `ORCH_USAGE_LOG=0`.
+There are other modes too: `orch usage --list` shows the project's recent sessions, `--session <id>` a specific one, `--json` gives output for your own reports. Usage is collected per Claude Code session, so from a terminal pick one with `--list` and `--session <id>`; `--session none` shows the records made outside a session (a manual task closed from a terminal, an `orch run` outside one). Claude Code deletes old transcripts over time, so the SessionEnd hook saves the session's numbers to the log when the session ends. To disable the log, set `ORCH_USAGE_LOG=0`.
 
 ## Project rules for every executor
 

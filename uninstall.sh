@@ -20,6 +20,8 @@ HOME_DIR="${ORCH_HOME:-$HOME/.orchestra}"
 
 say()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
+# a file path in the form the user's own tools show it: on Windows `C:\…`, as orch doctor prints, not `/c/…`
+wpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 
 PY=""
 for p in python3 python py; do
@@ -45,14 +47,14 @@ fi
 
 for f in "$HOME/.local/bin/orch" "$HOME/.local/bin/orch.cmd"; do
   if [[ -L "$f" ]] || { [[ -f "$f" ]] && grep -q "orch launcher\|plugins/orchestra/bin/orch" "$f" 2>/dev/null; }; then
-    rm -f "$f" && say "removed launcher $f"
+    rm -f "$f" && say "removed launcher $(wpath "$f")"
   fi
 done
 
 if [[ $PURGE == 1 && -d "$HOME_DIR" ]]; then
-  rm -rf "$HOME_DIR" && say "removed personal data $HOME_DIR"
+  rm -rf "$HOME_DIR" && say "removed personal data $(wpath "$HOME_DIR")"
 elif [[ -d "$HOME_DIR" ]]; then
-  say "Personal data kept: $HOME_DIR (limits, profiles, keys, usage log; to delete: bash uninstall.sh --purge)"
+  say "Personal data kept: $(wpath "$HOME_DIR") (limits, profiles, keys, usage log; to delete: bash uninstall.sh --purge)"
 fi
 
 if [[ -s "$TMPF" ]]; then
@@ -60,4 +62,5 @@ if [[ -s "$TMPF" ]]; then
   cat "$TMPF"
 fi
 rm -f "$TMPF"
+say "Yours to remove: the clone folder this plugin was installed from, and any PATH line you added yourself (~/.bashrc, or your user PATH on Windows)."
 say "Done. In open Claude Code sessions run /reload-plugins (or start a new session)."

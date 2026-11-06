@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.30.0
+
+- **A read-only command leaves an unused folder untouched.** In a folder where the plugin had never been used,
+  `orch status` (its project lock and event check) and `orch handoff list` (the handoff scan) created `.orchestra/` —
+  and with it the `.orchestra/` line in `.git/info/exclude` — though the README promises such projects "get
+  nothing"; `profile show`, `guide` and `doctor` already created nothing. State is now created only by a command
+  that writes it (`handoff new`, `offer`, `take`, `worktree add`, `run`, `launch`): a read in a folder with no
+  `.orchestra/` skips the project lock and returns its default, and `orch status` skips the event check there. The
+  status line and the hooks keep checking for state and still create none. `orch footprint` also names a project's
+  paths relative to it instead of printing the folder twice.
+- **`orch usage` outside a session is a report, not an error.** With no `CLAUDE_CODE_SESSION_ID` (a plain terminal)
+  and no data it now exits 0 and says usage is collected per Claude Code session, naming `orch usage --list` and
+  `orch usage --session <id>`. Records made with no session at all — a manual task closed from a terminal, an
+  `orch run` outside a session — used to be unreachable: `--list` now ends with one `(outside a session)` row, and
+  `--session none` shows them in the usual format (a pseudo-session in `--json`). Both READMEs and
+  `reference/usage.md` say so.
+- **The manual-lane cards match the commands they name.** The pool card's slash form is now
+  `/orchestra:manual <id> to Antigravity`, the form `commands/manual.md` documents in its `argument-hint` (the
+  board's take line too), and the card also gives the terminal form `orch handoff take <id>`; the take card adds
+  that from a terminal `orch handoff check` picks completion up (in a session the hooks do). The README's clipboard
+  claim now says it holds with `--clip`, which `/orchestra:manual` passes. The board no longer loses its history: a
+  closed task is archived, so filtering archived tasks emptied "Recently finished" right after `close`; it is now
+  built from all tasks, up to the last ten; `reference/manual.md` says what `close` still does.
+- **The portability guard tells a generic key from a private name, and says where a name came from.** A key variable
+  built as a standard key name plus one of the guard's generic labels (`CODEX_API_KEY_WORK`: `work`, like `client`
+  or `personal`) is no longer flagged; a bound folder's name still is. Every finding now names its source (`a private name: proj (a folder
+  bound in profiles.json)`), and `CONTRIBUTING.md` explains `~/.orchestra/private_terms.txt`.
+- **`install.sh` and `uninstall.sh` print Windows paths on Windows** (`cygpath -w`), as `orch doctor` does;
+  `uninstall.sh` closes by saying that the clone folder and any PATH line the user added (`~/.bashrc`, the user PATH
+  on Windows) are theirs to remove.
+- **The README quick start reads as a quick start.** The internal detail — the 20-minute projection window, atomic
+  writes and locks, `--force` and manual capacity, `wait --any`, `STATUS: BLOCKED`/`PARTIAL`, exit 75 for capacity,
+  the Windows sandbox note — moved to the plugin README; the root README keeps the plugin, routing, budget mode,
+  a DeepSeek-led session and the requirements. The commented API-key profiles line is now a labelled example where
+  profiles are introduced: `work` is a free label, the key lives in `~/.orchestra/secrets.env` as
+  `CODEX_API_KEY_WORK=…` and never in the command, `profile use` binds it to the current project, and none of it is
+  needed with the usual ChatGPT login. The command table links to the full eight commands, and the no-clone install
+  line uses the documented `claude plugin install orchestra --marketplace orwrkr/orchestra`.
+- **`CONTRIBUTING.md` warns about the native Windows suite:** it takes half an hour or more in Git Bash — use WSL or CI
+  and keep a local Windows run for a Windows-specific failure.
+
 ## 0.29.1
 
 - **A fallback move no longer leaves state behind for a dead session.** A per-session fallback entry was removed only

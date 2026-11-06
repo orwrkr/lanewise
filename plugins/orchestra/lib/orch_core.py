@@ -337,7 +337,13 @@ def locked(scope):
     def decorate(fn):
         @wraps(fn)
         def call(*args, **kwargs):
-            path = ORCH_HOME / ".state.lock" if scope == "home" else state_dir() / ".state.lock"
+            if scope == "home":
+                path = ORCH_HOME / ".state.lock"
+            else:
+                d = state_dir()
+                if not d.is_dir():       # a folder the plugin never used: nothing to protect, and nothing to create
+                    return fn(*args, **kwargs)
+                path = d / ".state.lock"
             with state_lock(path):
                 return fn(*args, **kwargs)
         return call
@@ -362,7 +368,13 @@ def read_json(path, default, recover_corrupt=False, object_required=False):
                 return _read_json(path, default, False, object_required)
             except StateError:
                 pass
-        with state_lock(ORCH_HOME / ".state.lock" if home_state else state_dir() / ".state.lock"):
+            lock = ORCH_HOME / ".state.lock"
+        else:
+            d = state_dir()
+            if not d.is_dir():       # no project state yet: there is nothing to preserve, and nothing to create
+                return _read_json(path, default, False, object_required)
+            lock = d / ".state.lock"
+        with state_lock(lock):
             return _read_json(path, default, True, object_required)
     return _read_json(path, default, False, object_required)
 
@@ -511,7 +523,9 @@ def project_dir():
     return _toplevels[cwd]
 
 
-def state_dir(create=True):
+def state_dir(create=False):
+    """<project>/.orchestra. Creation is explicit: a command that only reads must not leave one in a folder where the
+    plugin was never used (README: "projects where the plugin was never used get nothing")."""
     p = project_dir() / ".orchestra"
     if create and not p.exists():
         p.mkdir(parents=True, exist_ok=True)
@@ -5156,7 +5170,7 @@ def cmd_run(a):
     if handoff:
         load_meta(handoff)                 # a reclaimed pooled task this run executes: must exist
     run_id = "%s-%s-%s" % (provider[:3], now().strftime("%m%d-%H%M%S"), rand_suffix())
-    run_dir = state_dir() / "runs" / run_id
+    run_dir = state_dir(create=True) / "runs" / run_id
     run_dir.mkdir(parents=True)
     (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
     out_file = run_dir / "output.md"
@@ -5729,13 +5743,13 @@ def workdir_win(m):
     return win_path(w)
 
 
-def handoffs_root():
-    return state_dir() / "handoffs"
+def handoffs_root(create=False):
+    return state_dir(create=create) / "handoffs"
 
 
 @locked("project")
 def next_handoff_id(prefix):
-    root = handoffs_root()
+    root = handoffs_root(create=True)
     root.mkdir(parents=True, exist_ok=True)
     counter = read_json(root / "counter.json", {}, recover_corrupt=True)
     numbers = [int(d.name[len(prefix) + 1:]) for d in root.iterdir()
@@ -5882,8 +5896,9 @@ def operator_card(m):
     if result_status(m) == "OFFERED":
         lines = ["┌ %s · %s — in the manual pool" % (m["id"], m["title"]),
                  "│ Suggested: %s%s" % (suggestion(m), " (changes files, in its own worktree)" if task_writes(m) else ""),
-                 "│ Take it: say “%s to %s” (or /orchestra:manual take %s) — you then get the line to paste."
-                 % (m["id"], agent_name(m.get("provider")), m["id"])]
+                 "│ Take it: say “%s to %s” (or /orchestra:manual %s to %s); from a terminal:"
+                 " orch handoff take %s — you then get the line to paste."
+                 % (m["id"], agent_name(m.get("provider")), m["id"], agent_name(m.get("provider")), m["id"])]
         every = read_json(handoffs_root() / ".pool.json", {}, recover_corrupt=True).get("check_min") or POOL_CHECK_MIN
         lines.append("│ No take from the pool for %d min → the orchestrator starts taking tasks back, one at a time while "
                      "waiting still makes sense%s." % (every, " (this one: %s)" % m["fallback"] if m.get("fallback") else ""))
@@ -5909,7 +5924,8 @@ def operator_card(m):
     lines.append("│ Model: %s" % model)
     lines.append("│ Paste into the %s chat:" % agent)
     lines.append("│   %s" % m["paste"])
-    lines.append("│ The watcher sees completion via RESULT.md — no need to report back.")
+    lines.append("│ The watcher sees completion via RESULT.md — no need to report back (from a terminal, "
+                 "`orch handoff check` picks it up; in a session the hooks do).")
     if m.get("fallback"):
         lines.append("│ Fallback: %s if not started within %d min / not done within %d min." % (
             m["fallback"], m["pickup_min"], m["reassign_min"]))
@@ -5979,7 +5995,7 @@ def limit_reached(prof, max_open, force):
 
 def create_handoff(a, body, offered):
     hid = next_handoff_id(a.prefix)
-    (handoffs_root() / hid / "BODY.md").write_text(body, encoding="utf-8")
+    (handoffs_root(create=True) / hid / "BODY.md").write_text(body, encoding="utf-8")
     return {
         "id": hid, "title": a.title, "provider": a.provider.lower(), "profile": None, "model": a.model,
         "effort": a.effort, "model_key": a.model_key, "created": iso(now()),
@@ -6035,7 +6051,7 @@ def assign_handoff(m, prof):
     writes = task_writes(m)
     branch = None
     if writes:
-        workdir, branch = make_worktree(hid, m.get("base") or "HEAD", "ag/" + hid.lower(), root=state_dir() / "wt")
+        workdir, branch = make_worktree(hid, m.get("base") or "HEAD", "ag/" + hid.lower(), root=state_dir(create=True) / "wt")
     else:
         workdir = proj
     wt = ".orchestra/wt/%s" % hid
@@ -6096,7 +6112,7 @@ def cmd_handoff_new(a):
     """Assign right away: the claim reserves capacity and ownership under the lock, the files are written outside it."""
     check_write_flags(a)
     body = read_body(a)
-    with state_lock(state_dir() / ".state.lock"):
+    with state_lock(state_dir(create=True) / ".state.lock"):
         gate, rc = manual_gate(a.provider, a.model_key, a.profile, a.max_open, a.force)
         if rc is not None:
             return rc
@@ -6113,7 +6129,7 @@ def cmd_handoff_new(a):
 def cmd_handoff_offer(a):
     check_write_flags(a)
     body = read_body(a)
-    with state_lock(state_dir() / ".state.lock"):
+    with state_lock(state_dir(create=True) / ".state.lock"):
         return offer_handoff(a, body)
 
 
@@ -6163,7 +6179,7 @@ def cmd_handoff_reclaim(a):
 def finish_reclaimed(hid, status, run_id=None):
     """A reclaimed pooled task was executed: free the one-at-a-time slot. Never fails (called from orch run)."""
     try:
-        with state_lock(state_dir() / ".state.lock"):
+        with state_lock(state_dir(create=True) / ".state.lock"):
             _finish_reclaimed(hid, status, run_id)
     except (SystemExit, Exception):
         pass
@@ -6193,9 +6209,9 @@ def materialize_handoff(claim, prof):
         assigned = assign_handoff(dict(claim), prof)
     except BaseException as ex:
         # A worktree made before the failure stays on record: a later take reuses it, and close can remove it.
-        wt = state_dir() / "wt" / claim["id"]
+        wt = state_dir(create=True) / "wt" / claim["id"]
         left = quietly(worktree_branch_at, wt, project_dir()) if task_writes(claim) else None
-        with state_lock(state_dir() / ".state.lock"):
+        with state_lock(state_dir(create=True) / ".state.lock"):
             current = load_meta(claim["id"])
             if current.get("assigning") == token:
                 current.pop("assigning", None)
@@ -6211,7 +6227,7 @@ def materialize_handoff(claim, prof):
                                        manual_note=note)
                 save_meta(current)
         raise
-    with state_lock(state_dir() / ".state.lock"):
+    with state_lock(state_dir(create=True) / ".state.lock"):
         current = load_meta(claim["id"])
         if current.get("assigning") != token or result_status(current) in TERMINAL or current.get("archived"):
             raise SystemExit("orch: %s changed while being assigned; no task handed out" % claim["id"])
@@ -6229,7 +6245,7 @@ def materialize_handoff(claim, prof):
 
 def cmd_handoff_take(a):
     """Claim under the project lock, then write the task files without holding it."""
-    with state_lock(state_dir() / ".state.lock"):
+    with state_lock(state_dir(create=True) / ".state.lock"):
         m = load_meta(a.id.upper())
         st = result_status(m)
         if st != "OFFERED" or m.get("archived"):
@@ -6393,16 +6409,19 @@ def pool_event(metas, mark=True):
 @locked("project")
 def write_board():
     """<project>/.orchestra/MANUAL.md — the manual lane at a glance for the operator (any editor or the agent's IDE)."""
-    metas = [m for m in all_metas() if not m.get("archived")]
+    every = all_metas()
+    metas = [m for m in every if not m.get("archived")]
     states = {m["id"]: result_status(m) for m in metas}       # no workdir scans: the board is rewritten from hooks
     pool = [m for m in metas if states[m["id"]] == "OFFERED"]
     state = pool_state(sorted(m["id"] for m in pool))
     out = [m for m in metas if states[m["id"]] in OPEN_TAKEN]
-    done = [m for m in metas if states[m["id"]] in TERMINAL][-10:]
+    # a closed task is archived: it still belongs under "Recently finished", which close must not empty
+    done = sorted((m for m in every if result_status(m) in TERMINAL),
+                  key=lambda m: m.get("closed") or (m.get("notified") or {}).get("final") or m.get("created") or "")[-10:]
     lines = ["# Orchestra manual tasks", "",
              "Updated %s · `%s` · maintained by orch, do not edit." % (now().strftime("%Y-%m-%d %H:%M"), project_dir()),
              "Take from the pool: tell the orchestrator “AG-0004 to Antigravity” "
-             "(or `/orchestra:manual take AG-0004`). Done / cancel: “AG-0004 done” / “AG-0004: cancel”.", "",
+             "(or `/orchestra:manual AG-0004 to Antigravity`). Done / cancel: “AG-0004 done” / “AG-0004: cancel”.", "",
              "## Pool — available to take (%d)" % len(pool)]
     if pool:
         anchor, took = pool_clock(metas, state)
@@ -6432,10 +6451,10 @@ def write_board():
         lines.append("  - paste: `%s`" % m["paste"])
     lines += ([] if out else ["_none_"]) + ["", "## Recently finished"]
     for m in done:
-        lines.append("- %s %s — %s%s" % (m["id"], states[m["id"]], m["title"],
+        lines.append("- %s %s — %s%s" % (m["id"], result_status(m), m["title"],
                                          " (%s)" % (agent_reported(m) or agent_name(m.get("provider"))) if m.get("taken") else ""))
     lines += [] if done else ["_none_"]
-    (state_dir() / "MANUAL.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (state_dir(create=True) / "MANUAL.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def result_excerpt(m, n=40):
@@ -6737,7 +6756,7 @@ def cmd_handoff_done(a):
 
 
 def cmd_handoff_close(a):
-    with state_lock(state_dir() / ".state.lock"):
+    with state_lock(state_dir(create=True) / ".state.lock"):
         m = load_meta(a.id.upper())
         m["archived"] = iso(now())
         save_meta(m)
@@ -6892,6 +6911,20 @@ def log_session(data):
                    "cost_usd": info["cost_usd"], "spend_usd": spend_usd, "rows": info["rows"], "lead": lead})
 
 
+def sessionless_records(ledger, proj):
+    """Runs and manual tasks logged with no session: a manual task closed from a terminal, `orch run` outside one."""
+    canon = canon_path(proj)
+    return [r for r in ledger if r.get("kind") in ("run", "handoff") and not r.get("session")
+            and r.get("project") == canon]
+
+
+def outside_info(records):
+    """The pseudo-session of the records that have no session, so they report in the same format."""
+    return {"session": "none", "outside": True, "title": "outside a session",
+            "start": records[0].get("ts") if records else None,
+            "end": records[-1].get("ts") if records else None, "rows": [], "cost_usd": None}
+
+
 def session_data(sid, ledger):
     """(info, external records) of a session: live transcript if it still exists, else the SessionEnd snapshot."""
     tp = transcript_for(sid)
@@ -6945,7 +6978,8 @@ def print_session(info, ext):
     main_models = {str(r.get("model")) for r in info.get("rows") or [] if r.get("who") == "main"} - {"<synthetic>"}
     if not lead and main_models and not any(m.startswith("claude") for m in main_models):
         lead = ", ".join(sorted(main_models))         # a session started with orch launch, seen in its transcript
-    print("Session %s · %s · %s%s" % (info["session"][:8], ("“%s”" % info["title"]) if info.get("title") else "untitled",
+    sid = info["session"] if info.get("outside") else info["session"][:8]
+    print("Session %s · %s · %s%s" % (sid, ("“%s”" % info["title"]) if info.get("title") else "untitled",
                                       span, " · lead: %s" % display_name(lead) if lead else ""))
     rows = usage_rows(info, ext, display=True)
     if not rows:
@@ -6976,9 +7010,19 @@ def print_session(info, ext):
         print("  Manual executors do not report tokens: for them the agent, model and time are shown.")
 
 
+def usage_json_item(info, ext):
+    item = {"session": None if info.get("outside") else info["session"], "title": info.get("title"),
+            "start": info.get("start"), "end": info.get("end"), "cost_usd": info.get("cost_usd"),
+            "rows": usage_rows(info, ext)}
+    if info.get("outside"):
+        item["outside_a_session"] = True
+    return item
+
+
 def cmd_usage(a):
     ledger = ledger_read()
     proj = project_root(project_dir())
+    outside = sessionless_records(ledger, proj)     # records with no session: reachable, never an error
     if a.list:
         seen, lines = set(), []
         for tp in project_transcripts(proj)[:a.limit]:
@@ -6990,9 +7034,10 @@ def cmd_usage(a):
             if r.get("project") == canon_path(proj) and sid and sid not in seen and len(lines) < a.limit:
                 seen.add(sid)
                 lines.append(session_data(sid, ledger))
+        if outside:
+            lines.append((outside_info(outside), outside))
         if a.json:
-            print(json.dumps([{"session": i["session"], "title": i.get("title"), "start": i.get("start"),
-                               "rows": usage_rows(i, e)} for i, e in lines], ensure_ascii=False, indent=2))
+            print(json.dumps([usage_json_item(i, e) for i, e in lines], ensure_ascii=False, indent=2))
             return 0
         if not lines:
             print("No sessions with usage data for %s." % canon_path(proj))
@@ -7000,24 +7045,32 @@ def cmd_usage(a):
             tok = sum(int((r["usage"] or {}).get(k) or 0) for r in usage_rows(info, ext)
                       for k in ("input_tokens", "output_tokens"))
             models = sorted({display_name(r["model"]) for r in usage_rows(info, ext)})
-            print("%s  %s  %-40s  %s tokens (uncached) · %s" % (
-                short_time(info.get("start")), info["session"][:8], (info.get("title") or "")[:40], fmt_tok(tok),
+            label = "(outside a session)" if info.get("outside") else info["session"][:8]
+            print("%s  %-8s  %-40s  %s tokens (uncached) · %s" % (
+                short_time(info.get("start")), label, (info.get("title") or "")[:40], fmt_tok(tok),
                 ", ".join(models)[:80]))
-        print("Details: orch usage --session <id>")
+        print("Details: orch usage --session <id>" + (" · records outside a session: orch usage --session none"
+                                                     if outside else ""))
         return 0
     sid = a.session or session_id()
-    if not sid:
-        latest = project_transcripts(proj)
-        sid = latest[0].stem if latest else next((r["session"] for r in reversed(ledger)
-                                                   if r.get("project") == canon_path(proj) and r.get("session")), None)
-    if not sid:
-        print("No session to show: pick one with orch usage --list / --session <id>.")
-        return 1
-    info, ext = session_data(sid, ledger)
+    if (sid or "").lower() == "none":
+        if not outside:
+            print("No usage records outside a session for %s." % canon_path(proj))
+            return 0
+        info, ext = outside_info(outside), outside
+    else:
+        if not sid:
+            latest = project_transcripts(proj)
+            sid = latest[0].stem if latest else next((r["session"] for r in reversed(ledger)
+                                                       if r.get("project") == canon_path(proj) and r.get("session")), None)
+        if not sid:
+            print("Usage is collected per Claude Code session: from a terminal, pick one with `orch usage --list` "
+                  "and `orch usage --session <id>`; a manual task closed from a terminal or an `orch run` outside "
+                  "a session is under `orch usage --session none`.")
+            return 0
+        info, ext = session_data(sid, ledger)
     if a.json:
-        print(json.dumps({"session": info["session"], "title": info.get("title"), "start": info.get("start"),
-                          "end": info.get("end"), "cost_usd": info.get("cost_usd"), "rows": usage_rows(info, ext)},
-                         ensure_ascii=False, indent=2))
+        print(json.dumps(usage_json_item(info, ext), ensure_ascii=False, indent=2))
         return 0
     print_session(info, ext)
     return 0
@@ -7068,10 +7121,16 @@ def cmd_footprint(a):
         p = Path(p)
         found = [s for s in (p / ".orchestra", p / AG_RULE_PATH, p.parent / (p.name + ".wt")) if s.exists()]
         if found:
+            names = []
+            for s in found:                 # a path inside the project as it reads there, not the project's path again
+                try:
+                    names.append(str(s.relative_to(p)))
+                except ValueError:
+                    names.append(str(s))    # a sibling worktree, <project>.wt
             print("  project %s: %s (+ their lines in .git/info/exclude; %s is the general Antigravity rule, which "
                   "stays after a task closes; .orchestra/wt/ holds the worktrees of tasks that change files, and if "
                   ".orchestra/ is deleted by hand run `git worktree prune` there)"
-                  % (p, ", ".join(str(s) for s in found), AG_RULE_PATH))
+                  % (p, ", ".join(names), AG_RULE_PATH))
     print("Remove everything outside Claude Code: bash uninstall.sh --purge (without --purge personal data is kept).")
     return 0
 
@@ -7193,7 +7252,7 @@ def cmd_registry(a):
             print("already exists: %s" % dest)
             return 0
         if a.project:
-            state_dir()
+            state_dir(create=True)
         dest.parent.mkdir(parents=True, exist_ok=True)
         registry_write(dest, registry_marker_line() + "\n" + registry_builtin()[0])
         print("created: %s (edit it; it overrides the built-in registry)" % dest)
@@ -7234,11 +7293,12 @@ def cmd_status(a):
         where = project_dir()
         lines.append("Executor profiles for %s (orch profile show):" % canon_path(project_root(where)))
         lines += profile_lines(where, budget=False)
-    metas =[m for m in all_metas() if result_status(m) not in TERMINAL] if (project_dir() / ".orchestra").exists() else []
+    has_state = (project_dir() / ".orchestra").exists()
+    metas = [m for m in all_metas() if result_status(m) not in TERMINAL] if has_state else []
     if metas:
         lines.append("Open manual tasks (pooled and handed out; board .orchestra/MANUAL.md):")
         lines += ["  " + handoff_line(m) for m in metas]
-    if not a.brief:
+    if not a.brief and has_state:       # a read-only command must not create .orchestra in a folder it never used
         events = check_events(mark=False)
         if events:
             lines.append("Unreported events:")
@@ -7689,8 +7749,9 @@ def parse_args(argv):
     d.set_defaults(fn=cmd_doctor)
 
     u = sub.add_parser("usage", help="per session: which model did what, tokens (Claude + CLI executors + manual)")
-    u.add_argument("--session", help="session id or prefix (default: current, else the latest of this project)")
-    u.add_argument("--list", action="store_true", help="recent sessions of this project")
+    u.add_argument("--session", help="session id or prefix (default: current, else the latest of this project); "
+                                     "`none` shows records made outside a session")
+    u.add_argument("--list", action="store_true", help="recent sessions of this project (and its records outside one)")
     u.add_argument("--limit", type=int, default=10)
     u.add_argument("--json", action="store_true")
     u.set_defaults(fn=cmd_usage)

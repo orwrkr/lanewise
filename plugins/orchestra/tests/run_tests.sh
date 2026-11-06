@@ -250,7 +250,8 @@ rm -f "$GT/msg"    # it holds a home path from above, and this repository is sca
 GH="$T/guard-home"; mkdir -p "$GH" || die "cannot create guard home"
 printf 'Acmecorp\n# a comment\n\n' > "$GH/private_terms.txt"
 cat > "$GH/profiles.json" <<'EOF'
-{"providers": {"deepseek": {"profiles": {"betacli": {"key": "KEY_OF_GAMMA"}, "personal": {"key": "DEEPSEEK_API_KEY"}}}},
+{"providers": {"deepseek": {"profiles": {"betacli": {"key": "KEY_OF_GAMMA"}, "personal": {"key": "DEEPSEEK_API_KEY"}}},
+               "codex": {"profiles": {"work": {"key": "CODEX_API_KEY_WORK"}}}},
  "projects": {"/path/to/delta-app": {"deepseek": "betacli"}}, "project_rules": {"/path/to/epsilon-app": "rule"}}
 EOF
 guard_private() { printf '%s\n' "$1" > "$GT/f.txt"; ORCH_HOME="$(native "$GH")" $PY "$GUARD" --root "$(native "$GT")" >/dev/null 2>&1; }
@@ -260,6 +261,12 @@ done
 for text in "macmecorpx" "personal" "deepseek@personal" "DEEPSEEK_API_KEY" "a comment" "client"; do
   guard_private "see $text here" && ok "guard allows: $text" || bad "guard false alarm on a private name: $text"
 done
+# a standard key name with a free label names no account: the label is generic, the key is the standard variable
+guard_private "see CODEX_API_KEY_WORK here" && ok "a standard key plus a generic label is not a private name" \
+  || bad "guard flagged a standard key with a generic label"
+printf 'see delta-app here\n' > "$GT/f.txt"
+out=$(ORCH_HOME="$(native "$GH")" $PY "$GUARD" --root "$(native "$GT")" 2>&1)
+contains "$out" "delta-app (a folder bound in profiles.json)" "the guard names where a private name came from"
 guard_on "see acmecorp here" && ok "no ~/.orchestra (CI): no private names to check" || bad "guard flagged a name with no list"
 printf 'subject acmecorp\n' > "$T/guard-msg"
 ORCH_HOME="$(native "$GH")" $PY "$GUARD" --message "$(native "$T/guard-msg")" >/dev/null 2>&1 && bad "guard missed a private name in a message" || ok "guard flags a private name in a message"
@@ -289,6 +296,25 @@ gpush t1 && bad "pre-push let a private name through in a tag" || ok "pre-push s
 git -C "$GT" tag -d t1 >/dev/null
 gcommit --allow-empty -m "fine again"
 gpush "$gbranch" && ok "pre-push lets the next clean commit through" || bad "pre-push stopped a clean commit"
+
+echo "── read commands leave an unused folder alone"
+FRESH="$T/fresh-git"; mkdir -p "$FRESH" || die "cannot create a fresh repository folder"
+git init -q "$FRESH" || die "cannot init a fresh repository"
+PLAIN="$T/fresh-plain"; mkdir -p "$PLAIN" || die "cannot create a fresh folder"
+for cmd in "status" "profile show" "handoff list" "guide manual" "doctor"; do
+  ( cd "$FRESH" && $ORCH $cmd >/dev/null 2>&1 )
+  ( cd "$PLAIN" && $ORCH $cmd >/dev/null 2>&1 )
+done
+[[ -e "$FRESH/.orchestra" ]] && bad "a read in a fresh git folder created .orchestra" || ok "a read in a fresh git folder creates no .orchestra"
+[[ -e "$PLAIN/.orchestra" ]] && bad "a read in a folder outside git created .orchestra" || ok "a read in a folder outside git creates no .orchestra"
+grep -q ".orchestra/" "$FRESH/.git/info/exclude" 2>/dev/null && bad "a read added the .orchestra/ line to .git/info/exclude" || ok "a read leaves .git/info/exclude alone"
+( cd "$FRESH" && $ORCH statusline </dev/null >/dev/null 2>&1 )
+( cd "$FRESH" && printf '{}' | $ORCH hook post-tool >/dev/null 2>&1 )
+( cd "$FRESH" && printf '{}' | $ORCH hook user-prompt >/dev/null 2>&1 )
+[[ -e "$FRESH/.orchestra" ]] && bad "the status line or a hook created .orchestra" || ok "the status line and hooks create no .orchestra in an unused folder"
+printf 'x' | ( cd "$PLAIN" && $ORCH handoff offer --title "first here" >/dev/null 2>&1 ); rc=$?
+expect_rc 0 $rc "a write command still works in a folder with no state"
+[[ -d "$PLAIN/.orchestra/handoffs" ]] && ok "handoff offer creates .orchestra (a write command)" || bad "handoff offer created no state"
 
 echo "── quota"
 out=$($ORCH quota show); contains "$out" "all executors available\|All executors available" "empty availability"
@@ -598,6 +624,17 @@ open(os.path.join(sys.argv[1], "sess-lead.jsonl"), "w", encoding="utf-8").write(
 EOF
 out=$($ORCH usage --session sess-lead); contains "$out" "lead: DeepSeek V4 Pro" "a DeepSeek-led session is recognised in its transcript"
 contains "$out" "assumes Claude prices" "no misleading Claude cost estimate for a DeepSeek lead"
+# outside a session: no data is not an error, and records made outside a session stay reachable
+EMPTY="$T/usage-empty"; mkdir -p "$EMPTY" || die "cannot create an empty usage folder"
+out=$( cd "$EMPTY" && env -u CLAUDE_CODE_SESSION_ID $ORCH usage 2>&1 ); rc=$?
+expect_rc 0 $rc "usage with no session and no data is not an error"
+contains "$out" "collected per Claude Code session" "usage outside a session says how to pick one"
+( cd "$REPO" && env -u CLAUDE_CODE_SESSION_ID FAKE_CODEX=ok $ORCH run codex --model gpt-5.6-terra "outside a session" >/dev/null 2>&1 )
+out=$( cd "$REPO" && env -u CLAUDE_CODE_SESSION_ID $ORCH usage --list )
+contains "$out" "(outside a session)" "usage --list has a row for records made outside a session"
+out=$( cd "$REPO" && env -u CLAUDE_CODE_SESSION_ID $ORCH usage --session none )
+contains "$out" "outside a session" "usage --session none shows them"
+contains "$out" "outside a session · OK" "usage --session none keeps the usual rows"
 
 echo "── worktree"
 out=$($ORCH worktree add feat-x); contains "$out" "proj.wt/feat-x" "worktree created next to repo"
@@ -660,6 +697,8 @@ out=$(printf '## Goal\nCheck the form — café ✓\n' | $ORCH handoff offer --t
 expect_rc 0 $rc "task offered to the pool"
 PID=$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)
 contains "$out" "in the manual pool" "pool card shown"
+contains "$out" "/orchestra:manual $PID to Antigravity" "offer card: the slash form matches the command's argument hint"
+contains "$out" "orch handoff take $PID " "offer card: the terminal form"
 [[ -e "$REPO/.orchestra/handoffs/$PID/TASK.md" ]] && bad "TASK.md written before anyone took the task" || ok "no TASK.md until taken"
 out=$($ORCH handoff list); contains "$out" "Pool — available to take (1)" "list shows the pool"
 contains "$out" "$PID *OFFERED" "offered state"
@@ -671,6 +710,7 @@ out=$($ORCH handoff take "$PID" --max-open 99); rc=$?
 expect_rc 0 $rc "operator takes the task"
 contains "$out" "In Antigravity, in the project folder: " "take: the card says the project folder"
 contains "$out" "Execute the task described in .orchestra/handoffs/$PID/TASK.md" "paste line after take"
+contains "$out" "orch handoff check" "take card: a terminal picks completion up with handoff check"
 TW="$REPO"
 grep -q "an executor in the Orchestra system" "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "TASK.md: executor role for the manual agent" || bad "role missing"
 grep -q 'Project rules.*`CLAUDE.md`' "$TW/.orchestra/handoffs/$PID/TASK.md" && ok "TASK.md points to the project rules" || bad "rules pointer missing"
@@ -771,6 +811,11 @@ contains "$out" "not in the pool" "hold refusal says not in the pool"
 $ORCH handoff cancel "$HLD1" >/dev/null; $ORCH handoff close "$HLD1" >/dev/null
 $ORCH handoff cancel "$HLD2" >/dev/null; $ORCH handoff close "$HLD2" >/dev/null
 $ORCH handoff cancel "$HLD3" >/dev/null; $ORCH handoff close "$HLD3" >/dev/null
+$PY - "$(native "$REPO/.orchestra/MANUAL.md")" "$HLD3" <<'EOF' && ok "the board keeps a closed task under Recently finished" || bad "close emptied Recently finished"
+import sys
+tail = open(sys.argv[1], encoding="utf-8").read().split("## Recently finished", 1)[1]
+assert sys.argv[2] in tail and "_none_" not in tail, tail
+EOF
 for i in 1 2 3 4 5; do printf 'x' | $ORCH handoff offer --title "bulk $i" --check-min 999 >/dev/null; done
 printf 'x' | $ORCH handoff offer --title "too many" >/dev/null; expect_rc 75 $? "pool size limited (max_offers)"
 git -C "$REPO" rm -q CLAUDE.md && git -C "$REPO" commit -qm "drop rules"
@@ -1119,8 +1164,10 @@ printf 'STATUS: DONE\nok\n' > "$NG/.orchestra/handoffs/$NGO/RESULT.md"
 out=$(ng $ORCH handoff check); contains "$out" "$NGO finished: STATUS DONE" "outside git: completion detected"
 out=$(ng $ORCH footprint); contains "$out" ".agents/rules/orchestra-task.md" "footprint names the general Antigravity rule"
 contains "$out" "git worktree prune" "footprint tells what to do about worktree entries if .orchestra/ is deleted by hand"
+contains "$out" "project .*: \.orchestra, \.agents/rules/orchestra-task.md" "footprint names the project's own paths relative to it"
 grep -q "orchestra-task.md" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh names the rule" || bad "uninstall.sh does not name the rule"
 grep -q "git worktree prune" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh mentions git worktree prune" || bad "uninstall.sh: prune"
+grep -q "Yours to remove: the clone folder" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh: the clone folder and a PATH line you added are yours to remove" || bad "uninstall.sh: no line about the clone folder"
 grep -q "orchestra-task.md" "$PLUGIN/README.md" && ok "README names the rule among what the plugin leaves behind" || bad "README: rule missing"
 grep -q "effort High --worktree\|always \`--worktree\`" "$PLUGIN/skills/orchestrate/reference/manual.md" && bad "manual.md still offers --worktree" || ok "manual.md no longer offers --worktree"
 grep -q "\[--worktree\]" "$PLUGIN/registry/providers.yaml" && bad "the registry still offers --worktree" || ok "the registry no longer offers --worktree"

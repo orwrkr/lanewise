@@ -9,8 +9,11 @@
 | `codex`, `deepseek@work`, … | the log `~/.orchestra/usage.jsonl`: `orch run` runs (model, `--task` or the prompt's first line, status, time, tokens from the adapter) |
 | `antigravity (manual)` | manual tasks: agent and model from the `AGENT:` line in RESULT.md, status, time; manual agents don't report tokens |
 
-- `orch usage --list` — the project's recent sessions; `orch usage --session <id>` — a specific one (an id prefix
-  works); `--json` — for parsing.
+- `orch usage --list` — the project's recent sessions (and one row for the records made outside any session);
+  `orch usage --session <id>` — a specific one (an id prefix works); `--json` — for parsing.
+- Usage is collected per Claude Code session. From a terminal nothing is current: pick a session from `--list` and
+  pass it as `--session <id>`; `--session none` shows the runs and manual tasks logged with no session (a manual
+  task closed from a terminal, an `orch run` outside a session). No data is not an error.
 - Tokens: "input" — uncached (for Claude including cache writes), "cache" — cache reads, "output". Totals — per
   model. For Claude Code, also its own cost estimate at API prices (nominal on a subscription).
 - Claude Code transcripts are deleted over time; when a session ends, the SessionEnd hook saves its figures to the

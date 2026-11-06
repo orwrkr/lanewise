@@ -17,6 +17,8 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) WIN=1 ;; *) WIN=0 ;; esac
 
 say()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
+# a file path in the form the user's own tools show it: on Windows `C:\…`, as orch doctor prints, not `/c/…`
+wpath() { if [[ $WIN == 1 ]] && command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 
 py_check() {    # the interpreter's absolute path (forward slashes, for Git Bash) when it is Python >= 3.8
   "$1" -c 'import sys; print(sys.executable.replace("\\", "/")) if sys.version_info >= (3, 8) else sys.exit(1)' 2>/dev/null
@@ -90,13 +92,13 @@ echo "$DOCTOR"
 echo
 say "Done. In open Claude Code sessions run /reload-plugins (or start a new session)."
 if [[ $had_registry == 1 ]] && grep -q 'registry copy' <<<"$DOCTOR"; then    # doctor names a stale copy
-  warn "Your personal registry $HOME_DIR/providers.yaml overrides the built-in one, which has changed since:"
+  warn "Your personal registry $(wpath "$HOME_DIR/providers.yaml") overrides the built-in one, which has changed since:"
   warn "  orch registry diff shows the difference; take over what you need, then: orch registry diff --accept"
 fi
 grep -q '✔ Codex CLI' <<<"$DOCTOR" || warn "Codex CLI not found: npm i -g @openai/codex && codex login"
 grep -q '✔ DEEPSEEK_API_KEY\|✔ DeepSeek@' <<<"$DOCTOR" || \
-  warn "DeepSeek: put the key as a DEEPSEEK_API_KEY=sk-… line in $HOME_DIR/secrets.env (not in the repository)"
-say "Executor profiles: orch profile show · manual task pool: /orchestra:manual · session usage: orch usage"
+  warn "DeepSeek: put the key as a DEEPSEEK_API_KEY=sk-… line in $(wpath "$HOME_DIR/secrets.env") (not in the repository)"
+say "Executor profiles: orch profile show · manual task pool: /orchestra:manual · session usage: orch usage (inside a Claude Code session)"
 say "DeepSeek as the lead instead of Claude: orch launch deepseek [--no-claude] (from a terminal)"
 say "Claude budget mode (use the 5-hour window before it expires): set \"orch statusline\" as your status line (orch guide budget)"
 say "What the plugin created outside Claude Code: orch footprint · uninstall: bash uninstall.sh [--purge]"

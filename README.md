@@ -15,18 +15,10 @@ Routing follows a model registry (difficulty, cost, strengths, cross-review betw
 limits and balance, your availability and per-project **executor profiles** (which key or account, which models,
 which rules — or `off`). **Spend limits** cap what API-billed executors (DeepSeek, Codex/Claude on a key) may
 spend — a manual counter for prepaid keys, a monthly budget otherwise — `orch spend`. Every session gets a
-**usage log**: which model did what and how many tokens it spent.
-A **budget mode** watches the Claude subscription's 5-hour window: when it would expire largely unused, Claude takes
-the work that would otherwise cost money on API keys. Projections use each measurement's time; numbers older
-than 20 minutes cannot enable SURPLUS, and a weekly overrun raises TIGHT even without five-hour numbers.
-**DeepSeek can lead instead of Claude** (`orch launch deepseek`), with Claude models switched off entirely if you want.
-Session `--use` choices govern the lead too; only `--profile` overrides them.
-
-Shared state uses atomic writes and bounded OS locks, so parallel sessions preserve tasks and usage. Manual
-profile capacity is enforced even with `--force`; `wait --any` returns an existing unreported result once.
-Executor reports beginning `STATUS: BLOCKED` or `PARTIAL` keep that outcome in the header and usage log (exit 0).
-A Codex model at capacity exits 75 and blocks only that model for about 10 minutes. Native Windows sandbox
-setup for tests using temporary repositories is described in the Codex [registry notes](plugins/orchestra/registry/providers.yaml).
+**usage log**: which model did what and how many tokens it spent. A **budget mode** watches the Claude
+subscription's 5-hour window: when it would expire largely unused, Claude takes the work that would otherwise cost
+money on API keys. **DeepSeek can lead instead of Claude** (`orch launch deepseek`), with Claude models switched off
+entirely if you want.
 
 Works with Claude Code in WSL/Linux and natively on Windows. Needs Claude Code itself (installed and logged in),
 Python ≥ 3.8 (standard library only) and git; npm only for the optional Codex line below.
@@ -51,10 +43,11 @@ In PowerShell on Windows (for `orch.cmd`; then open a new terminal):
 [Environment]::SetEnvironmentVariable('Path', "$env:USERPROFILE\.local\bin;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
 ```
 
-Or from inside Claude Code, without a clone (no terminal `orch` command then):
+Or without a clone, from a terminal (the plugin's `orch` is then not in your terminal, only in the session's Bash
+tool):
 
-```
-/plugin install orchestra --marketplace orwrkr/orchestra
+```bash
+claude plugin install orchestra --marketplace orwrkr/orchestra
 ```
 
 Then `cd` into your project, start `claude` and run `/orchestra:status`; `claude plugin list` shows whether the
@@ -63,7 +56,6 @@ plugin is enabled. Give Claude Code a multi-step task and the `orchestrate` skil
 ```bash
 npm i -g @openai/codex && codex login     # Codex
 # DeepSeek: add the line DEEPSEEK_API_KEY=sk-… to ~/.orchestra/secrets.env (never to a repository)
-# Codex / Claude on an API key: orch profile set codex work --key CODEX_API_KEY_WORK && orch profile use codex work
 orch doctor                               # what is available
 ```
 
@@ -76,6 +68,9 @@ In `orch doctor`, `✔` is fine, `·` is optional and not set up, `✘` is a pro
 | `/orchestra:manual` | the manual task pool: "AG-0004 to Antigravity" |
 | `/orchestra:profile …` | "no DeepSeek in this project", "Codex on the second account" |
 | `/orchestra:usage` | who did what and how many tokens it took |
+
+All eight commands, including `/orchestra:quota`, `/orchestra:done` and `/orchestra:away`:
+[plugin documentation](plugins/orchestra/README.md#usage).
 
 ## Documentation
 

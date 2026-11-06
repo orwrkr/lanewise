@@ -15,12 +15,20 @@ git config core.hooksPath .githooks     # stops absolute paths, your user name a
 On Windows run it in Git Bash; under WSL run it inside WSL. Each environment has its own installation and its own
 `~/.orchestra/`.
 
+`~/.orchestra/private_terms.txt` is optional: one private name per line (`#` starts a comment). The portability
+guard reads it at run time and flags those names — together with your profile names, key variables and bound
+folders from `~/.orchestra/profiles.json` — in anything you would commit or push; each finding says where the name
+came from, so a common-looking folder or profile name is not a mystery.
+
 ## Before you open a pull request
 
 ```bash
 bash plugins/orchestra/tests/run_tests.sh      # must end with "failed: 0"
 claude plugin validate ./plugins/orchestra && claude plugin validate .
 ```
+
+Running the suite natively on Windows (Git Bash) takes half an hour or more: use WSL, or let CI run it on your pull
+request, and keep a local Windows run for debugging a Windows-specific failure (AGENTS.md, "Before committing").
 
 - Changed what `orch` does? Add a check to `tests/run_tests.sh` and bump the version in
   `plugins/orchestra/.claude-plugin/plugin.json`.

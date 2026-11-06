@@ -59,16 +59,30 @@ def local_identities(root):
     return sorted(n for n in names if n and len(n) >= 3 and n.lower() not in GENERIC_NAMES)
 
 
+def generic_key_var(var):
+    """`CODEX_API_KEY_WORK`: a standard key variable plus a generic label names nobody's account (the label is free)."""
+    low = var.lower()
+    return any(low.startswith(k + "_") and low[len(k) + 1:] in GENERIC_LABELS for k in STANDARD_KEYS)
+
+
 def private_names(root):
-    """Names of private projects and clients: `private_terms.txt` in ~/.orchestra (one per line, # for a comment), and
-    this machine's profile names, key variables and bound folders from profiles.json. None without ~/.orchestra (CI)."""
+    """{name: where it came from} for private projects and clients: `private_terms.txt` in ~/.orchestra (one per line,
+    # for a comment), and this machine's profile names, key variables and bound folders from profiles.json. Empty
+    without ~/.orchestra (CI). The source lets a contributor see why a common-looking name was flagged."""
     home = Path(os.environ.get("ORCH_HOME") or Path.home() / ".orchestra")
-    names = set()
+    names = {}
+
+    def add(name, source):
+        names.setdefault(name, source)
+
     try:
         terms = (home / "private_terms.txt").read_text(encoding="utf-8-sig").splitlines()
     except OSError:
         terms = []
-    names.update(t.strip() for t in terms if t.strip() and not t.strip().startswith("#"))
+    for term in terms:
+        term = term.strip()
+        if term and not term.startswith("#"):
+            add(term, "private_terms.txt in ~/.orchestra")
     try:
         data = json.loads((home / "profiles.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
@@ -78,15 +92,18 @@ def private_names(root):
     for section in providers.values():
         profiles = section.get("profiles") if isinstance(section, dict) else None
         for name, profile in (profiles if isinstance(profiles, dict) else {}).items():
-            names.add(name)
-            if isinstance(profile, dict) and isinstance(profile.get("key"), str):
-                names.add(profile["key"])
+            add(name, "a profile name in profiles.json")
+            if isinstance(profile, dict) and isinstance(profile.get("key"), str) \
+                    and not generic_key_var(profile["key"]):
+                add(profile["key"], "a key variable in profiles.json")
     projects = data.get("projects") if isinstance(data.get("projects"), dict) else {}
-    names.update(p.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] for p in projects)
+    for p in projects:
+        add(p.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1], "a folder bound in profiles.json")
     rules = data.get("project_rules") if isinstance(data.get("project_rules"), dict) else {}
-    names.update(p.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] for p in rules)
+    for p in rules:
+        add(p.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1], "a folder with project rules in profiles.json")
     skip = GENERIC_LABELS | STANDARD_KEYS | {root.name.lower()}
-    return sorted(n for n in names if n and len(n) >= 3 and n.lower() not in skip)
+    return {n: src for n, src in names.items() if n and len(n) >= 3 and n.lower() not in skip}
 
 
 def matchers(root):
@@ -94,8 +111,9 @@ def matchers(root):
     neither a folder nor a key variable built from it gets through."""
     out = [(re.compile(r"(?<![\w.-])" + re.escape(n) + r"(?![\w-])", re.I), "this machine's identity: " + n)
            for n in local_identities(root)]
-    out += [(re.compile(r"(?<![A-Za-z0-9])" + re.escape(n) + r"(?![A-Za-z0-9])", re.I), "a private name: " + n)
-            for n in private_names(root)]
+    out += [(re.compile(r"(?<![A-Za-z0-9])" + re.escape(n) + r"(?![A-Za-z0-9])", re.I),
+             "a private name: %s (%s)" % (n, src))
+            for n, src in private_names(root).items()]
     return out
 
 

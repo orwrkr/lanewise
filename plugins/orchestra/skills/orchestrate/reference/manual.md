@@ -104,7 +104,9 @@ waits are bounded; hooks and the status line skip busy state silently after a mu
   that the project folder got no stray edits from the agent, run the tests in the worktree, check the acceptance
   criteria and cross-review via Codex/Claude, commit on `ag/<id>` yourself, merge, then
   `orch handoff close <id> --remove-worktree`. A read-only task's findings are in RESULT.md. You need not keep your
-  own edits out of the project folder: the agent works elsewhere.
+  own edits out of the project folder: the agent works elsewhere. A task whose RESULT.md says DONE already leaves
+  the open list; `close` only archives it (it then leaves `orch status` and the board's open sections, and
+  `--remove-worktree` removes its worktree), while the files stay under `.orchestra/handoffs/<id>/`.
 - `STATUS BLOCKED/FAILED` → read RESULT.md; refine the task and hand it out again, or reassign.
 - `⌛ Manual pool: no task taken for N min …` — a pool check (see below).
 - `⏰ waiting for the operator for N min` (handed out but not started) → one short reminder, don't stop working.

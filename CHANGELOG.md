@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.29.1
+
+- **A fallback move no longer leaves state behind for a dead session.** A per-session fallback entry was removed only
+  when that same session saw its provider return, so a session that ended while its provider was on a fallback left
+  its entry in `spend_events.json` forever, and every hook call read it. A per-session entry now records its session
+  and time, is dropped when that session ends (`session-end`), and expires after seven days like a session budget
+  baseline, which now shares the same constant; the move-once comparison still looks only at the profile names, and a
+  project-wide entry is unchanged.
+
 ## 0.29.0
 
 - **The session line gives each account its own line.** Since 0.27.0 every account's counter carried its cache reads,

@@ -3083,6 +3083,7 @@ call("statusline", stdin=sl_input, env={"ORCH_SESSION_ID": None})
 assert not baseline_path.exists()
 
 # Exercise the recursion from both directions and prohibit all network/process/writes in the new status-line path.
+os.environ.clear()  # exactly the hooks' environment: an inherited CLAUDE_CODE_SESSION_ID would be another session
 os.environ.update(env)
 loader = importlib.machinery.SourceFileLoader("session_budget_orch", orch)
 spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -3117,6 +3118,63 @@ with mock.patch.object(m, "balance_refresh", side_effect=AssertionError("network
     assert m.resolve_profile("deepseek", project).name == "personal"
     m.session_budget_figure(m.resolve_profile("deepseek", project, follow=False))
 print("state/status line: corrupt file fails closed, pruning and cent top-up work; no baseline writes, network or subprocess; recursion guarded")
+
+# A per-session fallback entry records its session and time once; a later hook neither repeats nor rewrites the file.
+out = hook()
+assert "moved to personal" in out, out
+events_file = home / "spend_events.json"
+
+
+def fallback_entries():
+    return json.loads(events_file.read_text()).get("fallback") or {}
+
+
+mine = [v for v in fallback_entries().values() if v.get("session") == "budget-one"]
+assert len(mine) == 1 and mine[0].get("from") == "client" and mine[0].get("to") == "personal", mine
+assert dt.datetime.fromisoformat(mine[0]["at"])
+before = events_file.stat().st_mtime_ns
+assert "moved to" not in hook()
+assert events_file.stat().st_mtime_ns == before  # hooks run after every tool call: no change, no write
+
+# Ending that session drops its entry only: another session's entry and a project-wide one stay.
+state = json.loads(events_file.read_text())
+state["fallback"]["project|deepseek|budget-two"] = {
+    "from": "client", "to": "personal", "session": "budget-two",
+    "at": dt.datetime.now().astimezone().isoformat(timespec="microseconds")}
+state["fallback"]["project|deepseek"] = {"from": "client", "to": "personal"}
+events_file.write_text(json.dumps(state), encoding="utf-8")
+assert call("hook", "session-end", stdin='{"session_id":"budget-one"}') == ""
+left = fallback_entries()
+assert not any(v.get("session") == "budget-one" for v in left.values()), left
+assert left.get("project|deepseek|budget-two", {}).get("session") == "budget-two", left
+assert left.get("project|deepseek") == {"from": "client", "to": "personal"}, left
+
+# Expiry: eight days old or undated per-session entries go at the next write; six days old and project-wide stay.
+stamp = lambda days: (dt.datetime.now().astimezone() - dt.timedelta(days=days)).isoformat(timespec="microseconds")
+state = json.loads(events_file.read_text())
+for key, entry in (("project|deepseek|old", {"session": "old", "at": stamp(8)}),
+                   ("project|deepseek|fresh", {"session": "fresh", "at": stamp(6)}),
+                   ("project|deepseek|undated", {"session": "undated"})):
+    state["fallback"][key] = dict(entry, **{"from": "client", "to": "personal"})
+events_file.write_text(json.dumps(state), encoding="utf-8")
+assert call("hook", "session-end", stdin='{"session_id":"nobody"}') == ""
+left = fallback_entries()
+assert "project|deepseek|old" not in left and "project|deepseek|undated" not in left, left
+assert "project|deepseek|fresh" in left and "project|deepseek" in left, left
+
+# Nothing to drop and nothing expired: session-end leaves the file alone.
+before = events_file.stat().st_mtime_ns
+assert call("hook", "session-end", stdin='{"session_id":"nobody"}') == ""
+assert events_file.stat().st_mtime_ns == before
+
+# fallback_event prunes expired entries too when it writes: this session lost its entry, so the move is news again.
+state = json.loads(events_file.read_text())
+state["fallback"]["project|deepseek|older"] = {"from": "client", "to": "personal",
+                                               "session": "older", "at": stamp(8)}
+events_file.write_text(json.dumps(state), encoding="utf-8")
+assert "moved to personal" in hook()
+assert "project|deepseek|older" not in fallback_entries()
+print("fallback state: session and time recorded once; session-end drops only its entry; expired and undated entries go, fresh and project-wide stay")
 SESSION_BUDGET_TEST
 expect_rc 0 $? "session budget checks"
 bal_stop

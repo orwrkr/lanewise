@@ -53,6 +53,7 @@ SPEND_EVENTS_FILE = ORCH_HOME / "spend_events.json"
 BALANCE_FILE = ORCH_HOME / "balances.json"      # the providers' own figures for API keys (orch balance)
 SESSION_BUDGET_FILE = ORCH_HOME / "session_budget.json"
 SESSION_BUDGET_FIELDS = ("session_soft", "session_hard", "balance_floor")
+SESSION_STATE_DAYS = 7        # how long a per-session entry (a budget baseline, a fallback move) is kept
 BALANCE_STALE_SECONDS = 10 * 60   # orch status / spend show / SessionStart fetch again when the figure is older
 BALANCE_FRESH_SECONDS = 30 * 60   # the status line adds "(3h ago)" to a figure older than this
 BALANCE_TIMEOUT = 5               # seconds a provider gets to answer; every fetch is bounded by it
@@ -3988,10 +3989,41 @@ def spend_event(announce=True):
     return events if announce else []
 
 
+def fallback_expired(entry, cutoff):
+    """A per-session fallback entry outlives its session only this long (an unreadable `at` counts as expired);
+    a project-wide entry, one without `session`, never expires."""
+    if not isinstance(entry, dict) or "session" not in entry:
+        return False
+    at = parse_iso(str(entry.get("at") or ""))
+    return at is None or at < cutoff
+
+
+@locked("home")
+def fallback_forget(sid):
+    """Drop the fallback state of an ended session, and every per-session entry older than SESSION_STATE_DAYS:
+    a session that ends (or dies) while its provider is on a fallback must not leave an entry for every hook to read.
+    Writes only when something was removed; the rest of spend_events.json stays as it was."""
+    state = read_json(SPEND_EVENTS_FILE, {}, recover_corrupt=True)
+    if not isinstance(state, dict):
+        return
+    seen = state.get("fallback")
+    if not isinstance(seen, dict):
+        return
+    cutoff = now() - dt.timedelta(days=SESSION_STATE_DAYS)
+    kept = {key: entry for key, entry in seen.items()
+            if not fallback_expired(entry, cutoff)
+            and not (sid and isinstance(entry, dict) and entry.get("session") == sid)}
+    if len(kept) != len(seen):
+        state["fallback"] = kept
+        write_json(SPEND_EVENTS_FILE, state)
+
+
 @locked("home")
 def fallback_event(announce=True):
     """💡 events when a provider moves from its exhausted profile to the profile's `fallback` in this project, and when
-    it returns — once each way (the last move is kept in spend_events.json). announce=False only records the state
+    it returns — once each way (the last move is kept in spend_events.json). A per-session entry also keeps its
+    `session` and `at`, so `fallback_forget` can drop it when the session ends, and any per-session entry older than
+    SESSION_STATE_DAYS is dropped whenever this state is written. announce=False only records the state
     (SessionStart already shows it in the profiles)."""
     where = project_dir()
     data, err = load_profiles()
@@ -4002,6 +4034,7 @@ def fallback_event(announce=True):
         state = {}
     seen = state.get("fallback") if isinstance(state.get("fallback"), dict) else {}
     canon = canon_path(project_root(where))
+    sid = session_id()
     config = None
     events, changed = [], False
     for provider in managed_providers(data):
@@ -4011,22 +4044,27 @@ def fallback_event(announce=True):
             prof = resolve_profile(provider, where, data=data)
         except ProfileError:
             continue
-        if has_session_budget(configured) and session_id():
-            key += "|" + session_id()
+        per_session = bool(has_session_budget(configured) and sid)
+        if per_session:
+            key += "|" + sid
         was = seen.get(key) if isinstance(seen.get(key), dict) else None
         shown = display_name(provider)
         if prof.fallback_from:
             moved = {"from": prof.fallback_from, "to": prof.name}
-            if was and all(was.get(k) == v for k, v in moved.items()):
+            if was and all(was.get(k) == v for k, v in moved.items()):     # `at`/`session` never decide this
                 continue
             if prof.fallback_cause in ("floor", "session-hard", "session-soft"):
                 fig = session_budget_figure(configured) or {}
                 moved.update(cause=prof.fallback_cause, baseline_at=fig.get("baseline_at"), amount=fig.get("amount"))
+                if per_session:
+                    moved.update(session=sid, at=iso_precise(now()))
                 seen[key], changed = moved, True
                 events.append("💡 %s moved to %s: %s (%s)" % (shown, prof.name,
                               fallback_cause_text(prof.fallback_from, prof.fallback_cause),
                               session_budget_text(configured, settings=False)))
                 continue
+            if per_session:
+                moved.update(session=sid, at=iso_precise(now()))
             seen[key], changed = moved, True
             label = provider + "@" + prof.fallback_from
             if prof.fallback_cause == "limit":
@@ -4059,7 +4097,8 @@ def fallback_event(announce=True):
                               % (scope_name(provider + "@" + prof.name), shown,
                                  scope_name(provider + "@" + str(was.get("to")))))
     if changed:
-        state["fallback"] = seen
+        cutoff = now() - dt.timedelta(days=SESSION_STATE_DAYS)
+        state["fallback"] = {key: entry for key, entry in seen.items() if not fallback_expired(entry, cutoff)}
         write_json(SPEND_EVENTS_FILE, state)
     return events if announce else []
 
@@ -4350,7 +4389,7 @@ def session_budget_record(prof):
             data = session_budget_store()
             if data is None:
                 return False
-            cutoff = now() - dt.timedelta(days=7)
+            cutoff = now() - dt.timedelta(days=SESSION_STATE_DAYS)
             data = {scope: {s: e for s, e in sessions.items() if parse_iso(e["at"]) >= cutoff}
                     for scope, sessions in data.items()}
             data = {scope: sessions for scope, sessions in data.items() if sessions}
@@ -4387,7 +4426,8 @@ def session_budget_figure(prof):
         baseline = (data or {}).get(prof.label, {}).get(session_id())
         if data is None:
             return None
-        if baseline and baseline["currency"] == currency and parse_iso(baseline["at"]) >= now() - dt.timedelta(days=7):
+        if baseline and baseline["currency"] == currency and \
+                parse_iso(baseline["at"]) >= now() - dt.timedelta(days=SESSION_STATE_DAYS):
             base = baseline["baseline"]
             down = max(base - amount, 0)
             figure.update(baseline=base, baseline_at=baseline["at"], down=down,
@@ -6537,6 +6577,10 @@ def cmd_hook(a):
         if a.event == "session-end":
             forget(sid)               # no longer a Claude consumer
             log_session(data)         # usage snapshot of the main thread + subagents; silent
+            try:
+                fallback_forget(sid)  # its fallback entry (and any expired one) must not outlive the session
+            except Exception:         # a busy lock costs only this cleanup, never the hook
+                pass
             return 0
         has_state = (project_dir() / ".orchestra").exists()
         entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT") or ""

@@ -118,7 +118,9 @@ After existing availability and spend-limit checks, the causes are checked in th
 A cause moves the project to its fallback, including that profile's key and routing rules. While Claude is TIGHT,
 the soft cause clears and the project returns; when TIGHT ends it moves again if still over soft. Hard and floor
 apply during TIGHT too. A top-up clears the old percentage baseline. Hooks announce each move in either direction
-once, with figures and the reason for returning. No quota entry is needed for these causes.
+once, with figures and the reason for returning. A per-session entry is dropped when that session ends, and any
+per-session entry expires after seven days, so a session that dies on a fallback leaves nothing behind. No quota
+entry is needed for these causes.
 
 `orch status` and `orch profile show` (including `--json`) show, for example,
 `session: account down $0.42 of $15.50 (2.7%; soft 30%, hard 90%, floor $1)`.

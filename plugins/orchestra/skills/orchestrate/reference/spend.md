@@ -177,7 +177,7 @@ profile has a `fallback` to that profile.
   file. `ORCH_BALANCE=off` stops every request.
 - **Which providers**: only what an ordinary key can read: DeepSeek. OpenAI (Codex key), Anthropic (Claude key) and
   Google (Gemini API, Vertex AI) offer none, so those scopes show "no balance API: see `orch spend`" and keep the
-  estimate. A new provider is a fetch function plus an entry in `BALANCE_PROVIDERS` in `bin/orch`.
+  estimate. A new provider is a fetch function plus an entry in `BALANCE_PROVIDERS` in `lib/orch_core.py`.
 - A rejected key (401/403) is reported with its variable name (`check DEEPSEEK_API_KEY_WORK`); a key value is never
   printed, logged or cached.
 

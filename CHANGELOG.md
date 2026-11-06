@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.28.0
+
+- **`orch` compiles once and reuses the bytecode.** Python never caches the bytecode of the script it is started
+  with, so every hook and every status line update compiled all of `bin/orch` (7700 lines): 0.14 s of a hook's
+  ~0.4 s on a calm Windows machine. The code now lives in `lib/orch_core.py`, and `bin/orch` is a short launcher
+  that keeps the compiled code under `~/.orchestra/.pycache/orch_core.<cache tag>.bin`, keyed by a hash of the
+  source and `sys.version`. An edited source or another interpreter compiles again; a missing, corrupt or unwritable
+  cache only means compiling as before, and `python -B` writes nothing. The code still runs in the launcher's own
+  namespace, so loading `bin/orch` as a module yields the real functions and the tests' patches reach them unchanged.
+
 ## 0.27.0
 
 - **The session line shows cache reads too.** After the input/output pair comes the account's cache reads:

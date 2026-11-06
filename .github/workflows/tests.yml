@@ -40,6 +40,7 @@ jobs:
       - run: >
           vermin -t=3.8- --no-tips --violations
           plugins/orchestra/bin/orch
+          plugins/orchestra/lib/orch_core.py
           plugins/orchestra/adapters/codex
           plugins/orchestra/adapters/deepseek
           plugins/orchestra/adapters/claude

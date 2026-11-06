@@ -33,6 +33,7 @@ sys.dont_write_bytecode = True        # no __pycache__ inside the plugin's adapt
 import _claude_headless as H  # noqa: E402
 
 DEFAULT_MODEL = "sonnet"
+CLAUDE_MODEL_ALIASES = ("haiku", "sonnet", "opus", "fable", "opusplan", "default", "best")
 LIMIT_RE = re.compile(r"usage limit|hit your (?:usage )?limit|limit reached|out of (?:extra )?usage|rate.?limit", re.I)
 RESET_EPOCH = re.compile(r"\|(\d{10})\b")
 RESET_IN = re.compile(r"(?:resets?|try again)\s+in\s+(\d+)\s*(minute|min|hour|hr|h|m)", re.I)
@@ -41,6 +42,73 @@ RESET_AT = re.compile(r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b"
 
 def say(msg):
     print("[claude] " + msg, flush=True)
+
+
+def normalize_endpoint(url):
+    """scheme://host[:port]/path with a lowercase host and no trailing slash, as orch compares them; None if no URL."""
+    from urllib.parse import urlsplit
+    try:
+        p = urlsplit(str(url or "").strip())
+        port = p.port
+    except ValueError:
+        return None
+    scheme = p.scheme.lower()
+    if scheme not in ("http", "https") or not p.hostname:
+        return None
+    host = p.hostname.lower()
+    if port is not None and (scheme, port) not in (("http", 80), ("https", 443)):
+        host += ":%d" % port
+    return "%s://%s%s" % (scheme, host, p.path.rstrip("/"))
+
+
+def lead_endpoints():
+    """Endpoints of other providers that can lead a session (`# orch-endpoint:` in an adapter, here or in
+    ~/.orchestra/adapters). A gateway or proxy to Claude itself is not among them."""
+    out = set()
+    home = Path(os.environ.get("ORCH_HOME") or (Path.home() / ".orchestra"))
+    for base in (Path(__file__).resolve().parent, home / "adapters"):
+        try:
+            files = [f for f in base.iterdir() if f.is_file() and not f.name.startswith((".", "_"))]
+        except OSError:
+            continue
+        for f in files:
+            try:
+                with f.open(encoding="utf-8", errors="replace") as fh:
+                    head = [next(fh, "") for _ in range(60)]
+            except OSError:
+                continue
+            for line in head:
+                if line.startswith("# orch-endpoint:"):
+                    key = normalize_endpoint(line.split(":", 1)[1])
+                    if key:
+                        out.add(key)
+    return out
+
+
+def claude_model(name):
+    m = name.strip().lower()
+    return "claude" in m or m.split("[", 1)[0] in CLAUDE_MODEL_ALIASES
+
+
+def user_settings_problem(config_dir):
+    """The `env` of the user settings this executor reloads (`--setting-sources user`) when it would take the worker
+    off Claude: another provider's lead endpoint, or a model that is not Claude. (path, setting, value) or None. Only
+    that file's env is read; a gateway or proxy to Claude is left alone."""
+    path = Path(config_dir or (Path.home() / ".claude")) / "settings.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None                    # no settings there, or nothing this adapter should judge: Claude Code speaks
+    env = data.get("env") if isinstance(data, dict) else None
+    if not isinstance(env, dict):
+        return None
+    base = env.get("ANTHROPIC_BASE_URL")
+    if isinstance(base, str) and base.strip() and normalize_endpoint(base) in lead_endpoints():
+        return path, "ANTHROPIC_BASE_URL", base.strip()
+    model = env.get("ANTHROPIC_MODEL")
+    if isinstance(model, str) and model.strip() and not claude_model(model):
+        return path, "ANTHROPIC_MODEL", model.strip()
+    return None
 
 
 def reset_hint(text):
@@ -72,6 +140,23 @@ def main():
     if home and not Path(home).is_dir():
         say("CLAUDE_CONFIG_DIR=%s (profile %s) does not exist; log in there once: CLAUDE_CONFIG_DIR='%s' claude"
             % (home, os.environ.get("ORCH_PROFILE") or "?", home))
+        return 1
+    # --setting-sources user reloads the user settings of this config dir: an env pointing elsewhere wins over
+    # everything orch stripped, so the worker would not reach Claude at all.
+    problem = user_settings_problem(home)
+    if problem:
+        path, setting, value = problem
+        say("blocked: %s sets env.%s=%s — this worker would not reach Claude" % (path, setting, value))
+        effect = ("every request would go there instead" if setting == "ANTHROPIC_BASE_URL"
+                  else "every request would ask for that model instead of Claude")
+        report = ("STATUS: BLOCKED\n\norch run claude cannot reach Claude: the user settings this executor reloads "
+                  "(--setting-sources user) set env.%s to %s in %s, so %s.\n\n"
+                  "Remove that entry from the file's \"env\", or give the profile a config dir without it "
+                  "(`orch profile set claude <name> --home <dir>`)." % (setting, value, path, effect))
+        try:
+            Path(os.environ["ORCH_OUTPUT_FILE"]).write_text(report, encoding="utf-8")
+        except (KeyError, OSError):
+            pass
         return 1
     env.update({"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "DISABLE_AUTOUPDATER": "1"})
     isolation = ["--setting-sources", "user", "--settings", json.dumps({"disableAllHooks": True})]

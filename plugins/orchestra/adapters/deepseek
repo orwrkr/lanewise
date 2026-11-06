@@ -22,6 +22,7 @@
 # orch-secrets: DEEPSEEK_API_KEY
 # orch-limit-detect: exit-code
 # orch-launch: env
+# orch-endpoint: https://api.deepseek.com/anthropic
 # orch-profile-env: fast_model=ORCH_DEEPSEEK_FAST_MODEL base_url=ORCH_DEEPSEEK_BASE_URL
 # Contract: adapters/_template.example. Exit 75 = balance exhausted (402, until manual clear) or rate limit (429).
 # Profiles (orch profile set deepseek <name> --key VAR …): orch passes the profile's key as DEEPSEEK_API_KEY.

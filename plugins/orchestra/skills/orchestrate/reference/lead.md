@@ -18,6 +18,38 @@ fast model, every subagent on M. The DeepSeek key comes from the profile (`orch 
 directory bindings and defaults, including the lead itself and the Claude lane. `--profile` on `launch` or a
 single `run` is stronger. `--use deepseek=off` refuses to launch; an unknown profile is an error.
 
+## A session started by hand (detected)
+
+A Claude Code session started outside `orch launch` — for example `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_AUTH_TOKEN=… claude` — is recognised as a non-Claude lead by the first `orch` process of every command,
+hooks and the status line included, when:
+
+- `ORCH_LEAD` and `ORCH_WORKER` are unset, and
+- `ANTHROPIC_BASE_URL` is an endpoint an adapter declares for a lead (`# orch-endpoint:`; DeepSeek's is
+  `https://api.deepseek.com/anthropic`, and the adapter's own `base_url` variable, `ORCH_DEEPSEEK_BASE_URL`, counts
+  too). Anthropic's own API and other proxies are not a lead, and with no `ANTHROPIC_BASE_URL` nothing is read.
+
+The label comes from the session's token (`ANTHROPIC_AUTH_TOKEN`, else `ANTHROPIC_API_KEY`): the profile whose key
+variable holds it (`deepseek@work`), preferring the profile this project resolves to; with several matches and no
+binding, the provider's default profile, else the first label alphabetically. A token that matches no key (and is
+not the provider's default key variable) gives the bare provider (`deepseek`), and the Lead line says the session's
+spend is not under a profile's limit. The token is never printed or stored.
+
+Such a session behaves like a launched one: `orch status` starts with `Lead: … (detected: ANTHROPIC_BASE_URL)`,
+`orch key claude` refuses, workers never get the endpoint or token, and the session's own thread counts under the
+lead's label in `orch usage` and the status line. Two differences: no `--no-claude`/`--use` choices and no `--model`
+of their own are applied (the overrides are already in the environment), and the session has already started, so at
+SessionStart `orch` only warns when the lead's spend scope is at its limit — it cannot refuse.
+
+## `orch run claude` from a lead
+
+The Claude executor loads the user settings of its config dir (`--setting-sources user`). If that `settings.json`
+has an `env` whose `ANTHROPIC_BASE_URL` is another provider's lead endpoint (one an adapter declares with
+`# orch-endpoint:`), or an `ANTHROPIC_MODEL` that is not a Claude model, every request would go there instead of
+Claude, so the run fails before starting (a gateway or proxy to Claude itself is fine): exit 1, `STATUS: BLOCKED`, the file and
+the setting named. Remove the entry from the file's `env`, or give the profile a config dir without it
+(`orch profile set claude <name> --home <dir>`).
+
 ## Orchestrating as a non-Claude lead
 
 - Same skill, registry, profiles and manual pool. `orch status` starts with `Lead: …`.

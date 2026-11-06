@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.31.0
+
+- **A session started by hand on another provider's endpoint is a lead, like `orch launch`.** A Claude Code session
+  whose own `ANTHROPIC_BASE_URL` points at an endpoint an adapter declares (`# orch-endpoint:` — DeepSeek's
+  Anthropic-compatible API) and whose `ORCH_LEAD` is unset is now detected on the first `orch` process of every
+  command, hooks and the status line included: the endpoint is compared normalised, the token
+  (`ANTHROPIC_AUTH_TOKEN`, else `ANTHROPIC_API_KEY`) against the profiles' key variables, and `ORCH_LEAD`,
+  `ORCH_LEAD_MODEL`, `ORCH_LEAD_ENV` and `ORCH_LEAD_VIA=detected` are set, so routing, the Claude lane (`orch key`
+  refuses), the worker environment and the status line behave as under `orch launch`. Anthropic's own API and other
+  proxies are not a lead, and with no `ANTHROPIC_BASE_URL` nothing is read. The Lead line says
+  `(detected: ANTHROPIC_BASE_URL)`; when the token is none of the profile keys it names the bare provider and notes
+  that the session's spend is not under a profile's limit. A detected lead has already started, so SessionStart
+  prints the spend warning instead of refusing.
+- **A lead's own thread is billed to its account.** Session token counters now attribute the transcript of a lead
+  session (its main thread and its `orch-*` subagents) to the lead's profile label, `DeepSeek@work`, not the bare
+  provider — for a detected lead and for `orch launch` alike, closing the gap where the lead's thread was counted
+  as a plain account.
+- **`orch run claude` refuses when the user settings it reloads would take it off Claude.** The Claude executor
+  loads the user settings of its config dir (`--setting-sources user`); if their `env` points `ANTHROPIC_BASE_URL` at
+  another provider's lead endpoint (an adapter's `# orch-endpoint:`; a gateway to Claude is fine) or sets
+  `ANTHROPIC_MODEL` to a non-Claude model, the worker would never reach Claude, so it fails before starting
+  with exit 1 and a `STATUS: BLOCKED` report naming the setting and the file, instead of silently running on
+  another provider.
+- `reference/lead.md` and the README's DeepSeek-lead section describe detection, how the account is chosen, and the
+  user-settings caveat.
+
 ## 0.30.0
 
 - **A read-only command leaves an unused folder untouched.** In a folder where the plugin had never been used,

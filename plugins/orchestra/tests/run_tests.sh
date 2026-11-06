@@ -22,6 +22,8 @@ if command -v cygpath >/dev/null 2>&1; then T="$(cygpath -u "$(cygpath -w -l "$T
 export ORCH_HOME; ORCH_HOME="$(native "$T/home")"
 export PATH="$T/fakebin:$PATH"
 unset CLAUDE_PROJECT_DIR ORCH_PROJECT_DIR ORCH_WORKER ORCH_CODEX_BIN ORCH_CLAUDE_BIN DEEPSEEK_API_KEY ORCH_NOTIFY_CMD ORCH_DEEPSEEK_BALANCE_URL
+# the suite's own ANTHROPIC_* would make every orch process a detected lead (a test runs inside a lead session too)
+unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL ORCH_LEAD ORCH_LEAD_ENV ORCH_LEAD_VIA ORCH_LEAD_KEY
 export ORCH_BALANCE=off     # no check reaches a real provider for a balance; the balance section turns it on against a local server
 export CODEX_HOME; CODEX_HOME="$(native "$T/no-codex")"     # the status line must never read the real ~/.codex here
 pass=0; fail=0
@@ -509,6 +511,59 @@ contains "$out" "Lead: DeepSeek · DeepSeek V4 Pro .*Claude: off" "status tells 
 out=$(echo '{}' | ORCH_LEAD=deepseek ORCH_LEAD_MODEL=deepseek-v4-pro $ORCH hook session-start)
 contains "$out" "orch guide lead" "session-start points a non-Claude lead to its guide"
 out=$($ORCH guide lead); contains "$out" "orch run claude" "orch guide lead"
+
+echo "── a lead started without orch launch (its own ANTHROPIC_* override)"
+LEADH="$(native "$T/lead-home")"; mkdir -p "$LEADH"
+ORCH_HOME="$LEADH" $ORCH profile set deepseek work --key DEEPSEEK_API_KEY_WORK >/dev/null
+printf 'DEEPSEEK_API_KEY_WORK=sk-fake-work\n' > "$LEADH/secrets.env"
+# lead <cmd…>: a session whose own override points at DeepSeek, as a hand-started one would
+lead() { env ORCH_HOME="$LEADH" ANTHROPIC_BASE_URL="${LBASE:-https://api.deepseek.com/anthropic}" \
+             ANTHROPIC_AUTH_TOKEN="${LTOKEN:-sk-fake-work}" ANTHROPIC_MODEL="${LMODEL:-deepseek-v4-pro}" "$@"; }
+out=$(lead $ORCH status)
+contains "$out" "Lead: DeepSeek@work · DeepSeek V4 Pro (detected: ANTHROPIC_BASE_URL)" \
+  "status: the override makes a lead, named by the profile whose key it is"
+out=$(printf '{"session_id":"s-detected","cwd":"%s"}' "$(native "$REPO")" | lead $ORCH hook session-start)
+contains "$out" "Lead: DeepSeek@work · DeepSeek V4 Pro (detected: ANTHROPIC_BASE_URL)" \
+  "session-start: a detected lead is told who it is"
+$PY - "$LEADH" <<'EOF' && ok "session-start records the detected lead in sessions.json" || bad "sessions.json: no detected lead"
+import json, os, sys
+d = json.load(open(os.path.join(sys.argv[1], "sessions.json"), encoding="utf-8"))
+assert d["s-detected"]["lead"] == "deepseek@work", d
+EOF
+out=$(lead $ORCH doctor </dev/null)
+contains "$out" "DeepSeek@work · DeepSeek V4 Pro (detected: ANTHROPIC_BASE_URL)" "doctor: the lead row says how it was seen"
+out=$(lead $ORCH key claude 2>&1); rc=$?
+expect_rc 1 $rc "orch key claude refuses under a detected lead"
+contains "$out" "non-Claude lead may not read the Claude API key" "the refusal explains itself"
+out=$(LTOKEN=sk-none-of-them lead $ORCH status)
+contains "$out" "Lead: DeepSeek · DeepSeek V4 Pro (detected: ANTHROPIC_BASE_URL)" "a token none of the keys matches: the bare provider"
+contains "$out" "none of your profiles' keys" "…and the note that spend is not under a profile's limit"
+out=$(LBASE=https://api.anthropic.com lead $ORCH status); lacks "$out" "Lead:" "Anthropic itself is not a lead"
+out=$(LBASE=https://gateway.example/anthropic lead $ORCH status); lacks "$out" "Lead:" "another proxy is not a lead"
+out=$(FAKE_CLAUDE=ok lead $ORCH run claude --model haiku "x" 2>&1); rc=$?
+expect_rc 0 $rc "orch run claude under a detected lead"
+check 'e["ANTHROPIC_BASE_URL"] is None and e["ANTHROPIC_AUTH_TOKEN"] is None and e["ANTHROPIC_MODEL"] is None' \
+  "a detected lead's endpoint, token and model never reach the Claude worker"
+out=$(ORCH_HOME="$LEADH" ORCH_LEAD=deepseek@work ORCH_LEAD_MODEL=deepseek-v4-pro \
+      ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_AUTH_TOKEN=sk-fake-work $ORCH status)
+contains "$out" "Lead: DeepSeek@work · DeepSeek V4 Pro (orch launch)" "an existing ORCH_LEAD keeps its (orch launch) wording"
+lacks "$out" "detected: ANTHROPIC_BASE_URL" "…and is not re-detected"
+UC="$(native "$T/lead-user-cfg")"; mkdir -p "$UC"
+printf '{"env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"}}\n' > "$UC/settings.json"
+rm -f "$FAKE_CLAUDE_LOG"
+out=$(CLAUDE_CONFIG_DIR="$UC" FAKE_CLAUDE=ok lead $ORCH run claude "x" 2>&1); rc=$?
+expect_rc 1 $rc "orch run claude under user settings that move the endpoint fails before starting"
+contains "$out" "set env.ANTHROPIC_BASE_URL to https://api.deepseek.com/anthropic" "the report names the setting"
+[[ -e "$FAKE_CLAUDE_LOG" ]] && bad "the Claude worker started despite the user settings" \
+  || ok "no worker was started"
+printf '{"env": {"ANTHROPIC_BASE_URL": "https://gateway.example/anthropic", "ANTHROPIC_MODEL": "claude-sonnet-5-5"}}\n' > "$UC/settings.json"
+out=$(CLAUDE_CONFIG_DIR="$UC" FAKE_CLAUDE=ok lead $ORCH run claude "x" 2>&1); rc=$?
+expect_rc 0 $rc "user settings with a gateway to Claude leave orch run claude alone"
+printf '{"env": {"ANTHROPIC_MODEL": "deepseek-v4-pro"}}\n' > "$UC/settings.json"
+out=$(CLAUDE_CONFIG_DIR="$UC" FAKE_CLAUDE=ok lead $ORCH run claude "x" 2>&1); rc=$?
+expect_rc 1 $rc "user settings with a non-Claude model block orch run claude"
+contains "$out" "set env.ANTHROPIC_MODEL to deepseek-v4-pro .*ask for that model" "that report names the model setting"
+unset -f lead
 
 echo "── project rules for every executor, usage ledger"
 printf '# Rules\nCLAUDE-MARKER\n@AGENTS.md\n' > "$REPO/CLAUDE.md"; printf 'AGENTS-MARKER\n' > "$REPO/AGENTS.md"
@@ -3434,6 +3489,19 @@ grep -qE "^Session in/out: Claude 1\.[0-9]k/[0-9]+ \+6\.4k cache" <<<"$block" &&
   && ok "end to end: two keys and the native login, three counters on three lines" || bad "end to end session lines: $block"
 [[ "$block" == *"Claude 1.5k/150"* ]] && bad "end to end: the claude run did not add to the native thread: $block" \
   || ok "end to end: orch run claude adds to the native Claude counter"
+# a session led by another provider: its own thread is that lead's account, never the bare provider
+$PY - "$(native "$TCFG/sess-leadacct.jsonl")" <<'EOF'
+import json, sys
+c = lambda o: json.dumps(o, separators=(",", ":"))
+ev = {"type": "assistant", "timestamp": "2026-11-02T11:00:00.000Z",
+      "message": {"id": "l1", "model": "deepseek-v4-pro",
+                  "usage": {"input_tokens": 9, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 4}}}
+open(sys.argv[1], "w", encoding="utf-8").write(c(ev) + "\n")
+EOF
+out=$(acct_sl sess-leadacct ORCH_LEAD=deepseek@work)
+contains "$out" "^Session in/out: DeepSeek@work 9/4" "a lead's own thread counts under the lead's account"
+grep -qE "Session in/out: DeepSeek 9/4" <<<"$out" && bad "the lead's thread fell back to the bare provider: $out" \
+  || ok "the lead's thread never shows as the bare provider"
 
 echo "── session tokens: cache reads (a third figure per account)"
 CC="$TCFG/sess-cache.jsonl"
@@ -3927,7 +3995,9 @@ home, proj = root / "home", root / "proj"
 home.mkdir(); proj.mkdir()
 env = dict(os.environ, ORCH_HOME=str(home), ORCH_PROJECT_DIR=str(proj), ORCH_NOTIFY_CMD="",
            PYTHONIOENCODING="utf-8", PYTHONUTF8="1", DUMMY_A="aaaaaaaaaaaa", DUMMY_B="bbbbbbbbbbbb")
-for key in ("ORCH_WORKER", "ORCH_PROFILES", "CLAUDE_PROJECT_DIR", "ORCH_LEAD", "ORCH_LEAD_ENV", "CLAUDECODE"):
+for key in ("ORCH_WORKER", "ORCH_PROFILES", "CLAUDE_PROJECT_DIR", "ORCH_LEAD", "ORCH_LEAD_ENV", "CLAUDECODE",
+            "ORCH_LEAD_VIA", "ORCH_LEAD_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+            "ANTHROPIC_MODEL"):
     env.pop(key, None)
 for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"], ["config", "user.name", "t"]):
     subprocess.run(["git"] + args, cwd=str(proj), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -4857,6 +4927,70 @@ def codex_home_profile():
         assert m.codex_home(proj, prof) == str(Path(str(home / "cx-work")).expanduser())
         assert m.codex_home(proj) == str(Path(str(home / "no-codex")).expanduser())
 
+def detected_lead():
+    for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+                "ORCH_LEAD", "ORCH_LEAD_MODEL", "ORCH_LEAD_ENV", "ORCH_LEAD_VIA", "ORCH_LEAD_KEY"):
+        os.environ.pop(key, None)
+    # the common path: no override, and not one file is read
+    calls = []
+    def reading(name):
+        def f(*a, **kw):
+            calls.append(name)
+            raise AssertionError("read without an ANTHROPIC_BASE_URL override: " + name)
+        return f
+    with mock.patch.object(m, "adapter_head", reading("adapter_head")), \
+         mock.patch.object(m, "adapter_directives", reading("adapter_directives")), \
+         mock.patch.object(m, "find_adapter", reading("find_adapter")), \
+         mock.patch.object(m, "load_profiles", reading("load_profiles")), \
+         mock.patch.object(m, "load_secrets", reading("load_secrets")):
+        assert m.detect_lead() is None and calls == [] and not os.environ.get("ORCH_LEAD")
+    good(["profile", "use", "deepseek", "inherit", "--default"])     # no default profile from an earlier test
+    good(["profile", "use", "deepseek", "inherit", "--path", str(proj)])
+    good(["profile", "set", "deepseek", "work", "--key", "DEEPSEEK_API_KEY_WORK"])
+    good(["profile", "set", "deepseek", "team", "--key", "DEEPSEEK_API_KEY_TEAM"])
+    (home / "secrets.env").write_text("DEEPSEEK_API_KEY_WORK=sk-lead-work\nDEEPSEEK_API_KEY_TEAM=sk-lead-team\n",
+                                      encoding="utf-8")
+    # the endpoint is compared normalised (case, trailing slash); the profile whose key is the token is the label
+    with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://API.DeepSeek.com/anthropic/",
+                                      "ANTHROPIC_AUTH_TOKEN": "sk-lead-work",
+                                      "ANTHROPIC_MODEL": "deepseek-v4-pro"}):
+        assert m.detect_lead() == "deepseek@work"
+        assert os.environ["ORCH_LEAD"] == "deepseek@work" and os.environ["ORCH_LEAD_VIA"] == "detected"
+        assert os.environ["ORCH_LEAD_MODEL"] == "deepseek-v4-pro" and "ORCH_LEAD_KEY" not in os.environ
+        assert {"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} <= set(os.environ["ORCH_LEAD_ENV"].split(","))
+        assert m.lead_via_text() == "(detected: ANTHROPIC_BASE_URL)"
+        assert "DeepSeek@work" in m.lead_line() and "none of your profiles' keys" not in m.lead_line()
+    # two profiles share the key: the directory binding decides
+    good(["profile", "set", "deepseek", "team", "--key", "DEEPSEEK_API_KEY_WORK"])
+    good(["profile", "use", "deepseek", "team", "--path", str(proj)])
+    with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                                      "ANTHROPIC_AUTH_TOKEN": "sk-lead-work"}):
+        assert m.detect_lead() == "deepseek@team"
+    good(["profile", "use", "deepseek", "work", "--path", str(proj)])
+    with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                                      "ANTHROPIC_AUTH_TOKEN": "sk-lead-work"}):
+        assert m.detect_lead() == "deepseek@work"
+    good(["profile", "use", "deepseek", "inherit", "--path", str(proj)])
+    good(["profile", "set", "deepseek", "team", "--key", "DEEPSEEK_API_KEY_TEAM"])     # distinct keys again
+    # the adapter's own base_url variable is the same endpoint
+    with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://deepseek.example/v1/",
+                                      "ORCH_DEEPSEEK_BASE_URL": "HTTPS://DeepSeek.example/v1",
+                                      "ANTHROPIC_AUTH_TOKEN": "sk-lead-work"}):
+        assert m.detect_lead() == "deepseek@work"
+    # a token that is none of the keys: the bare provider, and the Lead line says the spend is unaccounted
+    with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                                      "ANTHROPIC_AUTH_TOKEN": "sk-nobody"}):
+        assert m.detect_lead() == "deepseek" and os.environ["ORCH_LEAD_KEY"] == "none"
+        assert "none of your profiles' keys" in m.lead_line()
+    # the provider's own default key variable matches too, with no such note
+    with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                                      "ANTHROPIC_API_KEY": "sk-default", "DEEPSEEK_API_KEY": "sk-default"}):
+        assert m.detect_lead() == "deepseek" and "ORCH_LEAD_KEY" not in os.environ
+    # Anthropic itself and another proxy are not a lead
+    for url in ("https://api.anthropic.com", "https://gateway.example/anthropic", "not a url"):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": url, "ANTHROPIC_AUTH_TOKEN": "sk-lead-work"}):
+            assert m.detect_lead() is None and not os.environ.get("ORCH_LEAD"), url
+
 failed = 0
 for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", parallel_state),
                    ("1 atomic I/O failures, rollback, nested lock and crash release", state_failures),
@@ -4880,7 +5014,8 @@ for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", pa
                    ("review worker env strips login/API keys", worker_env_leak),
                    ("review worker env: declared secrets, profile keys, anthropic key vars", worker_env_declared),
                    ("review settings deny survives a BOM and names a broken file", settings_deny_bom),
-                   ("review --profile honoured by codex account lookups", codex_home_profile)]:
+                   ("review --profile honoured by codex account lookups", codex_home_profile),
+                   ("review a session's own ANTHROPIC_* override is a lead", detected_lead)]:
     try:
         test()
         print("PASS " + name)

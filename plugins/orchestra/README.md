@@ -199,7 +199,8 @@ Session in/out: Claude 1.5k/150 +6.0k cache
 
 The plain account (the built-in profile) comes first within a provider, then the labels alphabetically. This session's
 own Claude thread counts under its key profile's label when it bills to a key, else as `Claude`, together with
-`orch run claude` on the same default login.
+`orch run claude` on the same default login. A non-Claude lead's own thread and its `orch-*` subagents count under
+the lead's label — `DeepSeek@work`, not plain `DeepSeek` — whether the lead was launched or detected.
 
 ## DeepSeek as the lead
 
@@ -226,10 +227,21 @@ follows [`reference/lead.md`](skills/orchestrate/reference/lead.md):
 - `--use PROVIDER=PROFILE` picks profiles for the whole session, including the lead itself; only an explicit
   `--profile` overrides it. Disabled or unknown lead profiles refuse to launch.
 
+A session started by hand on DeepSeek's endpoint (`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` plus
+`ANTHROPIC_AUTH_TOKEN`, no `ORCH_LEAD`) is detected as a lead by every `orch` process, hooks and the status line
+included: the endpoint is one an adapter declares (`# orch-endpoint:`), and the token picks the profile whose key it
+is (`DeepSeek@work`), else the bare provider. `orch status` then says
+`Lead: DeepSeek@work · … (detected: ANTHROPIC_BASE_URL)`, routing, `orch key` and the worker environment follow as
+under `orch launch`, and the session's own thread counts under the lead's label in `orch usage` and the status
+line. Anthropic's own API and other proxies are not a lead. A detected lead has already started, so SessionStart
+only warns when its spend scope is at the limit.
+
 Limits of the mode: Claude Code features that rely on Anthropic-only API capabilities (web search, image input) may
 not work on the DeepSeek endpoint, and Claude Code's cost estimate in `orch usage` assumes Claude prices.
 The launch environment drops `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN`; the lead still uses the operator's config
-directory and tools, so this is credential hygiene, not a sandbox.
+directory and tools, so this is credential hygiene, not a sandbox. The Claude executor (`orch run claude`) reloads
+the user settings of its config dir: if their `env` points `ANTHROPIC_BASE_URL` at another provider's lead endpoint
+(or sets a non-Claude `ANTHROPIC_MODEL`), the run fails before starting with `STATUS: BLOCKED` and names the setting, rather than running off Claude.
 
 Parallel sessions serialize shared state through bounded OS locks and atomic JSON writes, so tasks and usage survive
 them; busy hooks and the status line skip their update silently. Manual `new` and `take` obey the profile's hard

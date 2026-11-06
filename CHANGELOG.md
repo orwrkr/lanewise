@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.26.0
+
+- **Hooks and the status line stop paying for the Microsoft Store `python3` alias.** In Git Bash `command -v python3`
+  often finds the Store's app execution alias, which redirects to the real interpreter at about 0.2 s a start, and
+  `hooks/run.sh` started it twice per hook (a version check, then `exec`). The interpreter that passed the check is
+  now cached in `~/.orchestra/.hook-python-<platform>` (one line, `sys.executable`; per platform, since WSL and Git
+  Bash may share the folder) and the usual hook run is one start of that
+  path; a fresh check skips a `…/WindowsApps/` alias while a real candidate passes and takes one only as the last
+  resort. `install.sh` writes the same absolute path into the Git Bash launcher (`~/.local/bin/orch`) instead of the
+  bare command name, so every `orch` call, the status line included, saves the redirect; re-running `bash install.sh`
+  refreshes it, also after installing or upgrading Python. `orch doctor` warns about an old launcher that still runs
+  the alias, or one naming an interpreter that is gone.
+- **`orch hook <event>` no longer builds the command-line parser.** `main()` recognises the hook command and its event
+  (and `--throttle`) directly, as it already does for the status line, so the 46 subparsers (about 0.07 s) are not
+  built on every user message and tool call; unknown input, errors and `--help` still take the full parser.
+
 ## 0.25.0
 
 - **The weekly pace is measured over three days, not one.** The projection of the week's limit takes its recent pace

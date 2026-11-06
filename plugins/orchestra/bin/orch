@@ -7199,6 +7199,41 @@ def orch_path_hint(home=None):
     return "ln -s %s ~/.local/bin/orch" % Path(__file__).resolve()
 
 
+def launcher_python_warning(home=None):
+    """The doctor warning for the Git Bash launcher in ~/.local/bin/orch: a bare interpreter command that resolves to
+    the Microsoft Store alias, or an interpreter path that is gone, makes every `orch` call slower (about 0.2 s a
+    start) or impossible; re-running install.sh records the current interpreter. None on POSIX (a symlink), when the
+    launcher is missing and when it is fine."""
+    try:
+        path = Path(home or Path.home()) / ".local" / "bin" / "orch"
+        if path.is_symlink():
+            return None                 # POSIX install: a symlink to bin/orch, no interpreter named
+        with path.open(encoding="utf-8", errors="replace") as f:
+            if f.readline().strip() != "#!/bin/sh":
+                return None
+            match = None
+            for line in f:
+                match = re.match(r"\s*exec\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))", line)
+                if match:
+                    break
+    except (OSError, RuntimeError):
+        return None
+    if not match:
+        return None
+    exe = match.group(1) or match.group(2) or match.group(3)
+    if "/" not in exe and "\\" not in exe:      # the launcher of an older install: the bare command name
+        import shutil
+        resolved = shutil.which(exe)
+        if resolved and "windowsapps" in resolved.replace("\\", "/").lower():
+            return ("runs the Microsoft Store alias %s (%s): every orch call pays about 0.2 s more; re-run "
+                    "`bash install.sh` to record the real interpreter" % (exe, resolved))
+        return None
+    if not Path(exe).exists():
+        return ("records %s, which does not exist: orch does not start; re-run `bash install.sh` to record the "
+                "current interpreter" % exe)
+    return None
+
+
 def cmd_doctor(a):
     import shutil
     import subprocess
@@ -7258,6 +7293,9 @@ def cmd_doctor(a):
                     except Exception as ex:
                         row("Codex@%s login" % name, False, str(ex), optional=True)
     row("orch on PATH", bool(shutil.which("orch")), shutil.which("orch") or orch_path_hint())
+    note = launcher_python_warning()
+    if note:
+        print("⚠ %-22s %s" % ("orch launcher", note))
     row("registry", registry_path().exists(), str(registry_path()))
     note = registry_stale_note()
     if note:
@@ -7291,6 +7329,36 @@ def statusline_args(argv):
     else:
         return None
     return SimpleNamespace(cmd="statusline", then=then, fn=cmd_statusline)
+
+
+HOOK_EVENTS = ("session-start", "user-prompt", "post-tool", "stop", "session-end")
+
+
+def hook_args(argv):
+    """The arguments of a plain `orch hook <event> [--throttle N]`, or None for anything else (`--help`, an unknown
+    event or option, an error): building the whole parser below costs more than the hook's own work on every user
+    message and tool call, and argparse still deals with what this does not recognize."""
+    if not argv or argv[0] != "hook":
+        return None
+    event, throttle, i = None, 60, 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--throttle":
+            if i + 1 >= len(argv):
+                return None
+            try:
+                throttle = int(argv[i + 1])
+            except ValueError:
+                return None
+            i += 2
+        elif arg in HOOK_EVENTS and event is None:
+            event = arg
+            i += 1
+        else:
+            return None
+    if event is None:
+        return None
+    return SimpleNamespace(cmd="hook", event=event, throttle=throttle, fn=cmd_hook)
 
 
 def parse_args(argv):
@@ -7580,7 +7648,7 @@ def parse_args(argv):
     k.set_defaults(fn=cmd_key)
 
     k = sub.add_parser("hook", help="Claude Code hook entry point (internal)")
-    k.add_argument("event", choices=("session-start", "user-prompt", "post-tool", "stop", "session-end"))
+    k.add_argument("event", choices=HOOK_EVENTS)
     k.add_argument("--throttle", type=int, default=60, help="post-tool: min seconds between checks")
     k.set_defaults(fn=cmd_hook)
 
@@ -7600,7 +7668,7 @@ def parse_args(argv):
 def main(argv=None):
     utf8_stdio()
     argv = sys.argv[1:] if argv is None else list(argv)
-    a = statusline_args(argv) or parse_args(argv)
+    a = statusline_args(argv) or hook_args(argv) or parse_args(argv)
     global _quiet_state, _statusline_run
     _quiet_state = a.cmd in ("hook", "statusline")
     _statusline_run = a.cmd == "statusline"

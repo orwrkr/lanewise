@@ -1141,12 +1141,62 @@ out=$(cd / || die "cannot enter root directory"; echo "{\"cwd\": \"$(native "$RE
 expect_rc 0 $rc "user-prompt hook resolves project from hook cwd"
 out=$(echo 'not json' | $ORCH hook stop); expect_rc 0 $? "hook survives garbage input"
 out=$(echo '{}' | sh "$PLUGIN/hooks/run.sh" session-start); contains "$out" "executor registry" "hooks/run.sh launcher finds python"
-out=$(echo '{}' | PATH=/nonexistent /bin/sh "$PLUGIN/hooks/run.sh" stop); rc=$?
+out=$(echo '{}' | ORCH_HOME="$(native "$T/hook-nopy")" PATH=/nonexistent /bin/sh "$PLUGIN/hooks/run.sh" stop); rc=$?
 [[ $rc -eq 0 && -z "$out" ]] && ok "launcher is a silent no-op without python" || bad "launcher without python: rc=$rc out=$out"
 out=$(echo '{}' | ORCH_WORKER=dee-1 $ORCH hook session-start); rc=$?
 [[ $rc -eq 0 && -z "$out" ]] && ok "hooks silent inside a worker" || bad "worker hook: rc=$rc out=$out"
 out=$(echo '{}' | ORCH_WORKER=dee-1 sh "$PLUGIN/hooks/run.sh" session-start); rc=$?
 [[ $rc -eq 0 && -z "$out" ]] && ok "launcher skips python inside a worker" || bad "worker launcher: rc=$rc out=$out"
+
+# run.sh: the interpreter cache — in Git Bash `python3` is often the Microsoft Store alias (~0.2 s a start)
+HH="$T/hook-home"; HH_BIN="$T/hook-realbin"; HH_ALIAS="$T/hook-alias/WindowsApps"
+mkdir -p "$HH" "$HH_BIN" "$HH_ALIAS" "$T/hook-tools"
+hpc() { ls "$HH"/.hook-python-* 2>/dev/null | head -1; }    # the cache file, one per platform
+realpy=$($PY -c 'import sys; print(sys.executable.replace("\\", "/"))')
+for tool in dirname mkdir mv; do      # a PATH with no Python at all, but the tools run.sh itself needs
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v "$tool")" > "$T/hook-tools/$tool"
+  chmod +x "$T/hook-tools/$tool"
+done
+alias_log="$T/hook-alias.log"; : > "$alias_log"
+printf '#!/bin/sh\necho started >> "%s"\nexec "%s" "$@"\n' "$(native "$alias_log")" "$realpy" > "$HH_ALIAS/python3"
+chmod +x "$HH_ALIAS/python3"                     # the alias stand-in: records each start, then runs the real Python
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$realpy" > "$HH_BIN/python"
+chmod +x "$HH_BIN/python"                        # a real interpreter under another name, later on PATH
+out=$(echo '{}' | ORCH_HOME="$(native "$HH")" PATH="$HH_ALIAS:$HH_BIN:$PATH" sh "$PLUGIN/hooks/run.sh" session-start)
+contains "$out" "executor registry" "run.sh: the hook runs with a Store alias first on PATH"
+[[ ! -s "$alias_log" ]] && ok "run.sh: the Store alias is skipped while a real interpreter passes" \
+  || bad "run.sh: the Store alias was started"
+[[ "$(cat "$(hpc)")" == "$realpy" ]] && ok "run.sh: the cache names the real interpreter" \
+  || bad "run.sh: cache=$(cat "$(hpc)" 2>/dev/null)"
+out=$(echo '{}' | ORCH_HOME="$(native "$HH")" PATH="$T/hook-tools" /bin/sh "$PLUGIN/hooks/run.sh" session-start)
+contains "$out" "executor registry" "run.sh: a cached interpreter runs with no python on PATH"
+printf '/no/such/python\n' > "$(hpc)"
+out=$(echo '{}' | ORCH_HOME="$(native "$HH")" PATH="$HH_ALIAS:$HH_BIN:$PATH" sh "$PLUGIN/hooks/run.sh" session-start)
+contains "$out" "executor registry" "run.sh: a cache naming a missing interpreter is ignored"
+[[ "$(cat "$(hpc)")" == "$realpy" ]] && ok "run.sh: a broken cache is rewritten" \
+  || bad "run.sh: cache after the rewrite=$(cat "$(hpc)" 2>/dev/null)"
+: > "$alias_log"
+out=$(echo '{}' | ORCH_HOME="$(native "$T/hook-home-alias")" PATH="$HH_ALIAS:$T/hook-tools" /bin/sh "$PLUGIN/hooks/run.sh" session-start)
+contains "$out" "executor registry" "run.sh: a Store alias is used as the last resort"
+[[ -s "$alias_log" ]] && ok "run.sh: the alias was started when nothing else passed" \
+  || bad "run.sh: the alias was not used as the last resort"
+rm -f "$HH"/.hook-python-*
+out=$(echo '{}' | ORCH_WORKER=dee-1 ORCH_HOME="$(native "$HH")" PATH="$HH_ALIAS:$HH_BIN:$PATH" sh "$PLUGIN/hooks/run.sh" session-start)
+[[ -z "$out" && -z "$(hpc)" ]] && ok "run.sh: a worker writes no cache" || bad "run.sh: worker out=$out"
+$PY -B - "$(native "$PLUGIN/bin/orch")" <<'EOF' && ok "hook: the fast path skips the full argument parser" || bad "hook: parse_args was called"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("orch", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("orch", loader)); loader.exec_module(m)
+def boom(argv):
+    raise AssertionError("parse_args was built for a plain hook call")
+m.parse_args = boom
+seen = []
+m.cmd_hook = lambda a: seen.append((a.event, a.throttle)) or 0
+assert m.main(["hook", "user-prompt"]) == 0
+assert m.main(["hook", "post-tool", "--throttle", "30"]) == 0
+assert seen == [("user-prompt", 60), ("post-tool", 30)], seen
+EOF
+out=$($ORCH hook --help); contains "$out" "usage: orch hook" "hook --help still comes from the full parser"
 
 echo "── profiles"
 out=$($ORCH profile show); contains "$out" "DeepSeek *default (built-in) · no limits" "no profiles → built-in profile, no limits"
@@ -4589,6 +4639,10 @@ contains "$out" "$cx_pat" "install.sh's Codex pattern occurs in doctor's output"
 ds_pat=$(sed -n "s/^grep -q '\([^']*\)' <<<\"\$DOCTOR\" || .*/\1/p" "$INSTALL_SH" | grep -F DEEPSEEK | head -1)
 contains "$out" "$ds_pat" "install.sh's DeepSeek pattern occurs in doctor's output"
 bash -n "$INSTALL_SH" && ok "install.sh parses" || bad "install.sh has a syntax error"
+grep -q 'WindowsApps' "$INSTALL_SH" && ok "install.sh: a Microsoft Store alias is only the last resort" \
+  || bad "install.sh does not skip a WindowsApps alias"
+grep -q 'exec "%s"' "$INSTALL_SH" && ok "install.sh: the Git Bash launcher names the interpreter's absolute path" \
+  || bad "install.sh: the launcher does not hold an absolute interpreter path"
 tail_install=$(tail -14 "$INSTALL_SH")
 contains "$tail_install" "OFF_PATH == 1" "install.sh: the PATH warning is the last thing it prints"
 doctor_paths=$($PY -B - "$(native "$PLUGIN/bin/orch")" "$(native "$T/doctor-paths")" <<'EOF'
@@ -4621,6 +4675,27 @@ EOF
 for k in MISSING-OK PRESENT-OK NOCODEX-ROW-OK NOCODEX-RC-OK; do
   contains "$doctor_paths" "$k" "doctor: $k"
 done
+# doctor: the Git Bash launcher — a bare python3 that resolves to the Store alias, or an interpreter path that is gone
+LH="$T/launcher-home"; mkdir -p "$LH/.local/bin" "$T/win-alias/WindowsApps" "$T/win-real"
+: > "$T/win-alias/WindowsApps/python3"; : > "$T/win-alias/WindowsApps/python3.exe"
+: > "$T/win-real/python3"; : > "$T/win-real/python3.exe"
+chmod +x "$T/win-alias/WindowsApps/python3" "$T/win-alias/WindowsApps/python3.exe" \
+  "$T/win-real/python3" "$T/win-real/python3.exe"
+PYBIN="$(command -v "$PY")"           # a PATH of our own must not decide which Python runs orch
+if command -v cygpath >/dev/null 2>&1; then LH_PROFILE="$(cygpath -w "$LH")"; else LH_PROFILE="$LH"; fi
+WPATH="$(native "$T/win-alias/WindowsApps")"; RPATH="$(native "$T/win-real")"   # as a native Windows Python reads PATH
+printf '#!/bin/sh\nexec python3 "/nowhere/bin/orch" "$@"\n' > "$LH/.local/bin/orch"
+out=$(HOME="$LH" USERPROFILE="$LH_PROFILE" PATH="$WPATH:$PATH" "$PYBIN" "$PLUGIN/bin/orch" doctor </dev/null)
+contains "$out" "Microsoft Store alias" "doctor: a launcher that runs the Store alias warns"
+out=$(HOME="$LH" USERPROFILE="$LH_PROFILE" PATH="$RPATH:$PATH" "$PYBIN" "$PLUGIN/bin/orch" doctor </dev/null)
+lacks "$out" "Microsoft Store alias" "doctor: silent when the bare python3 is not an alias"
+realpy=$($PY -c 'import sys; print(sys.executable.replace("\\", "/"))')
+printf '#!/bin/sh\nexec "%s" "/nowhere/bin/orch" "$@"\n' "$realpy" > "$LH/.local/bin/orch"
+out=$(HOME="$LH" USERPROFILE="$LH_PROFILE" "$PYBIN" "$PLUGIN/bin/orch" doctor </dev/null)
+lacks "$out" "orch launcher" "doctor: silent for a launcher with an absolute interpreter path"
+printf '#!/bin/sh\nexec "/no/such/python" "/nowhere/bin/orch" "$@"\n' > "$LH/.local/bin/orch"
+out=$(HOME="$LH" USERPROFILE="$LH_PROFILE" "$PYBIN" "$PLUGIN/bin/orch" doctor </dev/null)
+contains "$out" "does not exist" "doctor: a launcher whose interpreter is gone warns"
 
 echo "── registry copy staleness"
 reg_edit() {      # reg_edit CODE — run CODE with the copy's path as sys.argv[1]
@@ -4635,6 +4710,9 @@ lines[0] = "# orchestra-registry-base: 9.9.9 sha256:0000000000000000"
 open(p, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")'
 out=$($ORCH status --brief); contains "$out" "the built-in registry has changed since this copy was made (9.9.9): orch registry diff" "a stale marker: status warns with the copy's version"
 out=$($ORCH doctor); contains "$out" "the built-in registry has changed since this copy was made (9.9.9)" "a stale marker: doctor warns"
+reg_pat=$(sed -n "s/.*grep -q '\([^']*\)' <<<\"\$DOCTOR\"; then.*/\1/p" "$PLUGIN/../../install.sh" | head -1)
+[[ -n "$reg_pat" ]] && ok "install.sh: the stale-registry pattern is found ($reg_pat)" || bad "install.sh: no stale-registry pattern"
+contains "$out" "${reg_pat:-no pattern}" "install.sh's stale-registry pattern occurs in doctor's warning"
 reg_edit 'text = open(p, encoding="utf-8").read().replace("version: 1", "version: 2", 1)
 open(p, "w", encoding="utf-8", newline="\n").write(text)'
 out=$($ORCH registry diff)

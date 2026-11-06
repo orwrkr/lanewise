@@ -18,11 +18,21 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) WIN=1 ;; *) WIN=0 ;; esac
 say()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 
-PY=""
-for p in python3 python py; do     # on Windows, python3 may be a Microsoft Store stub
-  if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
-    PY="$p"; break
-  fi
+py_check() {    # the interpreter's absolute path (forward slashes, for Git Bash) when it is Python >= 3.8
+  "$1" -c 'import sys; print(sys.executable.replace("\\", "/")) if sys.version_info >= (3, 8) else sys.exit(1)' 2>/dev/null
+}
+PY=""; PYEXE=""                    # the command name for this script and the interpreter's absolute path (the launcher)
+for want in real alias; do         # on Windows, python3 may be a Microsoft Store stub: a last resort only
+  for p in python3 python py; do
+    cmd="$(command -v "$p")" || continue
+    case "$cmd" in
+      *WindowsApps*) [[ $want == alias ]] || continue ;;
+      *) [[ $want == real ]] || continue ;;
+    esac
+    exe="$(py_check "$p")" || continue
+    [[ -n $exe ]] || continue
+    PY="$p"; PYEXE="$exe"; break 2
+  done
 done
 
 command -v claude >/dev/null 2>&1 || { echo "claude CLI not found: install Claude Code in this environment."; exit 1; }
@@ -57,7 +67,8 @@ mkdir -p "$HOME/.local/bin"
 chmod +x "$ORCH" "$ROOT"/plugins/orchestra/adapters/{codex,deepseek,claude} 2>/dev/null || true
 if [[ $WIN == 1 ]]; then
   # in Git Bash a symlink is a plain copy, but orch finds adapters and the registry next to itself: use launchers
-  printf '#!/bin/sh\n# orch launcher (Git Bash) → %s\nexec %s "%s" "$@"\n' "$ORCH" "$PY" "$(cygpath -m "$ORCH")" > "$HOME/.local/bin/orch"
+  # the absolute path, not the command name: `python3` in Git Bash is often the Microsoft Store alias (~0.2 s a start)
+  printf '#!/bin/sh\n# orch launcher (Git Bash) → %s\nexec "%s" "%s" "$@"\n' "$ORCH" "$PYEXE" "$(cygpath -m "$ORCH")" > "$HOME/.local/bin/orch"
   printf '@echo off\r\nrem orch launcher (cmd / PowerShell)\r\ncall "%s" %%*\r\n' "$(cygpath -w "$ROOT/plugins/orchestra/bin/orch.cmd")" \
     > "$HOME/.local/bin/orch.cmd"
   say "orch → ~/.local/bin/orch (Git Bash) and orch.cmd (PowerShell / cmd)"
@@ -78,9 +89,9 @@ DOCTOR="$($PY "$ORCH" doctor 2>&1 || true)"
 echo "$DOCTOR"
 echo
 say "Done. In open Claude Code sessions run /reload-plugins (or start a new session)."
-if [[ $had_registry == 1 ]]; then
-  warn "Your personal registry $HOME_DIR/providers.yaml overrides the built-in one: copy new entries into it"
-  warn "  from plugins/orchestra/registry/providers.yaml or recreate it: $PY \"$ORCH\" registry init --force"
+if [[ $had_registry == 1 ]] && grep -q 'registry copy' <<<"$DOCTOR"; then    # doctor names a stale copy
+  warn "Your personal registry $HOME_DIR/providers.yaml overrides the built-in one, which has changed since:"
+  warn "  orch registry diff shows the difference; take over what you need, then: orch registry diff --accept"
 fi
 grep -q '✔ Codex CLI' <<<"$DOCTOR" || warn "Codex CLI not found: npm i -g @openai/codex && codex login"
 grep -q '✔ DEEPSEEK_API_KEY\|✔ DeepSeek@' <<<"$DOCTOR" || \

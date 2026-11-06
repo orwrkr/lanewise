@@ -46,7 +46,7 @@ cd /path/to/repo && bash install.sh
 cd /c/path/to/repo && bash install.sh
 ```
 
-The script registers the marketplace, installs the plugin, puts `orch` into `~/.local/bin` (if `orch` isn't found afterwards, that folder is not on your PATH: see the root README, "Quick start"), creates your personal registry and then runs `orch doctor`. On Windows, instead of a symlink it installs the launchers `orch` (for Git Bash) and `orch.cmd` (for PowerShell and cmd).
+The script registers the marketplace, installs the plugin, puts `orch` into `~/.local/bin` (if `orch` isn't found afterwards, that folder is not on your PATH: see the root README, "Quick start"), creates your personal registry and then runs `orch doctor`. On Windows, instead of a symlink it installs the launchers `orch` (for Git Bash) and `orch.cmd` (for PowerShell and cmd); the Git Bash launcher records the interpreter's absolute path, so `orch` doesn't go through the Microsoft Store `python3` alias, and re-running `bash install.sh` refreshes it (also after installing or upgrading Python).
 
 `install.sh` is safe to re-run, including after moving the folder: it re-registers the marketplace at the current location. Personal data lives in `~/.orchestra/`, not in the repository: limits, your model registry, API keys. WSL and Windows use separate folders. If you want limits, registry and keys to be shared, set `export ORCH_HOME=/mnt/c/Users/<you>/.orchestra` in WSL (in `~/.bashrc`).
 

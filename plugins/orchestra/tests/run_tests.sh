@@ -4683,7 +4683,8 @@ chmod +x "$T/win-alias/WindowsApps/python3" "$T/win-alias/WindowsApps/python3.ex
   "$T/win-real/python3" "$T/win-real/python3.exe"
 PYBIN="$(command -v "$PY")"           # a PATH of our own must not decide which Python runs orch
 if command -v cygpath >/dev/null 2>&1; then LH_PROFILE="$(cygpath -w "$LH")"; else LH_PROFILE="$LH"; fi
-WPATH="$(native "$T/win-alias/WindowsApps")"; RPATH="$(native "$T/win-real")"   # as a native Windows Python reads PATH
+WPATH="$T/win-alias/WindowsApps"; RPATH="$T/win-real"   # POSIX form: Git Bash converts the whole PATH for a native
+                                                         # Python, while a C:\ entry would be split at its colon
 printf '#!/bin/sh\nexec python3 "/nowhere/bin/orch" "$@"\n' > "$LH/.local/bin/orch"
 out=$(HOME="$LH" USERPROFILE="$LH_PROFILE" PATH="$WPATH:$PATH" "$PYBIN" "$PLUGIN/bin/orch" doctor </dev/null)
 contains "$out" "Microsoft Store alias" "doctor: a launcher that runs the Store alias warns"

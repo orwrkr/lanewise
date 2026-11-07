@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.31.1
+
+- **`orch` from the plugin's own `bin/` finds its Python.** Claude Code puts the plugin's `bin/` on the Bash tool's
+  PATH, and `bin/orch` began with `#!/usr/bin/env python3`: in a shell without `python3` (on Windows often only
+  `python`, or a disabled Store alias) every `orch` call of the session failed with `/usr/bin/env: 'python3': No such
+  file or directory`, while hooks and the status line, which find Python their own way, kept working. `bin/orch` now
+  starts as a shell script that searches like `hooks/run.sh` (a real `python3`, `python` or `py` before a Store alias,
+  version 3.8+) and shares its per-platform cache (`~/.orchestra/.hook-python-<platform>`), so a call starts a single
+  interpreter; to Python the shell part is a string, so `python bin/orch` and the installed launchers run as before.
+  No Python at all → exit 127 with a message. The skill's fallback is now `sh ${CLAUDE_PLUGIN_ROOT}/bin/orch`.
+
 ## 0.31.0
 
 - **A session started by hand on another provider's endpoint is a lead, like `orch launch`.** A Claude Code session

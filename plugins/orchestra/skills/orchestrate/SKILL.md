@@ -10,7 +10,7 @@ ChatGPT subscription, DeepSeek on an API key) or the manual task pool, from whic
 Antigravity and similar agents. Goal: maximum quality for minimum limits, money and time, with no idle time on the
 manual lane. Talk to the operator in their language, briefly.
 
-`orch` is the plugin CLI (already on the Bash tool's PATH; otherwise `python3 ${CLAUDE_PLUGIN_ROOT}/bin/orch`; in
+`orch` is the plugin CLI (already on the Bash tool's PATH; otherwise `sh ${CLAUDE_PLUGIN_ROOT}/bin/orch`; in
 PowerShell — `orch.cmd`). Exit codes: `0` report available (read STATUS) · `75` limit/balance/capacity/profile/lane unavailable → take the fallback ·
 `124` timeout · `2` manual task ended with status BLOCKED/FAILED · `3` (`handoff wait --any`) a pool check is due.
 Detailed sections of this skill: `orch guide <section>` (`manual`, `quota`, `profiles`, `usage`, `lead`, `budget`,

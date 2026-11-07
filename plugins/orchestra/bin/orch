@@ -1,4 +1,42 @@
-#!/usr/bin/env python3
+#!/bin/sh
+# Run as a program, the shell part below finds Python 3.8+ and runs this file with it; Python reads that part as a
+# string and goes on to the launcher code. (Keep backslashes out of the shell part: to Python it is a plain string.)
+""":"
+# The plugin's bin/ is on the Bash tool's PATH in every Claude Code session, and `python3` may be missing there: on
+# Windows there is often only `python`, or the Microsoft Store alias. The search and its cache are those of
+# hooks/run.sh: the interpreter that passed is kept per platform in $ORCH_HOME/.hook-python-<platform>.
+HOME_DIR="${ORCH_HOME:-$HOME/.orchestra}"
+CACHE="$HOME_DIR/.hook-python-${OSTYPE:-posix}"
+if [ -f "$CACHE" ]; then
+  CACHED=""
+  IFS= read -r CACHED < "$CACHE" 2>/dev/null
+  if [ -n "$CACHED" ] && [ -x "$CACHED" ]; then
+    exec "$CACHED" "$0" "$@"
+  fi
+fi
+PY=""
+for KIND in real alias; do
+  for p in python3 python py; do
+    CMD="$(command -v "$p" 2>/dev/null)" || continue
+    case "$CMD" in
+      *WindowsApps*) [ "$KIND" = real ] && continue ;;
+      *) [ "$KIND" = alias ] && continue ;;
+    esac
+    EXE="$("$p" -c 'import sys; print(sys.executable.replace(chr(92), "/")) if sys.version_info >= (3, 8) else sys.exit(1)' 2>/dev/null)" || continue
+    if [ -n "$EXE" ]; then PY="$EXE"; break 2; fi
+  done
+done
+if [ -z "$PY" ]; then
+  echo "orch: no Python 3.8+ found (tried python3, python, py)" >&2
+  exit 127
+fi
+mkdir -p "$HOME_DIR" 2>/dev/null
+TMP="$CACHE.$$"
+if printf '%s\n' "$PY" > "$TMP" 2>/dev/null; then
+  mv -f "$TMP" "$CACHE" 2>/dev/null || rm -f "$TMP" 2>/dev/null
+fi
+exec "$PY" "$0" "$@"
+"""
 """orch launcher: run lib/orch_core.py, keeping its compiled code in the personal folder.
 
 Python never caches the bytecode of the script it is started with, and `orch` runs on every hook and status line

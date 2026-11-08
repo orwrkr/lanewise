@@ -11,14 +11,6 @@ At most one process item is in progress at a time. A new one starts only with th
 expected benefit and a limit on what it may cost ([AGENTS.md](AGENTS.md#rules)). Work on the workflow itself can
 quietly crowd out the product, and this rule keeps it in view.
 
-## Next
-
-1. **Split the code into modules.** *process* `lib/orch_core.py` is about 9,000 lines.
-   - Split it into modules that an executor can read one at a time.
-   - Keep `bin/orch`'s cached-bytecode start fast.
-   - This ends the one-file layout described in AGENTS.md ("Structure"), so update it.
-   - The self-test was split first: `tests/sections/`, each section runnable alone.
-
 ## Parked
 
 - **A Gemini executor.** *product* Gemini CLI fits the adapter contract technically:

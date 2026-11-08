@@ -16,9 +16,9 @@ be in the user's language; whatever goes into the repository is English.
 
 ## Structure
 
-- `plugins/orchestra/bin/orch` — `orch` launcher: executes `lib/orch_core.py` with cached bytecode
-- `plugins/orchestra/lib/orch_core.py` — CLI code (Python 3.8+, stdlib only): limits, executor profiles, `run`,
-  `launch` (a non-Claude lead), the pool and manual tasks, usage log (`usage`), guides (`guide`), hooks
+- `plugins/orchestra/bin/orch` — `orch` launcher: runs the parts below, with cached bytecode
+- `plugins/orchestra/lib/orch_core/NN-<area>.py` — CLI code by area (Python 3.8+, stdlib only). The parts run in
+  name order in one namespace and must parse as one file when joined; code goes in its area's part
 - `plugins/orchestra/skills/orchestrate/SKILL.md` — core routing rules (loaded on every skill invocation — keep it
   compact); details — `skills/orchestrate/reference/*.md`, served by `orch guide <section>`
 - `plugins/orchestra/registry/providers.yaml` — built-in model registry; the personal one — `~/.orchestra/providers.yaml`
@@ -49,7 +49,7 @@ Changed `orch` behaviour — add a check to its section in `tests/sections/`. Ch
 ## Rules
 
 - `orch` and the adapters — Python standard library only, compatible with 3.8 (`vermin -t=3.8- bin/orch
-  lib/orch_core.py adapters/codex adapters/deepseek adapters/claude adapters/_claude_headless.py`).
+  lib/orch_core/*.py adapters/codex adapters/deepseek adapters/claude adapters/_claude_headless.py`).
 - No machine-specific content: no absolute paths, user names, distro names or personal settings in code, docs,
   tests or commit messages (examples use `/path/to/…`, `<you>`; test data, the user `me`); the repository works from any
   location. `tests/check_portable.py` enforces this in the self-test and in the git hooks (`.githooks`); don't bypass it.

@@ -125,7 +125,7 @@ OW2=$(mt_id "$out"); BR2="ag/$(tr 'A-Z' 'a-z' <<<"$OW2")"
   && ok "each writing task has its own worktree and branch" || bad "second worktree"
 lacks "$out" "HANDOFF" "no HANDOFF_DIRTY or HANDOFF_WRITE_BUSY any more"
 [[ "$(git -C "$MP" status --porcelain)" == " M f.txt" ]] && ok "two nested worktrees stay out of the project's git status" || bad "git status: $(git -C "$MP" status --porcelain)"
-grep -rq "HANDOFF_DIRTY\|HANDOFF_WRITE_BUSY" "$PLUGIN/lib/orch_core.py" "$PLUGIN/skills" "$PLUGIN/README.md" && bad "the removed guards are still mentioned" || ok "the removed guards are gone from code and docs"
+grep -rq "HANDOFF_DIRTY\|HANDOFF_WRITE_BUSY" "$PLUGIN/lib/orch_core" "$PLUGIN/skills" "$PLUGIN/README.md" && bad "the removed guards are still mentioned" || ok "the removed guards are gone from code and docs"
 
 # a start in a worktree is seen by the folder scan; the project folder's edits are not the task's
 sleep 2; echo "agent edit" >> "$MP/.orchestra/wt/$OW/f.txt"

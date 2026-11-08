@@ -44,7 +44,16 @@ def brief(tool_input):
 
 
 def find_claude():
-    return os.environ.get("ORCH_CLAUDE_BIN") or shutil.which("claude")
+    """ORCH_CLAUDE_BIN, else `claude` on PATH, else where Claude Code's native installer puts it (~/.local/bin; on
+    Windows claude.exe): a shell started without the user's own PATH entries (seen in Git Bash) still finds it."""
+    found = os.environ.get("ORCH_CLAUDE_BIN") or shutil.which("claude")
+    if found:
+        return found
+    for name in (("claude.exe", "claude") if os.name == "nt" else ("claude",)):
+        path = Path.home() / ".local" / "bin" / name
+        if path.is_file() and os.access(str(path), os.X_OK):
+            return str(path)
+    return None
 
 
 def lead_vars():

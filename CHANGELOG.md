@@ -11,6 +11,10 @@
   passed): the stored `used`, `resets_at` and `updated` stay and no history sample is added; when every window of an
   update is dropped nothing is written. A new window and an equal or higher reading are saved as before. `orch budget
   set` always wins, as a correction, and the next status line reading replaces the operator's estimate.
+- **The Claude and DeepSeek executors find `claude` where its native installer puts it.** They looked only at
+  `ORCH_CLAUDE_BIN` and PATH, so `orch run claude` from a session whose shell lacks the user's own PATH entries (seen
+  in Git Bash, with a hand-started DeepSeek lead) failed with "claude CLI not found"; `~/.local/bin/claude`
+  (`claude.exe` on Windows) is now the last place they look.
 
 ## 0.31.1
 

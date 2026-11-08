@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.31.2
+
+- **A stale status line reading no longer lowers the shared Claude usage.** Usage never goes down within one limit
+  window, but a session that comes back after a quiet spell refreshes its status line before its first new response
+  and writes its own old, lower figure with a fresh time, and the last writer won: on one machine with several
+  sessions the weekly history had 21 drops (one 40 → 28) and the five-hour history 17, so the pace projections were
+  computed from wrong numbers. `save_usage` now drops a status line reading of a window that has already reset, and
+  one lower than the stored status line reading of the same window (the same reset within 10 minutes, not yet
+  passed): the stored `used`, `resets_at` and `updated` stay and no history sample is added; when every window of an
+  update is dropped nothing is written. A new window and an equal or higher reading are saved as before. `orch budget
+  set` always wins, as a correction, and the next status line reading replaces the operator's estimate.
+
 ## 0.31.1
 
 - **`orch` from the plugin's own `bin/` finds its Python.** Claude Code puts the plugin's `bin/` on the Bash tool's

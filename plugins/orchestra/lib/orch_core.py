@@ -780,6 +780,9 @@ def cmd_quota(a):
 # SURPLUS — the window would expire with a lot left beyond the reserve (shared between the active sessions);
 # TIGHT — it would reach the reserve before the reset. A five-hour projection (either mode) needs at least
 # PROJECTION_MIN_ELAPSED minutes of the window behind it; a used share that has reached the reserve needs none.
+# A session that wakes up after a quiet spell reports its own old figures, so a status line reading is dropped when its
+# window has already reset, or when it is lower than the stored status line reading of the same window (the same reset,
+# not yet passed). The operator's report is a correction and always wins; the next status line reading replaces it.
 
 USAGE_SNAPSHOT = ORCH_HOME / "claude_usage.json"
 SESSIONS_FILE = ORCH_HOME / "sessions.json"
@@ -803,12 +806,38 @@ def epoch_iso(v):
         return None
 
 
+def stale_reading(old, new, t):
+    """True when the status line reading `new` is a session's old one: its window has already reset, or it is lower
+    than `old`, the stored status line reading of the same window (the same reset within 10 minutes, not yet passed),
+    since usage never goes down within one window. `old` is None when the stored numbers are not a status line's."""
+    if not isinstance(new, dict):
+        return False
+    new_reset = parse_iso(str(new.get("resets_at") or ""))
+    if new_reset and new_reset <= t:
+        return True
+    if not isinstance(old, dict) or not new_reset:
+        return False
+    old_reset = parse_iso(str(old.get("resets_at") or ""))
+    if not old_reset or old_reset <= t or abs((new_reset - old_reset).total_seconds()) >= 600:
+        return False
+    try:
+        return float(new["used"]) < float(old["used"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 @locked("home")
 def save_usage(windows, source):
     """{"five_hour": {"used": %, "resets_at": iso}, "seven_day": {…}} → the snapshot shared by all sessions, plus a
-    sample of the 5-hour window for the recent pace."""
+    sample of the 5-hour window for the recent pace. A stale status line reading (stale_reading) is dropped, and
+    nothing is written if all are. The operator's reports always win, and a status line reading replaces one."""
     snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
     t = now()
+    if source == "statusline":
+        mine = snap.get("source") == "statusline"     # an operator's estimate is not a reading to compare with
+        windows = {k: v for k, v in windows.items() if not stale_reading(snap.get(k) if mine else None, v, t)}
+        if not windows:
+            return
     stale = any((t - (measured_at(snap, k) or t - dt.timedelta(days=1))).total_seconds() > 60 for k in windows)
     if all({f: snap.get(k, {}).get(f) for f in v} == v for k, v in windows.items()) \
             and snap.get("source") == source and not stale:

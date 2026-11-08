@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.33.2
+
+- **Forked sessions no longer count copied history again.** Claude Code's `--fork-session` copies the earlier
+  transcript into a new session, so its usage and lead spend included those messages twice. Usage reports,
+  session snapshots and status line tokens now count the fork's own messages only. Plain `--resume` already
+  used the same session and was counted correctly.
+
 ## 0.33.1
 
 - **A lead session's spend is split at counter resets and month starts.** A session run on an API key (`orch launch

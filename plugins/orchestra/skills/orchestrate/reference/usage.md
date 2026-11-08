@@ -16,6 +16,7 @@
   task closed from a terminal, an `orch run` outside a session). No data is not an error.
 - Tokens: "input" — uncached (for Claude including cache writes), "cache" — cache reads, "output". Totals — per
   model. For Claude Code, also its own cost estimate at API prices (nominal on a subscription).
+  A forked session's copied history is not counted again.
 - Claude Code transcripts are deleted over time; when a session ends, the SessionEnd hook saves its figures to the
   log, and a report on an old session is built from there.
 - To make "for what" readable in the report: give Agent calls a meaningful `description`, and `orch run` a

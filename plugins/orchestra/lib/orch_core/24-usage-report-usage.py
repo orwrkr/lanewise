@@ -66,12 +66,23 @@ def parse_transcript(path):
     info = {"session": path.stem, "title": None, "start": None, "end": None, "cost_usd": None}
 
     def scan(f, who):
+        first_stamp = None
         with f.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
-                if '"type":"assistant"' in line:
+                assistant = '"type":"assistant"' in line
+                special = '"type":"ai-title"' in line or '"type":"cost-state"' in line
+                if first_stamp is None or assistant or special:
                     try:
                         ev = json.loads(line)
                     except ValueError:
+                        continue
+                    if not isinstance(ev, dict):
+                        continue
+                    stamp = ev.get("timestamp")
+                    if first_stamp is None and isinstance(stamp, str) and stamp:
+                        first_stamp = stamp
+                if assistant:
+                    if first_stamp and isinstance(stamp, str) and stamp and stamp < first_stamp:
                         continue
                     msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
                     model = msg.get("model")
@@ -84,11 +95,7 @@ def parse_transcript(path):
                     if who == "main" and ev.get("timestamp"):
                         info["start"] = info["start"] or ev["timestamp"]
                         info["end"] = ev["timestamp"]
-                elif '"type":"ai-title"' in line or '"type":"cost-state"' in line:
-                    try:
-                        ev = json.loads(line)
-                    except ValueError:
-                        continue
+                elif special:
                     if ev.get("type") == "ai-title" and ev.get("aiTitle"):
                         info["title"] = ev["aiTitle"]
                     elif ev.get("type") == "cost-state" and ev.get("totalCostUSD") is not None:

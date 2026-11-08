@@ -88,3 +88,34 @@ lacks "$out" " cache" "a shrunken transcript resets its cache reads too"
 out=$(printf '{"session_id":"sess-empty","workspace":{"current_dir":"%s"}}' "$(native "$REPO")" | $ORCH statusline)
 grep -q "Session in/out:" <<<"$out" && bad "session line shown with no tokens" || ok "no session line with no tokens"
 
+FORK="$TCFG/sess-fork-tokens.jsonl"
+$PY - "$(native "$FORK")" <<'EOF'
+import json, sys
+c = lambda x: json.dumps(x, separators=(",", ":"))
+def a(mid, ts, n):
+    return {"type": "assistant", "timestamp": ts, "message": {"id": mid, "model": "claude-opus-5-5", "usage": {"input_tokens": n, "output_tokens": n}}}
+events = [{"type": "mode"}, {"type": "queue-operation", "timestamp": "2026-11-02T12:00:00.000Z"},
+          a("old", "2026-11-02T10:00:00.000Z", 900), a("new", "2026-11-02T13:00:00.000Z", 100)]
+open(sys.argv[1], "w", encoding="utf-8").write("\n".join(map(c, events)) + "\n")
+EOF
+fork_sl() { printf '{"session_id":"sess-fork-tokens","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$FORK")" "$(native "$REPO")" | $ORCH statusline; }
+out=$(fork_sl); contains "$out" "Claude 100/100" "fork tokens exclude copies on first parse"
+$PY - "$(native "$FORK")" <<'EOF'
+import json, sys
+def a(mid, ts, n):
+    return json.dumps({"type": "assistant", "timestamp": ts, "message": {"id": mid, "model": "claude-opus-5-5", "usage": {"input_tokens": n, "output_tokens": n}}}, separators=(",", ":"))
+with open(sys.argv[1], "a", encoding="utf-8") as f:
+    f.write(a("old2", "2026-11-02T11:00:00.000Z", 800) + "\n" + a("new2", "2026-11-02T14:00:00.000Z", 50) + "\n")
+EOF
+out=$(fork_sl); contains "$out" "Claude 150/150" "fork tokens exclude copies after saved offset"
+unset -f fork_sl
+$PY - "$(native "$TCFG/sess-attachment.jsonl")" <<'EOF'
+import json, sys
+events = [{"type": "attachment", "timestamp": "2026-11-02T09:00:00.000Z"},
+          {"type": "user", "timestamp": "2026-11-02T10:00:00.000Z"},
+          {"type": "assistant", "timestamp": "2026-11-02T11:00:00.000Z", "message": {"id": "a", "model": "claude-opus-5-5", "usage": {"input_tokens": 123, "output_tokens": 12}}}]
+open(sys.argv[1], "w", encoding="utf-8").write("\n".join(json.dumps(e, separators=(",", ":")) for e in events) + "\n")
+EOF
+out=$(printf '{"session_id":"sess-attachment","transcript_path":"%s","workspace":{"current_dir":"%s"}}' "$(native "$TCFG/sess-attachment.jsonl")" "$(native "$REPO")" | $ORCH statusline)
+contains "$out" "Claude 123/12" "an earlier attachment does not hide ordinary usage"
+

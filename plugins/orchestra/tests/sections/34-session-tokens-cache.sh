@@ -105,3 +105,24 @@ assert e["files"] and all("cache" in s for s in e["files"].values() if isinstanc
 EOF
 out2=$(acct_sl sess-cache-again); [[ "$out2" == "$out" ]] && ok "a rebuilt entry is not parsed twice" || bad "rebuilt entry drifted: $out2"
 
+# An older saved state lacks the fork boundary; its head is read before parsing appended copies.
+OLD="$TCFG/sess-old-fork.jsonl"
+$PY - "$(native "$OLD")" <<'EOF'
+import json, sys
+c = lambda x: json.dumps(x, separators=(",", ":"))
+open(sys.argv[1], "w", encoding="utf-8").write(c({"type": "mode"}) + "\n" + c({"type": "queue-operation", "timestamp": "2026-11-02T12:00:00.000Z"}) + "\n")
+EOF
+out=$(acct_sl sess-old-fork)
+$PY - "$(native "$AH")" "$(native "$OLD")" <<'EOF'
+import json, os, sys
+p = os.path.join(sys.argv[1], "session_tokens", "sess-old-fork.json")
+e = json.load(open(p, encoding="utf-8"))
+for state in e["files"].values(): state.pop("start", None)
+json.dump(e, open(p, "w", encoding="utf-8"))
+def a(mid, ts, n):
+    return json.dumps({"type": "assistant", "timestamp": ts, "message": {"id": mid, "model": "claude-opus-5-5", "usage": {"input_tokens": n, "output_tokens": n}}}, separators=(",", ":"))
+with open(sys.argv[2], "a", encoding="utf-8") as f:
+    f.write(a("old", "2026-11-02T10:00:00.000Z", 900) + "\n" + a("new", "2026-11-02T13:00:00.000Z", 100) + "\n")
+EOF
+out=$(acct_sl sess-old-fork); contains "$out" "Claude 100/100" "old saved state finds the fork boundary in the file head"
+

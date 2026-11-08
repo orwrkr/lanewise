@@ -97,6 +97,35 @@ contains "$out" "orchestrator *Claude Opus 5.5 *high .* 115 *3.0k *70" "main thr
 contains "$out" "subagent orch-sonnet-high *Claude Sonnet 5.5 *medium *Find naïve parse calls" "subagent: type, model, what for"
 contains "$out" "Codex *GPT-6.1 Terra *.*Implement the café parser · OK" "CLI executor in the session report"
 contains "$out" "DeepSeek *DeepSeek V4.1 Flash .*Café parser tests" "DeepSeek executor in the session report"
+$PY - "$(native "$CFG")" <<'EOF'
+import json, os, sys
+d = sys.argv[1]
+c = lambda x: json.dumps(x, separators=(",", ":"))
+original = [json.loads(line) for line in open(os.path.join(d, "sess-test.jsonl"), encoding="utf-8") if '"type":"assistant"' in line]
+new = dict(original[0], timestamp="2026-10-30T11:00:00.000Z")
+new["message"] = dict(new["message"], id="new", usage={"input_tokens": 17, "output_tokens": 8})
+with open(os.path.join(d, "sess-fork.jsonl"), "w", encoding="utf-8") as f:
+    for ev in [{"type": "mode"}, {"type": "queue-operation", "timestamp": "2026-10-30T10:00:00.000Z"}] + original + [new]:
+        f.write(c(ev) + "\n")
+sub = os.path.join(d, "sess-fork", "subagents")
+os.makedirs(sub, exist_ok=True)
+sub_new = dict(new, message=dict(new["message"], id="sub-new"))
+with open(os.path.join(sub, "agent-fork.jsonl"), "w", encoding="utf-8") as f:
+    for ev in [{"type": "mode"}, {"type": "queue-operation", "timestamp": "2026-10-30T10:00:00.000Z"}, original[0], sub_new]:
+        f.write(c(ev) + "\n")
+EOF
+$ORCH usage --session sess-fork --json > "$T/fork-usage.json"
+$ORCH usage --session sess-test --json > "$T/original-usage.json"
+$PY - "$(native "$T/fork-usage.json")" "$(native "$T/original-usage.json")" <<'EOF' && ok "usage excludes copied fork history and retains the original" || bad "fork usage"
+import json, sys
+fork, original = [json.load(open(p, encoding="utf-8")) for p in sys.argv[1:]]
+f = fork["rows"][0]["usage"]
+o = next(r["usage"] for r in original["rows"] if r["who"] == "orchestrator")
+assert (f["input_tokens"], f["output_tokens"], f["calls"]) == (17, 8, 1), f
+assert (o["input_tokens"], o["output_tokens"]) == (115, 70), o
+assert fork["start"] == fork["end"] == "2026-10-30T11:00:00.000Z", fork
+assert next(r["usage"] for r in fork["rows"] if r["who"].startswith("subagent"))["input_tokens"] == 17, fork
+EOF
 echo "{\"session_id\": \"sess-test\", \"transcript_path\": \"$(native "$CFG/sess-test.jsonl")\", \"cwd\": \"$(native "$REPO")\"}" | \
   $ORCH hook session-end >"$T/se.out"; rc=$?
 [[ $rc -eq 0 && ! -s "$T/se.out" ]] && ok "SessionEnd hook silent" || bad "session-end: rc=$rc $(cat "$T/se.out")"

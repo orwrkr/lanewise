@@ -322,6 +322,21 @@ assert "messages" not in recs[0], recs[0]
 EOF2
 out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend)
 contains "$out" '\$2\.00 ' "orch spend counts only the part of the lead session after the baseline"
+$PY - "$(native "$LEADT")" <<'EOF'
+import json, sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").readlines()
+head = [json.dumps({"type": "mode"}), json.dumps({"type": "queue-operation", "timestamp": "2026-11-02T15:00:00.000Z"})]
+new = json.loads(lines[-1]); new["timestamp"] = "2026-11-02T16:00:00.000Z"; new["message"]["id"] = "fork-new"
+open(p, "w", encoding="utf-8").write("\n".join(head) + "\n" + "".join(lines) + json.dumps(new, separators=(",", ":")) + "\n")
+EOF
+echo "{\"session_id\": \"sess-lead-fork\", \"transcript_path\": \"$(native "$LEADT")\", \"cwd\": \"$SS\"}" | \
+  ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" ORCH_LEAD=deepseek $ORCH hook session-end >"$T/fork-se.out"
+$PY - "$(native "$SH/usage.jsonl")" <<'EOF' && ok "fork lead snapshot prices only the new message" || bad "fork lead snapshot spend"
+import json, sys
+r = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if '"sess-lead-fork"' in l][-1]
+assert abs(r["spend_usd"] - 1.0) < 1e-9 and len(r["spend_parts"]) == 1, r
+EOF
 spend_reset
 unset -f sl_spend
 

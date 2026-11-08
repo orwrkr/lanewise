@@ -26,8 +26,6 @@ quietly crowd out the product, and this rule keeps it in view.
 
 ## Small items
 
-- **`claude --resume`.** *product* Check whether a resumed session gets a new session id with the full history. That
-  would count its tokens twice.
 - **Guides against the parser.** *process* A self-test check that every `orch` command and option named in
   `skills/orchestrate/reference/*.md` exists in the argument parser. It is a manual research task today.
 

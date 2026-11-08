@@ -81,10 +81,30 @@ def parse_append(path, state, limit=None):
         state["offset"] = 0
         state["ids"] = {}
         state.pop("floor", None)
+        state.pop("start", None)
         state["in"] = 0
         state["out"] = 0
         state["cache"] = 0
         changed = True
+    if offset and "start" not in state:
+        # Old state: inspect at most 64 KiB of complete head lines, once, without moving the saved offset.
+        try:
+            with path.open("rb") as f:
+                head = f.read(min(size, 65536))
+            for line in head[:head.rfind(b"\n") + 1].splitlines():
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                stamp = ev.get("timestamp") if isinstance(ev, dict) else None
+                if isinstance(stamp, str) and stamp:
+                    state["start"] = stamp
+                    break
+            else:
+                state["start"] = None
+            changed = True
+        except OSError:
+            return changed, False
     behind = limit is not None and size - offset > limit
     data = b""
     if size > offset:
@@ -99,18 +119,25 @@ def parse_append(path, state, limit=None):
         floor = state.get("floor") if isinstance(state.get("floor"), dict) else {}
         floor_t = floor.get("t") if isinstance(floor.get("t"), str) else None
         for line in data.decode("utf-8", "replace").splitlines():
-            if '"type":"assistant"' not in line:
+            assistant = '"type":"assistant"' in line
+            if not assistant and state.get("start"):
                 continue
             try:
                 ev = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            stamp = ev.get("timestamp") if isinstance(ev.get("timestamp"), str) else None
+            if not state.get("start") and stamp:
+                state["start"] = stamp
+            if not assistant or (state.get("start") and stamp and stamp < state["start"]):
                 continue
             msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
             model = msg.get("model")
             if ev.get("type") != "assistant" or not model or str(model).startswith("<"):
                 continue
             mid = msg.get("id") or ev.get("requestId") or ev.get("uuid")
-            stamp = ev.get("timestamp") if isinstance(ev.get("timestamp"), str) else None
             u = claude_tokens(msg.get("usage") or {})
             inp, out, cache = int(u["input_tokens"]), int(u["output_tokens"]), int(u["cached_input_tokens"])
             if mid:

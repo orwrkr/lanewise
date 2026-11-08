@@ -43,7 +43,8 @@ wsl.exe -- bash -lc 'bash plugins/orchestra/tests/run_tests.sh'   # must report 
 claude plugin validate ./plugins/orchestra && claude plugin validate .
 ```
 While working, run just the sections you touched (`run_tests.sh <slug>`); the full suite before a commit.
-Git Bash on Windows is left to CI (`.github/workflows/tests.yml`, on a pull request or a push to `main`): it takes five minutes there, while locally it takes half an hour or more and slows every session on the machine. Run it locally only to debug a Windows-specific failure.
+Git Bash on Windows is left to CI (`.github/workflows/tests.yml`): five minutes there, half an hour or more locally,
+slowing every session on the machine; run it locally only to debug a Windows-specific failure.
 Changed `orch` behaviour — add a check to its section in `tests/sections/`. Changed the registry format — update SKILL.md and README.
 
 ## Rules

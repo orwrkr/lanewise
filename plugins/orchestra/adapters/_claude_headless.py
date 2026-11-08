@@ -85,13 +85,15 @@ def system_prompt(run_dir):
 
 def tool_policy():
     """analysis → Read/Grep/Glob + read-only git; write → plus Edit/Write inside ORCH_CWD; other commands only via
-    `orch run --allow RULE`."""
+    `orch run --allow RULE`. An allowed `WebFetch(...)` rule also adds the WebFetch tool (in either mode): without
+    the tool the rule would allow nothing, and with no such rule the worker never reads a web page."""
     allowed = GIT_READ + [r.strip() for r in os.environ.get("ORCH_ALLOW", "").splitlines() if r.strip()]
+    web = ",WebFetch" if any(r.split("(", 1)[0] == "WebFetch" for r in allowed) else ""
     if os.environ.get("ORCH_MODE") == "write":
         # `/**` in a CLI rule anchors at the primary working directory; `./**` follows the worker's `cd`, which would
         # silently shrink its write scope to wherever it last went.
-        return "Read,Grep,Glob,Edit,Write,Bash", ["Edit(/**)", "Write(/**)"] + allowed
-    return "Read,Grep,Glob,Bash", allowed
+        return "Read,Grep,Glob,Edit,Write,Bash" + web, ["Edit(/**)", "Write(/**)"] + allowed
+    return "Read,Grep,Glob,Bash" + web, allowed
 
 
 def settings_deny(say):

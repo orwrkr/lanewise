@@ -148,6 +148,25 @@ hours). Chinese public holidays are off-peak on DeepSeek's page but are not mode
 errs high, which is accepted. `orch spend` warns when a provider's prices are older than 30 days and names the
 source to check.
 
+**Refreshing the prices.** `orch` makes no web request; a cheap agent reads the official pages and the operator
+confirms what it found. Nothing happens by itself.
+
+1. `orch prices check [--provider P]…` writes `~/.orchestra/prices/check-<stamp>/TASK.md`: each provider's price page
+   and the model keys of our table that belong to it.
+2. The orchestrator gives it to a cheap executor with web access: in a Claude-led session a native subagent such as
+   `orchestra:orch-haiku-low`; otherwise `orch run claude|deepseek --mode analysis --allow
+   'WebFetch(domain:<site>)' --prompt-file <TASK.md>` (an allowed `WebFetch(...)` rule gives the worker that tool);
+   or the manual pool, since reading price pages is read-only research.
+3. `orch prices diff <output>` validates its report (a JSON file, or any text with the proposal in a fenced
+   json block) and prints `field: current → proposed (±N%)`, large changes marked, models left out, new keys.
+   Exit 2 when it is invalid.
+4. After the operator's yes: `orch prices apply <output> --yes` (`--provider`, `--model` narrow it; without `--yes`
+   it only shows the diff). It writes dated entries to the personal `prices.json` and confirms the provider's
+   `as_of`, even for a check with no changes. The built-in file is never written, and a newer plugin version's prices
+   replace an older check.
+
+`orch prices show [--json]` prints the table in effect: source, date and age per provider, personal or built-in.
+
 ## The provider's balance of the account — `orch balance`
 
 `orch spend` is an **estimate of `orch`'s own runs** (tokens × prices). For a provider that reports a balance,

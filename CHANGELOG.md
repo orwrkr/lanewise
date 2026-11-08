@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.32.0
+
+- **`orch prices`: a way to refresh the prices behind the spend estimate.** `orch spend` warned that a provider's
+  prices were more than 30 days old but nothing helped to renew them. `orch prices check [--provider P]…` now writes a
+  self-contained `TASK.md` (under `~/.orchestra/prices/check-<stamp>/`) for a cheap agent with web access: each
+  provider's official page and the model keys of the table that belong to it (the new `price_provider`: Claude
+  families, `gpt-*`, `deepseek-*`), the rules (official site only, never guess, a promotion goes to `notes`) and the
+  JSON schema of the answer. `orch prices diff FILE` reads the proposal from a JSON file or from the fenced `json`
+  block of a report, validates it (known provider, the provider's own model keys, rates that are numbers >= 0, no
+  future date; exit 2 otherwise) and prints `field: current → proposed (±N%)`, with a mark from 25%, the unchanged
+  models, the models the proposal leaves out, new keys (reported, never applied) and the notes. `orch prices apply
+  FILE [--provider P]… [--model M]… --yes` writes the personal `prices.json` under the home lock: each changed model
+  becomes a dated list (open-ended elements are closed at the check date, DeepSeek's peak fields are kept), and
+  each checked provider's source gets `as_of`, `source` and `models`, a check with no changes included (a provider
+  whose change `--model` left out keeps its date); without `--yes` nothing is written. `orch prices show [--json]` prints the table in effect with source, date, age and
+  origin, and flags a provider older than 30 days. Nothing happens by itself and `orch` makes no web request.
+- **A newer plugin wins over an old check.** A personal source written by `apply` (it has a `models` list) that is
+  older than the built-in source of the same provider is ignored together with its model entries, so the built-in
+  prices of a newer plugin replace it; entries written by hand always override, as before. The staleness warning of
+  `orch spend` now says "run `orch prices check`".
+- **A Claude or DeepSeek executor can read a web page when granted.** An allowed `WebFetch(...)` rule given with `orch
+  run … --allow` also adds the `WebFetch` tool to the worker's tool list, in analysis and write mode; without such a
+  rule the tool stays out.
+- **`orch.cmd` without warnings under the Python install manager.** Since 0.31.1 `bin/orch` starts with `#!/bin/sh`,
+  and the install manager's `py` and `python` (python.org's default Windows installer) read a script's first line:
+  `py -3 bin\orch` printed three warnings on every call before falling back to the default Python. `orch.cmd` now
+  starts Python with `-c` and runs `bin\orch` through `runpy`, so there is no script argument to read. The self-test
+  likewise prefers a real interpreter to a `WindowsApps` alias, as the hooks do.
+
 ## 0.31.2
 
 - **A stale status line reading no longer lowers the shared Claude usage.** Usage never goes down within one limit

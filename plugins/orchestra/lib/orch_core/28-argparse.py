@@ -51,7 +51,9 @@ def hook_args(argv):
     return SimpleNamespace(cmd="hook", event=event, throttle=throttle, fn=cmd_hook)
 
 
-def parse_args(argv):
+def build_parser():
+    """The whole command tree: subcommands, nested subcommands and options. Built once per `parse_args` call; the
+    self-test builds it too, to check that the commands the docs name still exist here."""
     import argparse
     p = argparse.ArgumentParser(prog="orch", description="Orchestra helper CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -363,6 +365,12 @@ def parse_args(argv):
     k.add_argument("event", choices=HOOK_EVENTS)
     k.add_argument("--throttle", type=int, default=60, help="post-tool: min seconds between checks")
     k.set_defaults(fn=cmd_hook)
+
+    return p
+
+
+def parse_args(argv):
+    p = build_parser()
 
     tail = []
     if argv[:1] == ["launch"] and "--" in argv:        # everything after -- goes to claude untouched

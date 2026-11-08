@@ -24,11 +24,6 @@ quietly crowd out the product, and this rule keeps it in view.
   through a consumer login risks the account. Revisit if a paid Gemini API key or Vertex project is wanted. A quota hit
   shows up only as exit 1 with text on stderr, so the adapter would have to read that text.
 
-## Small items
-
-- **Guides against the parser.** *process* A self-test check that every `orch` command and option named in
-  `skills/orchestrate/reference/*.md` exists in the argument parser. It is a manual research task today.
-
 ## Release
 
 The repository stays private until the items above are done. Making it public is the maintainer's decision.

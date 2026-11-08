@@ -30,8 +30,8 @@ be in the user's language; whatever goes into the repository is English.
   `deepseek` — headless Claude Code on the DeepSeek API, also the `orch launch deepseek` lead; `claude` — headless
   Claude Code on the user's own login; `_claude_headless.py` — shared by the last two; contract template)
 - `plugins/orchestra/bin/orch.cmd` — `orch` launcher for PowerShell/cmd on Windows
-- `plugins/orchestra/tests/run_tests.sh` — self-test (fake codex and claude, temporary git repository), which also
-  runs `check_portable.py` and `check_sizes.py`
+- `plugins/orchestra/tests/run_tests.sh` — self-test (fake codex and claude, temporary git repository): preamble
+  `lib.sh`, then `sections/NN-<slug>.sh`; `--list` names them, `run_tests.sh <sel>…` runs some alone
 - `install.sh` / `uninstall.sh` — plugin install and uninstall (the standard way, via `claude plugin`)
 - `.github/workflows/tests.yml` — CI: the self-test on Ubuntu and Windows, Python 3.8 compatibility
 - `ROADMAP.md` — open work, marked product or process; `CONTRIBUTING.md` — how a change ships
@@ -42,8 +42,9 @@ be in the user's language; whatever goes into the repository is English.
 wsl.exe -- bash -lc 'bash plugins/orchestra/tests/run_tests.sh'   # must report failed: 0; from the repo root, default WSL distro
 claude plugin validate ./plugins/orchestra && claude plugin validate .
 ```
+While working, run just the sections you touched (`run_tests.sh <slug>`); the full suite before a commit.
 Git Bash on Windows is left to CI (`.github/workflows/tests.yml`, on a pull request or a push to `main`): it takes five minutes there, while locally it takes half an hour or more and slows every session on the machine. Run it locally only to debug a Windows-specific failure.
-Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry format — update SKILL.md and README.
+Changed `orch` behaviour — add a check to its section in `tests/sections/`. Changed the registry format — update SKILL.md and README.
 
 ## Rules
 

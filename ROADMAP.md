@@ -13,13 +13,24 @@ quietly crowd out the product, and this rule keeps it in view.
 
 ## Next
 
-1. **Split the code and the self-test.** *process*
-   - Split `lib/orch_core.py` (about 9,000 lines) into modules, and `tests/run_tests.sh` (about 5,800) into sections
-     that can run alone.
+1. **Split the code into modules.** *process* `lib/orch_core.py` is about 9,000 lines.
+   - Split it into modules that an executor can read one at a time.
+   - Keep `bin/orch`'s cached-bytecode start fast.
    - This ends the one-file layout described in AGENTS.md ("Structure"), so update it.
-2. **A Gemini executor: a spike first.** *product*
-   - Find out what Gemini CLI offers for headless runs: structured output, permissions, limit and usage reporting.
-   - Decide whether it fits the adapter contract (`adapters/_template.example`), then propose the adapter.
+   - The self-test was split first: `tests/sections/`, each section runnable alone.
+
+## Parked
+
+- **A Gemini executor.** *product* Gemini CLI fits the adapter contract technically:
+  - headless `-p` with JSON output;
+  - a read-only plan mode;
+  - a separate config home;
+  - token counts per model.
+
+  But since 2026-06-18, individual and Google AI Pro/Ultra accounts use Antigravity CLI instead, which stays manual
+  here (AGENTS.md). Gemini CLI is left to Code Assist Enterprise and paid Gemini API or Vertex keys, and scripted use
+  through a consumer login risks the account. Revisit if a paid Gemini API key or Vertex project is wanted. A quota hit
+  shows up only as exit 1 with text on stderr, so the adapter would have to read that text.
 
 ## Small items
 

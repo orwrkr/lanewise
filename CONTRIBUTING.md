@@ -27,10 +27,13 @@ bash plugins/orchestra/tests/run_tests.sh      # must end with "failed: 0"
 claude plugin validate ./plugins/orchestra && claude plugin validate .
 ```
 
+While you work, `bash plugins/orchestra/tests/run_tests.sh --list` shows the sections and `run_tests.sh <slug>` runs
+one alone, in seconds to a couple of minutes; run the whole suite before you open the pull request.
+
 Running the suite natively on Windows (Git Bash) takes half an hour or more: use WSL, or let CI run it on your pull
 request, and keep a local Windows run for debugging a Windows-specific failure (AGENTS.md, "Before committing").
 
-- Changed what `orch` does? Add a check to `tests/run_tests.sh` and bump the version in
+- Changed what `orch` does? Add a check to its section in `tests/sections/` and bump the version in
   `plugins/orchestra/.claude-plugin/plugin.json`.
 - `orch` and the adapters use only the Python standard library and must run on Python 3.8.
 - English only, LF line endings (except `*.cmd`), no personal paths or keys.
@@ -55,7 +58,7 @@ The maintainer works with coding agents, orchestrated by the plugin itself. The 
    skill): a Claude subagent, Codex or DeepSeek. The executor neither commits nor runs the whole self-test.
 5. **Review.** Read the whole diff, then fix it or send it back.
    - Code that matters gets a review from another model family.
-   - Behaviour that changed gets checks in `tests/run_tests.sh`.
+   - Behaviour that changed gets checks in its section of `tests/sections/`.
    - Bump the version in `plugin.json` and add an entry to `CHANGELOG.md`.
 6. **Test.** Run the self-test in WSL (or on Linux or macOS) and `claude plugin validate`, as above. The self-test
    needs a fair amount of free memory: on a busy machine, wait for it rather than run it beside heavy work.

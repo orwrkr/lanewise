@@ -445,6 +445,9 @@ You can install both: maestro commands also run inside Claude Code, and this ski
 
 `bash tests/run_tests.sh` runs regression checks against a temporary repository with fake `codex` and `claude`: limits, detection of exhausted quotas and balance, timeouts and process-tree termination, DeepSeek and Claude executor isolation (environment, permissions, role, CLAUDE.md), the DeepSeek lead (`orch launch`: endpoint, token, models, no Anthropic credentials, `--no-claude`), profiles (keys and accounts, project and directory bindings, `off`, models, effort, write ban, separate per-key balance blocks), project rules for each executor (CLAUDE.md with imports, AGENTS.md), the usage log (transcript parsing, Codex/DeepSeek tokens, SessionEnd snapshot), the manual task pool (offer → take → result, the Antigravity rule, the pool clock and its checks, one-at-a-time reclaims), the Claude budget mode (status line snapshot, surplus / tight projection, reserves, the recent pace of all sessions, active consumers and the shared surplus, profile thresholds), the ban on nested delegation, worktrees, reminders, hooks, guide and footprint. The tests run both in WSL/Linux and in Git Bash on Windows — run them in both.
 
+The suite is a preamble (`tests/lib.sh`) and sections (`tests/sections/NN-<slug>.sh`). `bash tests/run_tests.sh
+--list` names them, and `bash tests/run_tests.sh <section>` runs one alone, together with what it needs.
+
 The suite aborts on setup failures and supports `ORCH_TEST_TIMING=1` for per-check timings. Regression checks
 include real parallel offers, take/reclaim races and status-line updates; shared-state I/O failures and rollback;
 launch profile precedence; every worker handoff guard; measurement freshness and weekly TIGHT without five-hour

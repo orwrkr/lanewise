@@ -25,8 +25,9 @@ Detailed sections of this skill: `orch guide <section>` (`manual`, `quota`, `pro
    reserve: Claude goes first (except the task types an API key with budget has `prefer for` — the line names them),
    also ahead of Codex on a tie, within your session's share; `TIGHT` — treat Claude as
    `low`. A `Codex subscription: … TIGHT` line (or its `💡` event) — treat Codex as `low`. `orch guide budget`.
-2. Registry — once per session (and whenever the operator changed it): `orch registry show`. It holds slots
-   (provider × model × effort), cost, `max_difficulty`, `good_for`, operator parameters, routes (`routing`).
+2. Registry — once per session (and whenever the operator changed it): `orch registry show` (brief: slots —
+   provider × model × effort, cost, `max_difficulty`, `good_for` — operator parameters, routes). Before first using a
+   provider in a session, read its notes: `orch registry show <provider>`.
 3. A slot is unavailable if `orch status` shows a restriction on its key or on its provider's key
    (`codex/gpt-6.1-sol` is also blocked by a `codex` entry; `deepseek@work` blocks only the `work` profile).
    `low` = available but conserve: use it only if no other suitable slot exists.

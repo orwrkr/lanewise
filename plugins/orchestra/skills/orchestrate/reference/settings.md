@@ -112,8 +112,11 @@ rule in `SKILL.md`, with `prefer for` as the per-profile way to rank a provider 
 
 ## The registry — `orch registry show`
 
-The built-in `providers.yaml` plus your personal copy. What is in effect for this project: `orch registry show`
-(the file) / `orch registry path` (its path). Precedence: `<project>/.orchestra/providers.yaml`, then
+The built-in `providers.yaml` plus your personal copy. What is in effect for this project, `orch registry show`:
+the brief view (settings, slots with `good_for`, routes; no notes), `orch registry show <provider>` (that provider in
+full: its notes, slots and the routes that name them), `orch registry show --full` (the file itself; `--json` — the
+parsed registry). `orch registry path` prints the file's path. A copy that cannot be parsed is shown as is, after a
+line saying so. Precedence: `<project>/.orchestra/providers.yaml`, then
 `~/.orchestra/providers.yaml`, then the built-in one. Make a copy to edit: `orch registry init` (personal) or
 `--project` (this project). A copy overrides the whole built-in registry, so when the built-in one has changed since
 the copy was made, SessionStart and `orch doctor` say so; `orch registry diff` shows what the copy changes and

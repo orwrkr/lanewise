@@ -7,6 +7,6 @@
   (the standard `claude plugin uninstall` + `marketplace remove`).
 - Shared rules live in `AGENTS.md` (both Codex and Antigravity read it): edit them there, and put here only what
   concerns Claude Code alone.
-- The plugin's weight in context: `claude --plugin-dir ./plugins/orchestra plugin details orchestra`. The core of the
-  `orchestrate` skill is ≈3.9k tokens per invocation, the whole plugin ≈1.1k always-on; put new and rarely needed
-  material in `skills/orchestrate/reference/`, not in SKILL.md.
+- The plugin's weight in context: `claude --plugin-dir ./plugins/orchestra plugin details orchestra`. What it puts into
+  a session is held to a budget by `plugins/orchestra/tests/check_sizes.py` (it runs in the self-test): put new and
+  rarely needed material in `skills/orchestrate/reference/`, not in SKILL.md.

@@ -308,6 +308,39 @@ git -C "$GT" tag -d t1 >/dev/null
 gcommit --allow-empty -m "fine again"
 gpush "$gbranch" && ok "pre-push lets the next clean commit through" || bad "pre-push stopped a clean commit"
 
+echo "── size budget (what the plugin puts into a session)"
+SIZES="$(native "$PLUGIN/tests/check_sizes.py")"
+out=$($PY "$SIZES" --root "$(native "$ROOT_REPO")" 2>&1); rc=$?
+[[ $rc -eq 0 ]] && ok "the repository is within its size budgets" || { bad "a size budget is exceeded"; echo "$out"; }
+SZ="$T/sizes-tree"; mkdir -p "$SZ/plugins/orchestra" || die "cannot create the size-budget tree"
+cp -R "$PLUGIN/agents" "$PLUGIN/skills" "$PLUGIN/commands" "$SZ/plugins/orchestra/" && cp "$ROOT_REPO/AGENTS.md" "$ROOT_REPO/CLAUDE.md" "$SZ/" \
+  || die "cannot copy the budgeted files"
+out=$($PY "$SIZES" --root "$(native "$SZ")" 2>&1); expect_rc 0 $? "a copy of the budgeted files passes"
+contains "$out" "skills/orchestrate/SKILL.md: [0-9]* / [0-9]* tokens" "check_sizes prints a line for every budget"
+$PY -c "print('x' * 40000)" >> "$SZ/plugins/orchestra/skills/orchestrate/SKILL.md"
+out=$($PY "$SIZES" --root "$(native "$SZ")" 2>&1); rc=$?
+expect_rc 1 $rc "a budgeted file padded past its budget fails"
+contains "$out" "skills/orchestrate/SKILL.md: [0-9]* tokens, over its budget of [0-9]*: move rarely needed text to skills/orchestrate/reference/ (orch guide), or raise the budget in tests/check_sizes.py and say why in the commit message" "the over-budget message says what to do"
+cp "$PLUGIN/skills/orchestrate/SKILL.md" "$SZ/plugins/orchestra/skills/orchestrate/SKILL.md"
+$PY -c "print('x' * 4000)" >> "$SZ/plugins/orchestra/agents/orch-haiku-low.md"
+out=$($PY "$SIZES" --root "$(native "$SZ")" 2>&1); rc=$?
+expect_rc 1 $rc "an executor agent padded past the per-file budget fails"
+contains "$out" "agents/orch-haiku-low.md: [0-9]* tokens, over its budget" "the message names the agent file"
+cp "$PLUGIN/agents/orch-haiku-low.md" "$SZ/plugins/orchestra/agents/orch-haiku-low.md"
+printf -- '---\nname: x\ndescription: %s\n---\n' "$($PY -c "print('y' * 5000)")" > "$SZ/plugins/orchestra/commands/run.md"
+out=$($PY "$SIZES" --root "$(native "$SZ")" 2>&1); rc=$?
+expect_rc 1 $rc "descriptions past the always-on budget fail"
+contains "$out" "always-on descriptions: [0-9]* tokens, over its budget" "the message names the always-on budget"
+out=$($PY "$SIZES" --root "$(native "$T/no-such-tree")" 2>&1); expect_rc 2 $? "check_sizes on a tree with no files is a usage error"
+out=$($PY "$SIZES" --output nosuch </dev/null 2>&1); expect_rc 2 $? "check_sizes with an unknown output name is a usage error"
+out=$($PY -c "print('x' * 40000)" | $PY "$SIZES" --output registry-brief 2>&1); rc=$?
+expect_rc 1 $rc "an output past its budget fails"
+contains "$out" "registry-brief: [0-9]* tokens, over its budget of [0-9]*" "the over-budget message names the output"
+out=$(printf 'short' | $PY "$SIZES" --output session-start 2>&1); expect_rc 0 $? "a short output passes"
+out=$($ORCH registry show | $PY "$SIZES" --output registry-brief 2>&1); rc=$?
+[[ $rc -eq 0 ]] && ok "orch registry show (built-in registry) is within its budget: $out" || { bad "orch registry show is over its budget"; echo "$out"; }
+# orch hook session-start is measured near the end, where the suite's home holds profiles, limits and manual tasks
+
 echo "── read commands leave an unused folder alone"
 FRESH="$T/fresh-git"; mkdir -p "$FRESH" || die "cannot create a fresh repository folder"
 git init -q "$FRESH" || die "cannot init a fresh repository"
@@ -5455,12 +5488,20 @@ while IFS= read -r line; do
 done <<<"$review"
 [[ $review_rc -eq 0 ]] || bad "review regression process failed (rc=$review_rc)"
 
+echo "── size budget: session start in a used home"
+# what every session starts with, measured on a copy of the suite's home as the tests above left it (profiles, limits,
+# spend, manual tasks): a copy, so this hook run registers no session in the suite's own home
+rm -rf "$T/sizes-home" && cp -R "$ORCH_HOME" "$T/sizes-home" || die "cannot copy the suite's home"
+out=$(echo '{}' | ORCH_HOME="$(native "$T/sizes-home")" $ORCH hook session-start | $PY "$SIZES" --output session-start 2>&1); rc=$?
+[[ $rc -eq 0 ]] && ok "orch hook session-start (a used home) is within its budget: $out" || { bad "orch hook session-start is over its budget"; echo "$out"; }
+
 echo "── registry & doctor"
 out=$($ORCH registry path); contains "$out" "registry/providers.yaml" "default registry path"
 out=$($ORCH registry diff); contains "$out" "No personal or project copy: the built-in registry is in effect." "registry diff with no copy names the built-in one"
-$ORCH registry show > "$T/registry-shown.yaml" || bad "registry show failed"
-reg_checks=$($PY - "$(native "$T/registry-shown.yaml")" <<'EOF'
-import re, sys
+$ORCH registry show --full > "$T/registry-shown.yaml" || bad "registry show --full failed"
+$ORCH registry show --json > "$T/registry-shown.json" || bad "registry show --json failed"
+reg_checks=$($PY - "$(native "$T/registry-shown.yaml")" "$(native "$T/registry-shown.json")" <<'EOF'
+import json, re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
 routes = []                      # 2-space keys whose value is an inline list (the routing block)
 for line in text.splitlines():
@@ -5475,11 +5516,104 @@ def has(sid, pattern):
     return re.search(pattern, slots.get(sid, ""), re.M) is not None
 print("FLASH-MAX-OK" if has("deepseek/flash-max", r"^\s+effort: max$") else "FLASH-MAX-BAD")
 print("FLASH-HIGH-D4-OK" if has("deepseek/flash-high", r"^\s+max_difficulty: 4$") else "FLASH-HIGH-D4-BAD")
+# the same three facts, read from --json
+data = json.load(open(sys.argv[2], encoding="utf-8"))
+jroutes = data["routing"]
+jpro = [s for slots in jroutes.values() for s in slots if s.startswith("deepseek/pro-")]
+print("PRO-ROUTE-JSON-OK" if jroutes and not jpro else "PRO-ROUTE-JSON-BAD %r" % jpro)
+jslots = {s["id"]: s for p in data["providers"].values() for s in p["slots"]}
+print("FLASH-MAX-JSON-OK" if jslots["deepseek/flash-max"]["effort"] == "max" else "FLASH-MAX-JSON-BAD")
+print("FLASH-HIGH-D4-JSON-OK" if jslots["deepseek/flash-high"]["max_difficulty"] == 4 else "FLASH-HIGH-D4-JSON-BAD")
 EOF
 )
-for k in PRO-ROUTE-OK FLASH-MAX-OK FLASH-HIGH-D4-OK; do
+for k in PRO-ROUTE-OK FLASH-MAX-OK FLASH-HIGH-D4-OK PRO-ROUTE-JSON-OK FLASH-MAX-JSON-OK FLASH-HIGH-D4-JSON-OK; do
   contains "$reg_checks" "$k" "registry: $k"
 done
+cmp -s "$T/registry-shown.yaml" "$PLUGIN/registry/providers.yaml" && ok "registry show --full is the file, byte for byte" || bad "registry show --full differs from the file"
+json_checks=$($PY - "$(native "$T/registry-shown.json")" <<'EOF'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+print("JSON-FIRST-SLOT-OK" if data["providers"]["claude"]["slots"][0]["id"] == "claude/haiku-low" else "JSON-FIRST-SLOT-BAD")
+good = {s["id"]: s["good_for"] for s in data["providers"]["deepseek"]["slots"]}["deepseek/flash-high"]   # spans lines in the file
+print("JSON-GOOD-FOR-OK" if isinstance(good, list) and len(good) == 6 and good[-1] == "log analysis" else "JSON-GOOD-FOR-BAD %r" % good)
+routes_plain = all(isinstance(v, list) for v in data["routing"].values())
+print("JSON-ROUTES-OK" if routes_plain and data["routing_comments"].get("review_of_claude") == "cross-review" else "JSON-ROUTES-BAD")
+print("JSON-POLICY-OK" if data["policy"]["never_auto"][0] == "codex/sol-ultra" and data["operator"]["max_offers"] == 5 else "JSON-POLICY-BAD")
+EOF
+)
+for k in JSON-FIRST-SLOT-OK JSON-GOOD-FOR-OK JSON-ROUTES-OK JSON-POLICY-OK; do
+  contains "$json_checks" "$k" "registry --json: $k"
+done
+# the brief view: what the orchestrator reads once per session
+$ORCH registry show > "$T/registry-brief.txt"; rc=$?
+expect_rc 0 $rc "registry show (brief)"
+BRIEF_MAX=7000     # bytes (CRLF on Windows included): the built-in good_for texts, ids, models, calls and routes alone come to about 4.5 KB
+brief_checks=$($PY - "$(native "$T/registry-brief.txt")" "$(native "$T/registry-shown.json")" "$BRIEF_MAX" <<'EOF'
+import json, sys
+brief = open(sys.argv[1], encoding="utf-8").read()
+data = json.load(open(sys.argv[2], encoding="utf-8"))
+size, limit = len(brief.encode("utf-8")), int(sys.argv[3])
+print("BRIEF-SIZE-OK" if size <= limit else "BRIEF-SIZE-BAD %d > %d" % (size, limit))
+ids = [s["id"] for p in data["providers"].values() for s in p["slots"]]
+missing = [i for i in ids if i not in brief]
+print("BRIEF-SLOTS-OK" if len(ids) > 20 and not missing else "BRIEF-SLOTS-BAD %r" % missing)
+missing = [r for r in data["routing"] if (r + ":") not in brief]
+print("BRIEF-ROUTES-OK" if data["routing"] and not missing else "BRIEF-ROUTES-BAD %r" % missing)
+never = data["policy"]["never_auto"]
+print("BRIEF-NEVER-AUTO-OK" if never and "never_auto: " + ", ".join(never) in brief else "BRIEF-NEVER-AUTO-BAD")
+print("BRIEF-FOOTER-OK" if brief.rstrip().endswith("orch registry show --full") and "orch registry show <provider>" in brief else "BRIEF-FOOTER-BAD")
+phrase = "Flash is the default"
+assert phrase in data["providers"]["deepseek"]["notes"]
+print("BRIEF-NO-NOTES-OK" if phrase not in brief and "DEEPSEEK_API_KEY" not in brief else "BRIEF-NO-NOTES-BAD")
+print("BRIEF-COMMENT-OK" if "# cross-review" in brief and "# both, independently" in brief else "BRIEF-COMMENT-BAD")
+print("BRIEF-AGENT-OK" if "agent=orchestra:orch-opus-high" in brief else "BRIEF-AGENT-BAD")
+EOF
+)
+for k in BRIEF-SIZE-OK BRIEF-SLOTS-OK BRIEF-ROUTES-OK BRIEF-NEVER-AUTO-OK BRIEF-FOOTER-OK BRIEF-NO-NOTES-OK BRIEF-COMMENT-OK BRIEF-AGENT-OK; do
+  contains "$brief_checks" "$k" "registry brief: $k"
+done
+contains "$(head -n 1 "$T/registry-brief.txt")" "Registry in effect: built-in registry (.*registry/providers.yaml)" "registry brief: the first line names the file in effect"
+out=$($ORCH registry show deepseek); rc=$?
+expect_rc 0 $rc "registry show <provider>"
+flat=$(printf '%s' "$out" | tr -s ' \r\n' '   ')      # the paragraph is wrapped: compare it as one line
+contains "$flat" "Flash is the default: it is newer, ahead on coding and agentic work, and several times cheaper" "registry show deepseek: the notes, as one paragraph"
+contains "$out" "deepseek/pro-max" "registry show deepseek: its slots"
+contains "$out" "implement_d3: .*deepseek/flash-high" "registry show deepseek: a route naming its slot"
+lacks "$out" "codex/luna-low" "registry show deepseek: no other provider's slots"
+lacks "$out" "explore:" "registry show deepseek: no route that names none of its slots"
+out=$($ORCH registry show nosuch 2>&1); rc=$?
+expect_rc 2 $rc "registry show with an unknown provider"
+contains "$out" "claude, codex, deepseek, antigravity" "an unknown provider: the known ones are named"
+out=$($ORCH registry path claude 2>&1); rc=$?
+expect_rc 2 $rc "registry path with a provider is refused"
+out=$($ORCH registry show --full deepseek 2>&1); rc=$?
+expect_rc 2 $rc "registry show --full with a provider is refused"
+# a personal copy: an extra slot field and an extra top-level section are kept and shown, a stale copy is flagged
+$PY - "$(native "$PLUGIN/registry/providers.yaml")" "$(native "$ORCH_HOME/providers.yaml")" <<'EOF'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+old = "      - id: claude/haiku-low\n"
+assert old in text
+text = text.replace(old, old + "        zz_extra: sentinel-field\n") + "\nzz_extra_section:\n  note: x\n"
+open(sys.argv[2], "w", encoding="utf-8", newline="\n").write(text)
+EOF
+out=$($ORCH registry show); rc=$?
+expect_rc 0 $rc "registry show of a personal copy"
+contains "$out" "Registry in effect: personal copy (.*providers.yaml)" "a personal copy: the first line says so"
+contains "$out" "orch registry diff" "a personal copy that lags the built-in registry: the first line says so"
+contains "$out" "zz_extra=sentinel-field" "a personal copy: an unknown slot field is shown as key=value"
+contains "$out" "other sections: zz_extra_section" "a personal copy: an unknown top-level section is named"
+printf 'providers:\n\tclaude: x\n' > "$ORCH_HOME/providers.yaml"
+out=$($ORCH registry show); rc=$?
+expect_rc 0 $rc "registry show of a copy with a tab in its indentation"
+contains "$out" "could not read .*providers.yaml as a registry (line 2: a tab in the indentation): showing the file as is" "a copy that cannot be parsed: the fallback line"
+contains "$out" "claude: x" "a copy that cannot be parsed: the file follows"
+printf '# only\n# comments\n' > "$ORCH_HOME/providers.yaml"
+out=$($ORCH registry show); rc=$?
+expect_rc 0 $rc "registry show of a file of only comments"
+contains "$out" "as a registry (no providers): showing the file as is" "a file of only comments: the fallback line"
+contains "$out" "# only" "a file of only comments: the file follows"
+rm -f "$ORCH_HOME/providers.yaml"
 $ORCH registry init >/dev/null; out=$($ORCH registry path); contains "$out" "$ORCH_HOME/providers.yaml" "user registry overrides default"
 marker=$(head -n 1 "$ORCH_HOME/providers.yaml")
 marker_re='^# orchestra-registry-base: [0-9]+\.[0-9]+\.[0-9]+ sha256:[0-9a-f]{16}$'

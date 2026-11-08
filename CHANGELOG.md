@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.33.0
+
+- **`orch registry show` is brief by default.** It used to print the whole registry file, comments, per-model notes
+  and folded `notes:` paragraphs included, and every orchestrating session carried that text (about 4.4k tokens for
+  the built-in file). The default view now holds what picking a slot needs: the file in effect (built-in, personal or
+  project copy, with the stale-copy warning when there is one), the `policy` settings and `never_auto`, the
+  `operator` numbers, the difficulty scale, each provider's header (`lane`, `billing`, `quota_key`, `efforts`, the
+  call) with one aligned line per slot (id, model, effort, cost, `max_difficulty`, the full `good_for`, `agent`), and
+  the routes with their comments (`# cross-review`); unknown fields are shown as `key=value` and other top-level
+  sections by name. About 1.6k tokens for the built-in registry. `orch registry show <provider>` prints one provider
+  in full (its `notes` as one wrapped paragraph, its slots, the routes that name them; an unknown provider exits 2 and
+  names the known ones), `--full` the file byte for byte and `--json` the parsed registry (the route comments under
+  `routing_comments`). A small parser for the YAML subset the registry uses (nested maps, lists of maps, flow lists
+  over several lines, folded scalars, comments) reads personal and project copies made from older versions: unknown
+  keys are kept, missing optional fields are fine; a copy that cannot be parsed is shown as is after one line saying
+  why. `registry_providers()`, which the status line uses, is unchanged. The skill's step 2 tells the orchestrator to
+  read a provider's notes before first using it.
+- **A size budget for what the plugin puts into a session.** `tests/check_sizes.py` (the self-test runs it, so CI
+  does) estimates tokens as characters / 4 and holds to a budget: the frontmatter descriptions of every agent, skill
+  and command together, `skills/orchestrate/SKILL.md`, each `agents/orch-*.md`, `AGENTS.md` plus `CLAUDE.md`, and the
+  output of `orch registry show` and of `orch hook session-start` in the self-test's used home. A budget at 85% prints a warning; one over exits 1
+  and says to move rarely needed text to `skills/orchestrate/reference/` or to raise the budget with the reason in
+  the commit message. `CLAUDE.md` points to it instead of quoting figures that nothing checked.
+
 ## 0.32.0
 
 - **`orch prices`: a way to refresh the prices behind the spend estimate.** `orch spend` warned that a provider's

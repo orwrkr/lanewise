@@ -29,7 +29,9 @@ blocked, top up, then `orch spend reset <scope> [--limit N]` (the reset can also
   Each scope has one counter: a global counter (projects without their own limit) or a per-project counter (a
   project with its own limit — spent independently).
 - Spend comes from the usage ledger: `orch run` records that bill to the key, plus the lead session's own tokens
-  when the orchestrator itself runs on that key (`orch launch`, or Claude via an apiKeyHelper profile).
+  when the orchestrator itself runs on that key (`orch launch`, or Claude via an apiKeyHelper profile). A lead
+  session is recorded at SessionEnd, split at counter resets and month starts, each message priced at its own time:
+  what was spent before a reset stays out of the new counter, and a session across the 1st counts per month.
 - The cost is an **estimate**: tokens × the prices in `plugins/orchestra/registry/prices.json` (a personal copy at
   `~/.orchestra/prices.json` overrides it). Cache writes fold into the input price; DeepSeek uses its peak rates,
   halved off-peak (see below). The cost is frozen into the ledger entry as `cost_usd` at run time, with the price

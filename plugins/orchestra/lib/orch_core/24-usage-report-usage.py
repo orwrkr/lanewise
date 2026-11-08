@@ -79,7 +79,8 @@ def parse_transcript(path):
                         continue
                     owner = "agent:" + ev["agentId"] if ev.get("isSidechain") and ev.get("agentId") else who
                     msgs[msg.get("id") or ev.get("requestId") or ev.get("uuid")] = (owner, model, ev.get("effort"),
-                                                                                     msg.get("usage") or {})
+                                                                                     msg.get("usage") or {},
+                                                                                     ev.get("timestamp"))
                     if who == "main" and ev.get("timestamp"):
                         info["start"] = info["start"] or ev["timestamp"]
                         info["end"] = ev["timestamp"]
@@ -101,7 +102,7 @@ def parse_transcript(path):
             agents[f.stem[len("agent-"):]] = meta
             scan(f, "agent:" + f.stem[len("agent-"):])
     rows = {}
-    for owner, model, effort, u in msgs.values():
+    for owner, model, effort, u, _ts in msgs.values():
         r = rows.setdefault((owner, model), {"model": model, "efforts": [], "calls": 0, "input_tokens": 0,
                                              "cached_input_tokens": 0, "output_tokens": 0})
         r["calls"] += 1
@@ -119,7 +120,63 @@ def parse_transcript(path):
         out.append(r)
     out.sort(key=lambda r: (r["who"] != "main", -(r["input_tokens"] + r["cached_input_tokens"] + r["output_tokens"])))
     info["rows"] = out
+    # for computing only, never written to the ledger: each message's own time, model and tokens (main thread and
+    # subagents alike), so a lead session's spend can be priced and split by time
+    info["messages"] = [(ts if isinstance(ts, str) and ts else None, model, claude_tokens(u))
+                        for _owner, model, _effort, u, ts in msgs.values()]
     return info
+
+
+def message_time(ts):
+    """A transcript timestamp (ISO text, usually ending in Z) or a datetime → an aware datetime, else None."""
+    if isinstance(ts, dt.datetime):
+        return ts if ts.tzinfo else ts.astimezone()
+    if not isinstance(ts, str) or not ts:
+        return None
+    return parse_iso(ts.replace("Z", "+00:00"))
+
+
+def spend_cuts(lead, first, last):
+    """Sorted datetimes inside a session (after `first`, up to `last`) where a counter of the lead's scope may start:
+    each 1st of a month (local midnight, as month_start computes it) and every manual baseline stored for the lead's
+    scope label under any counter key. It only reads; a broken limits file leaves the month starts."""
+    cuts = set()
+    cur = month_start(first)
+    while cur <= last:
+        cuts.add(cur)
+        cur = month_start(cur.replace(day=28) + dt.timedelta(days=4))     # any day of the next month
+    try:
+        config, err = load_spend_limits()
+        sections = [] if err else list((config.get("baselines") or {}).values())
+    except Exception:
+        sections = []
+    for sec in sections:
+        t = parse_iso(str(sec[lead])) if isinstance(sec, dict) and lead in sec else None
+        if t is not None:
+            cuts.add(t)
+    return sorted(c for c in cuts if first < c <= last)
+
+
+def session_spend_parts(lead, messages, end=None):
+    """A lead session's spend as [{"until": ISO, "spend_usd": USD}, …] in time order: each message priced at its own
+    time, grouped into the intervals between the counter cuts (`spend_cuts`). A message exactly at a cut belongs to
+    the later interval, as current_spend counts a record at the counter start. A message without a time is priced and
+    placed at the session's end (the latest message time, else `end`, else now). Empty intervals are left out."""
+    import bisect
+    provider = str(lead or "").split("@")[0].lower()
+    timed = [(message_time(ts), model, tokens) for ts, model, tokens in messages]
+    known = [t for t, _, _ in timed if t is not None]
+    stop = max(known) if known else (end or now())
+    timed = [(t if t is not None else stop, model, tokens) for t, model, tokens in timed]
+    if not timed:
+        return []
+    cuts = spend_cuts(lead, min(t for t, _, _ in timed), max(t for t, _, _ in timed))
+    groups = {}
+    for t, model, tokens in timed:
+        g = groups.setdefault(bisect.bisect_right(cuts, t), {"until": t, "spend_usd": 0.0})
+        g["until"] = max(g["until"], t)
+        g["spend_usd"] += usage_cost(tokens, provider, model, when=t)
+    return [{"until": iso_precise(g["until"]), "spend_usd": g["spend_usd"]} for _, g in sorted(groups.items())]
 
 
 def log_session(data):
@@ -132,11 +189,16 @@ def log_session(data):
         return
     proj = project_root(project_dir())
     lead = os.environ.get("ORCH_LEAD")
-    # cost_usd is Claude Code's own totalCostUSD; spend_usd is our token×price estimate for the lead's API billing
-    spend_usd = session_cost({"lead": lead, "rows": info["rows"]}) if lead else None
-    ledger_append({"kind": "session", "session": data.get("session_id") or info["session"], "project": canon_path(proj),
-                   "project_path": str(proj), "title": info["title"], "start": info["start"], "end": info["end"],
-                   "cost_usd": info["cost_usd"], "spend_usd": spend_usd, "rows": info["rows"], "lead": lead})
+    # cost_usd is Claude Code's own totalCostUSD; spend_usd is our token×price estimate for the lead's API billing,
+    # the sum of spend_parts: each message priced at its own time, split where a counter may start
+    parts = session_spend_parts(lead, info["messages"]) if lead else None
+    rec = {"kind": "session", "session": data.get("session_id") or info["session"], "project": canon_path(proj),
+           "project_path": str(proj), "title": info["title"], "start": info["start"], "end": info["end"],
+           "cost_usd": info["cost_usd"], "spend_usd": sum(p["spend_usd"] for p in parts) if lead else None,
+           "rows": info["rows"], "lead": lead}
+    if lead:
+        rec["spend_parts"] = parts
+    ledger_append(rec)
 
 
 def sessionless_records(ledger, proj):

@@ -23,8 +23,10 @@ def month_key(t=None):
 
 
 def month_start(t=None):
+    """Local midnight on the 1st of `t`'s month, with the UTC offset of that moment, not of `t`: a DST change in
+    between would otherwise move it by an hour."""
     t = (t or now()).astimezone()
-    return t.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return dt.datetime(t.year, t.month, 1).astimezone()
 
 
 def spend_where(where):
@@ -308,39 +310,70 @@ def _session_cost(rec):
     return session_cost(rec)
 
 
-def record_spend(rec):
-    """(label, project, cost, ts, sid) of a ledger record, or None when it does not count toward spend.
-    `sid` is the session id for session records (None for runs) — snapshots of one session are deduplicated."""
-    if not isinstance(rec, dict):
+def _spend_parts(rec):
+    """[(cost, ts)] of a session record's `spend_parts`, or None when it has none or any part is malformed (the
+    record then counts as one, from its frozen `spend_usd`, as records written before the parts did)."""
+    parts = rec.get("spend_parts")
+    if not isinstance(parts, list) or not parts:
         return None
+    out = []
+    for p in parts:
+        cost = p.get("spend_usd") if isinstance(p, dict) else None
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+            return None
+        try:
+            cost = float(cost)
+        except (OverflowError, ValueError):
+            return None
+        if cost != cost or cost in (float("inf"), float("-inf")):    # NaN or infinity
+            return None
+        ts = parse_iso(str(p.get("until") or "").replace("Z", "+00:00"))
+        if ts is None:
+            return None
+        out.append((cost, ts))
+    return out
+
+
+def record_spend(rec):
+    """[(label, project, cost, ts, sid, snap)] of a ledger record: empty when it does not count toward spend. `sid` is
+    the session id for session records (None for runs) and `snap` marks the snapshot (the session record's own ts):
+    snapshots of one session are deduplicated. A session record with `spend_parts` gives one entry per part, at the
+    part's own time, so a counter reset or a month start inside the session splits it."""
+    if not isinstance(rec, dict):
+        return []
     ts = parse_iso(str(rec.get("ts") or "")) or now()
     if rec.get("kind") == "run":
         if not _api_billed_record(rec):
-            return None
+            return []
         label = str(rec.get("label") or rec.get("provider") or "?")
-        return label, rec.get("project"), _run_cost(rec), ts, None
+        return [(label, rec.get("project"), _run_cost(rec), ts, None, None)]
     if rec.get("kind") == "session":
         lead = str(rec.get("lead") or "")
         if not lead:
-            return None
+            return []
         sid = rec.get("session")
-        return lead, rec.get("project"), _session_cost(rec), ts, str(sid) if sid else None
-    return None
+        sid = str(sid) if sid else None
+        snap = str(rec.get("ts") or "")
+        parts = _spend_parts(rec)
+        if parts is None:
+            return [(lead, rec.get("project"), _session_cost(rec), ts, sid, snap)]
+        return [(lead, rec.get("project"), cost, when, sid, snap) for cost, when in parts]
+    return []
 
 
 def spend_cache_update():
-    """Update the spend cache from the usage ledger. → (records, changed). Records: {label, project, cost, ts, sid}.
-    Restarts on a shrunken ledger (byte offset, like session_tokens); a reset (baseline/month) is applied at read
-    time, so it takes effect at once without re-reading the ledger. Session records are deduplicated by session id:
-    each SessionEnd snapshot is cumulative, so only the last one per session counts. A cache that is up to date takes
-    no lock; a hook or the status line that finds the lock busy uses the cached records as they are."""
+    """Update the spend cache from the usage ledger. → (records, changed). Records: {label, project, cost, ts, sid,
+    snap, n}. Restarts on a shrunken ledger (byte offset, like session_tokens); a reset (baseline/month) is applied at
+    read time, so it takes effect at once without re-reading the ledger. Session records are deduplicated by session
+    id: each SessionEnd snapshot is cumulative, so only the last one per session counts (all its parts). A cache that
+    is up to date takes no lock; a hook or the status line that finds the lock busy uses the cached records as they are."""
     cache = read_json(SPEND_CACHE_FILE, {}, recover_corrupt=True)
     records = cache.get("records") if isinstance(cache, dict) and isinstance(cache.get("records"), list) else []
     try:
         size = USAGE_FILE.stat().st_size
     except OSError:
         size = 0
-    if isinstance(cache, dict) and cache.get("format") == 3 and cache.get("offset") == size:
+    if isinstance(cache, dict) and cache.get("format") == 4 and cache.get("offset") == size:
         return records, False
     try:
         with state_lock(ORCH_HOME / ".state.lock"):
@@ -358,8 +391,8 @@ def _spend_cache_update():
     records = cache.get("records") if isinstance(cache.get("records"), list) else []
     offset = cache.get("offset") if isinstance(cache.get("offset"), int) else 0
     changed = False
-    if cache.get("format") != 3:                          # migrate: v2 summed repeated session snapshots
-        cache = {"format": 3, "offset": 0}
+    if cache.get("format") != 4:                          # migrate: v3 counted a session wholly at its end
+        cache = {"format": 4, "offset": 0}
         records, offset, changed = [], 0, True
     try:
         size = USAGE_FILE.stat().st_size
@@ -382,27 +415,30 @@ def _spend_cache_update():
                 rec = json.loads(line)
             except ValueError:
                 continue
-            r = record_spend(rec)
-            if r is not None:
-                new.append({"label": r[0], "project": r[1], "cost": r[2], "ts": r[3].isoformat(), "sid": r[4]})
+            for n, r in enumerate(record_spend(rec)):     # n: the part's place in its snapshot
+                new.append({"label": r[0], "project": r[1], "cost": r[2], "ts": r[3].isoformat(), "sid": r[4],
+                            "snap": r[5], "n": n})
         if new:
             records = records + new
         if consumed:                                      # persist the offset even when nothing counted
             changed = True
         offset += consumed
     if changed:
-        seen, deduped = {}, []                            # keep only the last snapshot per session
+        # keep only the last snapshot per session: all its records, in ledger order (they arrive together). A new
+        # snapshot starts at a record with another marker or at the first part (n == 0).
+        gens, last = [], {}
         for r in records:
             sid = r.get("sid")
             if sid is None:
-                deduped.append(r)
-            elif sid in seen:
-                deduped[seen[sid]] = r
-            else:
-                seen[sid] = len(deduped)
-                deduped.append(r)
-        records = deduped
-        write_json(SPEND_CACHE_FILE, {"format": 3, "offset": offset, "records": records})
+                gens.append(0)
+                continue
+            gen, snap = last.get(sid, (0, None))
+            if gen == 0 or r.get("n") in (0, None) or r.get("snap") != snap:
+                gen += 1
+            last[sid] = (gen, r.get("snap"))
+            gens.append(gen)
+        records = [r for r, gen in zip(records, gens) if r.get("sid") is None or gen == last[r["sid"]][0]]
+        write_json(SPEND_CACHE_FILE, {"format": 4, "offset": offset, "records": records})
     return records, changed
 
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.33.1
+
+- **A lead session's spend is split at counter resets and month starts.** A session run on an API key (`orch launch
+  deepseek`, or Claude through an apiKeyHelper profile) was recorded once, at SessionEnd, with the whole session priced
+  at that moment. So a counter reset in the middle of a session counted the whole session in the new counter, including
+  what was spent before the reset (even when an earlier snapshot of the session had already counted that part in the
+  old one); a session across a month boundary landed wholly in the new month; and every token was priced at the hour
+  the session ended, although DeepSeek's off-peak hours cost half. Now each message is priced at its own time, and the
+  session record carries `spend_parts`: the spend per interval between the cuts, which are each 1st of a month and every
+  manual baseline stored for the lead's scope. `spend_usd` is their sum. The spend counters give one record per part, at
+  the part's last message time, so a reset or a month start leaves the earlier parts out; of a session's snapshots,
+  all the parts of the last one count. Records without parts (written by older versions) count as one, as before, and
+  `orch run` records are unchanged. The spend cache is rebuilt from the ledger once (format 4). A monthly counter
+  starts at local midnight on the 1st with that day's own UTC offset; after a daylight-saving change in the month it
+  started an hour off.
+
 ## 0.33.0
 
 - **`orch registry show` is brief by default.** It used to print the whole registry file, comments, per-model notes

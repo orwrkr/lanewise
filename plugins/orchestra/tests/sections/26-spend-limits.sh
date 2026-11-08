@@ -291,5 +291,37 @@ out=$(sl_sess s-sl-same); contains "$out" "^Session in/out: DeepSeek 1.5k/988 (e
 unset -f sl_sess
 rm -f "$SDIR/balances.json"
 spend_reset
+
+# a lead session is recorded split at the counter's baseline, and only the part after the baseline counts: the
+# SessionEnd hook of a DeepSeek lead, a fake transcript with one message before and two after the baseline (the
+# personal price above makes 1M input tokens cost $1.00)
+LEADT="$SDIR/lead-transcript.jsonl"
+$PY - "$LEADT" "$SDIR/spend_limits.json" <<'EOF2'
+import json, sys
+def msg(mid, ts):
+    return json.dumps({"type": "assistant", "timestamp": ts, "message": {"id": mid, "model": "deepseek-v4-pro",
+                       "usage": {"input_tokens": 1000000, "cache_creation_input_tokens": 0,
+                                 "cache_read_input_tokens": 0, "output_tokens": 0}}}, separators=(",", ":"))
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    f.write("\n".join([msg("l1", "2026-11-02T11:00:00.000Z"), msg("l2", "2026-11-02T13:00:00.000Z"),
+                       msg("l3", "2026-11-02T14:00:00.000Z")]) + "\n")
+json.dump({"baselines": {"global": {"deepseek": "2026-11-02T12:00:00+00:00"}}}, open(sys.argv[2], "w", encoding="utf-8"))
+EOF2
+echo "{\"session_id\": \"sess-lead-split\", \"transcript_path\": \"$(native "$LEADT")\", \"cwd\": \"$SS\"}" | \
+  ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" ORCH_LEAD=deepseek $ORCH hook session-end >"$T/lead-se.out"; rc=$?
+[[ $rc -eq 0 && ! -s "$T/lead-se.out" ]] && ok "SessionEnd hook of a lead session is silent" || bad "lead session-end: rc=$rc $(cat "$T/lead-se.out")"
+$PY - "$SH/usage.jsonl" <<'EOF2' && ok "the lead session record carries spend_parts split at the baseline" || bad "the lead session record lacks the split parts"
+import json, sys
+recs = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if '"sess-lead-split"' in l]
+assert len(recs) == 1 and recs[0]["lead"] == "deepseek", recs
+parts = recs[0]["spend_parts"]
+assert [p["spend_usd"] for p in parts] == [1.0, 2.0], parts
+assert parts[0]["until"].startswith("2026-11-02T11:00:00") and parts[1]["until"].startswith("2026-11-02T14:00:00"), parts
+assert abs(recs[0]["spend_usd"] - 3.0) < 1e-9, recs[0]
+assert "messages" not in recs[0], recs[0]
+EOF2
+out=$(ORCH_HOME="$SH" ORCH_PROJECT_DIR="$SS" $ORCH spend)
+contains "$out" '\$2\.00 ' "orch spend counts only the part of the lead session after the baseline"
+spend_reset
 unset -f sl_spend
 

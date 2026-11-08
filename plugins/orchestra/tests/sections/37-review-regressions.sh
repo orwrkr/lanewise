@@ -810,7 +810,7 @@ def spend_limits():
         records, _ = m.spend_cache_update()
         assert abs(m.current_spend("codex", proj, records) - 1.0) < 1e-9
         cache = m.read_json(home / "spend_cache.json", {})
-        assert cache["format"] == 3 and cache["offset"] > 0 and len(cache["records"]) == 1
+        assert cache["format"] == 4 and cache["offset"] > 0 and len(cache["records"]) == 1
     with open(ledger, "a", encoding="utf-8") as f:          # appending reads only the new bytes
         f.write(led("codex", 500_000, fixed2) + "\n")
     with mock.patch.object(m, "now", return_value=fixed2):
@@ -872,6 +872,161 @@ def spend_limits():
     with mock.patch.object(m, "now", return_value=t0 + dt.timedelta(hours=3)):
         records, _ = m.spend_cache_update()
         assert abs(m.current_spend("deepseek", proj, records) - 4.0) < 1e-9   # only the last snapshot counts
+
+    # a lead session recorded in parts: a counter reset or a month start inside it leaves the earlier parts out
+    H1 = dt.timedelta(hours=1)
+    def sess_parts(sid, ts, parts, lead="deepseek"):
+        return json.dumps({"kind": "session", "lead": lead, "project": canon, "session": sid, "ts": m.iso_precise(ts),
+                           "spend_usd": sum(c for _, c in parts),
+                           "spend_parts": [{"until": m.iso_precise(u), "spend_usd": c} for u, c in parts]},
+                          separators=(",", ":"))
+    def clean_spend_state():
+        for p in (home / "spend_cache.json", home / "spend_limits.json", home / "spend_events.json", home / "usage.jsonl"):
+            if p.exists(): p.unlink()
+    def set_baseline(scope, when):
+        cfg, _ = m.load_spend_limits()
+        m._baseline_section(cfg, "global")[scope] = m.iso_precise(when)
+        m.save_spend_limits(cfg)
+    ledger = home / "usage.jsonl"
+    # a manual baseline inside the session: only the parts after it count
+    clean_spend_state()
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["deepseek"] = {"limit": 10}
+    m.save_spend_limits(cfg)
+    set_baseline("deepseek", t0)
+    ledger.write_text(sess_parts("p1", t0 + 3 * H1, [(t0 - 2 * H1, 5.0), (t0 - H1, 1.0), (t0 + H1, 2.0),
+                                                     (t0 + 2 * H1, 0.5)]) + "\n", encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=t0 + 4 * H1):
+        records, _ = m.spend_cache_update()
+        assert len(records) == 4 and {r["sid"] for r in records} == {"p1"}, records
+        assert abs(m.current_spend("deepseek", proj, records) - 2.5) < 1e-9       # not the whole 8.5
+    # a part that ends exactly at the baseline belongs to the new counter (current_spend counts ts == start)
+    clean_spend_state()
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["deepseek"] = {"limit": 10}
+    m.save_spend_limits(cfg)
+    set_baseline("deepseek", t0)
+    ledger.write_text(sess_parts("p1b", t0 + H1, [(t0 - H1, 5.0), (t0, 2.0)]) + "\n", encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=t0 + 2 * H1):
+        records, _ = m.spend_cache_update()
+        assert abs(m.current_spend("deepseek", proj, records) - 2.0) < 1e-9
+
+    # a month boundary: a monthly scope counts only the part in the current month
+    clean_spend_state()
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["deepseek"] = {"limit": 10, "reset": "month"}
+    m.save_spend_limits(cfg)
+    first = m.month_start(t0)
+    ledger.write_text(sess_parts("p2", t0, [(first - H1, 4.0), (first + H1, 1.0)]) + "\n", encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=t0):
+        records, _ = m.spend_cache_update()
+        assert m.resolve_reset(cfg, "deepseek", proj) == "month"
+        assert abs(m.current_spend("deepseek", proj, records) - 1.0) < 1e-9       # not 5.0 in November
+
+    # two snapshots: the second is cumulative and split at the reset between them; the first one is dropped, and the
+    # part spent before the reset is not counted in the new counter (nor by the cache built in two steps)
+    clean_spend_state()
+    cfg, _ = m.load_spend_limits()
+    cfg["global"]["deepseek"] = {"limit": 10}
+    m.save_spend_limits(cfg)
+    set_baseline("deepseek", t0)
+    ledger.write_text(sess_parts("p3", t0 + H1, [(t0 + H1 // 2, 3.0)]) + "\n", encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=t0 + H1):
+        records, _ = m.spend_cache_update()
+        assert abs(m.current_spend("deepseek", proj, records) - 3.0) < 1e-9       # counted in the old counter
+    set_baseline("deepseek", t0 + 2 * H1)                                         # orch spend reset
+    with open(ledger, "a", encoding="utf-8") as f:
+        f.write(sess_parts("p3", t0 + 4 * H1, [(t0 + H1 // 2, 3.0), (t0 + 3 * H1, 1.5)]) + "\n")
+    with mock.patch.object(m, "now", return_value=t0 + 5 * H1):
+        records, _ = m.spend_cache_update()
+        assert [(r["sid"], r["cost"]) for r in records] == [("p3", 3.0), ("p3", 1.5)], records   # first snapshot gone
+        assert abs(m.current_spend("deepseek", proj, records) - 1.5) < 1e-9
+    (home / "spend_cache.json").unlink()                                          # rebuilt from the whole ledger
+    with mock.patch.object(m, "now", return_value=t0 + 5 * H1):
+        records, _ = m.spend_cache_update()
+        assert abs(m.current_spend("deepseek", proj, records) - 1.5) < 1e-9
+    # records of other sessions and of runs stay beside a split session; a malformed parts list counts as one record
+    with open(ledger, "a", encoding="utf-8") as f:
+        f.write(sess_parts("p4", t0 + 4 * H1, [(t0 + 3 * H1, 0.25)]) + "\n")
+        f.write(json.dumps({"kind": "session", "lead": "deepseek", "project": canon, "session": "p5", "spend_usd": 0.75,
+                            "ts": m.iso_precise(t0 + 4 * H1),
+                            "spend_parts": [{"until": "garbage", "spend_usd": 9.0}]}) + "\n")
+    with mock.patch.object(m, "now", return_value=t0 + 5 * H1):
+        records, _ = m.spend_cache_update()
+        assert abs(m.current_spend("deepseek", proj, records) - 2.5) < 1e-9       # 1.5 + 0.25 + 0.75
+    # a part with a number too big for a float, or NaN, also counts the record as one, from its spend_usd
+    huge = {"kind": "session", "lead": "deepseek", "project": canon, "session": "p6", "spend_usd": 0.5,
+            "ts": m.iso_precise(t0), "spend_parts": [{"until": m.iso_precise(t0), "spend_usd": 10 ** 400}]}
+    assert [r[2] for r in m.record_spend(huge)] == [0.5]
+    huge["spend_parts"][0]["spend_usd"] = float("nan")
+    assert [r[2] for r in m.record_spend(huge)] == [0.5]
+    # the cache is format 4: an older cache is rebuilt from the ledger
+    cache = m.read_json(home / "spend_cache.json", {})
+    assert cache["format"] == 4
+    (home / "spend_cache.json").write_text(json.dumps({"format": 3, "offset": ledger.stat().st_size,
+                                                        "records": [{"label": "deepseek", "cost": 99.0}]}), encoding="utf-8")
+    with mock.patch.object(m, "now", return_value=t0 + 5 * H1):
+        records, _ = m.spend_cache_update()
+        assert all(r["cost"] != 99.0 for r in records) and len(records) == 4, records
+
+    # session_spend_parts: messages before, at and after a cut; one without a time; off-peak at half price
+    clean_spend_state()
+    ds = {"input_tokens": 1_000_000, "cached_input_tokens": 0, "output_tokens": 0}
+    cut = dt.datetime(2026, 11, 2, 12, 0, tzinfo=dt.timezone.utc)               # Monday off-peak: $0.66 per message
+    set_baseline("deepseek", cut)
+    set_baseline("deepseek@work", cut + H1)                                       # another scope's baseline is not a cut
+    s1 = dt.timedelta(seconds=1)
+    def z(t):
+        return t.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    msgs = [(z(cut + s1), "deepseek-v4-pro", ds), (None, "deepseek-v4-pro", ds), (z(cut), "deepseek-v4-pro", ds),
+            (z(cut - s1), "deepseek-v4-pro", ds)]                                # out of order on purpose
+    with mock.patch.object(m, "now", return_value=cut + 5 * H1):
+        parts = m.session_spend_parts("deepseek", msgs)
+    assert len(parts) == 2, parts
+    assert m.parse_iso(parts[0]["until"]) == cut - s1 and abs(parts[0]["spend_usd"] - 0.66) < 1e-9, parts
+    assert m.parse_iso(parts[1]["until"]) == cut + s1 and abs(parts[1]["spend_usd"] - 3 * 0.66) < 1e-9, parts
+    assert m.session_spend_parts("deepseek", []) == []
+    with mock.patch.object(m, "now", return_value=cut + 5 * H1):                  # no time at all: priced at the end
+        parts = m.session_spend_parts("deepseek", [(None, "deepseek-v4-pro", ds)])
+    assert len(parts) == 1 and m.parse_iso(parts[0]["until"]) == cut + 5 * H1, parts
+    # a cut that falls on no message leaves no empty part; a message is never lost
+    assert [round(p["spend_usd"], 2) for p in m.session_spend_parts("deepseek", [(z(cut + H1), "deepseek-v4-pro", ds)])] == [0.66]
+    # the same message costs half at an off-peak hour
+    peak_t = dt.datetime(2026, 11, 3, 2, 0, tzinfo=dt.timezone.utc)               # Tuesday 02:00 UTC, a peak window
+    peak = m.session_spend_parts("deepseek", [(z(peak_t), "deepseek-v4-pro", ds)])[0]["spend_usd"]
+    off = m.session_spend_parts("deepseek", [(z(peak_t + 10 * H1), "deepseek-v4-pro", ds)])[0]["spend_usd"]
+    assert abs(peak - 1.32) < 1e-9 and abs(off - 0.66) < 1e-9 and abs(peak - 2 * off) < 1e-9, (peak, off)
+    # the month start is a cut as well, and a message exactly on it belongs to the new month
+    ms = m.month_start(dt.datetime(2026, 12, 15, 12, 0, tzinfo=dt.timezone.utc))
+    msgs = [(z(ms - H1), "deepseek-v4-pro", ds), (z(ms), "deepseek-v4-pro", ds), (z(ms + H1), "deepseek-v4-pro", ds)]
+    parts = m.session_spend_parts("deepseek", msgs)
+    one = lambda t: m.usage_cost(ds, "deepseek", "deepseek-v4-pro", when=t)    # each at its own hour's price
+    assert len(parts) == 2 and abs(parts[0]["spend_usd"] - one(ms - H1)) < 1e-9, parts
+    assert abs(parts[1]["spend_usd"] - one(ms) - one(ms + H1)) < 1e-9 and m.parse_iso(parts[1]["until"]) == ms + H1, parts
+    # spend_cuts reads only: a broken limits file leaves the month starts and is not touched
+    assert cut in m.spend_cuts("deepseek", cut - H1, cut + H1) and cut + H1 not in m.spend_cuts("deepseek", cut - H1, cut + 2 * H1)
+    (home / "spend_limits.json").write_text("{broken", encoding="utf-8")
+    assert m.spend_cuts("deepseek", ms - H1, ms + H1) == [ms] and m.spend_cuts("deepseek", cut - H1, cut + H1) == []
+    assert (home / "spend_limits.json").read_text(encoding="utf-8") == "{broken"
+    # month_start is local midnight of the 1st with that day's own offset, also after a DST change, so a monthly
+    # counter starts exactly at the cut (a POSIX TZ rule, so no zone database is needed; time.tzset is POSIX only)
+    import time
+    if hasattr(time, "tzset"):
+        old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "EST5EDT,M3.2.0,M11.1.0"
+        time.tzset()
+        try:
+            utc = dt.timezone.utc
+            assert m.month_start(dt.datetime(2026, 3, 20, 12, tzinfo=utc)) == dt.datetime(2026, 3, 1, 5, tzinfo=utc)
+            assert m.month_start(dt.datetime(2026, 11, 20, 12, tzinfo=utc)) == dt.datetime(2026, 11, 1, 4, tzinfo=utc)
+            dst_cuts = m.spend_cuts("nobody", dt.datetime(2026, 2, 28, tzinfo=utc), dt.datetime(2026, 3, 2, tzinfo=utc))
+            assert dst_cuts == [dt.datetime(2026, 3, 1, 5, tzinfo=utc)], dst_cuts
+        finally:
+            if old_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old_tz
+            time.tzset()
 
     # the cache persists its byte offset even when the new bytes contain no API-billed record
     for p in (home / "spend_cache.json", home / "spend_limits.json", home / "spend_events.json", home / "usage.jsonl"):

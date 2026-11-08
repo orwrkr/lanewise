@@ -26,9 +26,6 @@ quietly crowd out the product, and this rule keeps it in view.
 
 ## Small items
 
-- **Spend at a window or month boundary.** *product* A session's spend is recorded at SessionEnd. So:
-  - a limit reset in the middle of a session counts the whole session again in the new window;
-  - a session across a month boundary lands in the new month.
 - **`claude --resume`.** *product* Check whether a resumed session gets a new session id with the full history. That
   would count its tokens twice.
 - **Guides against the parser.** *process* A self-test check that every `orch` command and option named in

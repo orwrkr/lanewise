@@ -30,9 +30,11 @@ be in the user's language; whatever goes into the repository is English.
   `deepseek` — headless Claude Code on the DeepSeek API, also the `orch launch deepseek` lead; `claude` — headless
   Claude Code on the user's own login; `_claude_headless.py` — shared by the last two; contract template)
 - `plugins/orchestra/bin/orch.cmd` — `orch` launcher for PowerShell/cmd on Windows
-- `plugins/orchestra/tests/run_tests.sh` — self-test (fake codex and claude, temporary git repository)
+- `plugins/orchestra/tests/run_tests.sh` — self-test (fake codex and claude, temporary git repository), which also
+  runs `check_portable.py` and `check_sizes.py`
 - `install.sh` / `uninstall.sh` — plugin install and uninstall (the standard way, via `claude plugin`)
 - `.github/workflows/tests.yml` — CI: the self-test on Ubuntu and Windows, Python 3.8 compatibility
+- `ROADMAP.md` — open work, marked product or process; `CONTRIBUTING.md` — how a change ships
 
 ## Before committing
 
@@ -91,3 +93,7 @@ Changed `orch` behaviour — add a check to `run_tests.sh`. Changed the registry
 - A version that reaches `main` gets a signed tag `vX.Y.Z` on its last commit, at the merge, once CI is green on its
   pull request (`.github/workflows/tests.yml`: the self-test on Ubuntu and Windows, vermin). A tag never moves: a fix
   that CI on `main` still calls for is a new patch version with its own tag, because installs are cached by version.
+- Product before process: at most one process item of `ROADMAP.md` is in progress, and a new one starts only with the
+  maintainer's go, its expected benefit and a cost limit.
+- Commit finished work as new commits on top; amend or rewrite existing ones only for a concrete reason (a secret, a
+  wrong author). An agent asks the maintainer before a push, a merge or deleting a branch.

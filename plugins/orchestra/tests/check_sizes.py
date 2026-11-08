@@ -23,7 +23,7 @@ BUDGETS = {
     "always-on descriptions": 900,          # measured 722 tokens
     "skills/orchestrate/SKILL.md": 3700,    # measured 3076 tokens
     "agents/orch-*.md": 300,                # one budget for each file; the largest measured 252 tokens
-    "AGENTS.md + CLAUDE.md": 2600,          # measured 2195 tokens
+    "AGENTS.md + CLAUDE.md": 2800,          # measured 2329 tokens (raised from 2600 when the process rules moved here)
 }
 # Output that `orch` prints into a session; the self-test pipes it in with `--output NAME`.
 OUTPUT_BUDGETS = {

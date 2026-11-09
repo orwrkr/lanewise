@@ -6,8 +6,12 @@
     "name": "Roman Obukhov",
     "url": "https://github.com/orwrkr"
   },
-  "homepage": "https://github.com/orwrkr/partitura",
+  "homepage": "https://orwrkr.github.io/partitura/",
   "repository": "https://github.com/orwrkr/partitura",
+  "documentationUrl": "https://github.com/orwrkr/partitura/blob/main/plugins/partitura/README.md",
+  "supportUrl": "https://github.com/orwrkr/partitura/issues",
+  "privacyPolicyUrl": "https://github.com/orwrkr/partitura/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/orwrkr/partitura/blob/main/TERMS.md",
   "keywords": [
     "orchestration",
     "codex",

@@ -82,6 +82,7 @@ All eight commands, including `/partitura:quota`, `/partitura:done` and `/partit
   [reference sections](plugins/partitura/skills/orchestrate/reference/)
 - [Model registry](plugins/partitura/registry/providers.yaml)
 - [Contributing](CONTRIBUTING.md) · [Development rules](AGENTS.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+- [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md)
 
 **Antigravity and other manual agents are never automated** — no `agy`, computer use, text pasting or OAuth (that
 violates Google's ToS). Partitura only writes task files for them and reads their results.

@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestra — a multi-model orchestrator for Claude Code</title>
+<meta name="description" content="A Claude Code plugin that routes subtasks to Claude subagents, Codex CLI, DeepSeek and manual agents by difficulty, limits and spend.">
+<meta property="og:title" content="Orchestra — a multi-model orchestrator for Claude Code">
+<meta property="og:description" content="A Claude Code plugin that routes subtasks to Claude subagents, Codex CLI, DeepSeek and manual agents by difficulty, limits and spend.">
+<meta property="og:url" content="https://orwrkr.github.io/orchestra/">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://raw.githubusercontent.com/orwrkr/orchestra/main/plugins/orchestra/.claude-plugin/icon.png">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Crect%20width='100'%20height='100'%20fill='%231C1E33'/%3E%3Cpath%20d='M62%2040%20L50%2022.8%20M62%2040%20L70.9%2021%20M62%2040%20L82.9%2038.2%20M62%2040%20L74%2057.2'%20fill='none'%20stroke='%23F5F1E8'%20stroke-width='2'%20stroke-opacity='0.45'%20stroke-linecap='round'/%3E%3Cline%20x1='25'%20y1='77'%20x2='62'%20y2='40'%20stroke='%23F5F1E8'%20stroke-width='5.5'%20stroke-linecap='round'/%3E%3Ccircle%20cx='23'%20cy='79'%20r='6.5'%20fill='%23F5F1E8'/%3E%3Ccircle%20cx='50'%20cy='22.8'%20r='6.5'%20fill='%23A79BFF'/%3E%3Ccircle%20cx='70.9'%20cy='21'%20r='6.5'%20fill='%23F4B23E'/%3E%3Ccircle%20cx='82.9'%20cy='38.2'%20r='6.5'%20fill='%232EC4B6'/%3E%3Ccircle%20cx='74'%20cy='57.2'%20r='6.5'%20fill='%23EE6C4D'/%3E%3C/svg%3E">
+<style>
+:root{
+  color-scheme: light dark;
+  --ink:#1C1E33;
+  --cream:#F5F1E8;
+  --bg:#FAFAF7;
+  --surface:#FFFFFF;
+  --surface-2:#F1F0E9;
+  --text:#1C1E33;
+  --muted:#4B4D63;
+  --border:#E2E0D5;
+  --link:#3A3A7A;
+  --link-hover:#1C1E33;
+  --hero-bg:#1C1E33;
+  --hero-text:#F5F1E8;
+  --hero-muted:#C9C5BC;
+  --hero-border:#3A3C55;
+  --code-bg:#0F1024;
+  --code-text:#F5F1E8;
+  --code-border:#2C2F4A;
+  --focus:#5B4BD6;
+  --lilac:#A79BFF;
+  --amber:#F4B23E;
+  --teal:#2EC4B6;
+  --coral:#EE6C4D;
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#14152A;
+    --surface:#1C1E33;
+    --surface-2:#191B31;
+    --text:#F5F1E8;
+    --muted:#C2C0D4;
+    --border:#2E3150;
+    --link:#C4BCFF;
+    --link-hover:#F5F1E8;
+    --code-bg:#0B0C1C;
+    --code-border:#2E3150;
+    --focus:#F4B23E;
+  }
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:16px;
+  line-height:1.6;
+  overflow-wrap:break-word;
+}
+h1,h2,h3{margin:0;line-height:1.25}
+p{margin:0}
+ul{margin:0;padding:0;list-style:none}
+a{color:var(--link);text-decoration:underline;text-underline-offset:.15em}
+a:hover{color:var(--link-hover)}
+code{
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  font-size:.9375em;
+}
+:not(pre) > code{
+  background:var(--surface-2);
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:1px 4px;
+  color:var(--text);
+  font-size:.9em;
+  white-space:nowrap;
+}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.wrap{width:100%;max-width:1080px;margin:0 auto;padding-left:24px;padding-right:24px}
+.skip{
+  position:absolute;
+  left:16px;
+  top:-96px;
+  z-index:20;
+  background:var(--surface);
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:16px 24px;
+  font-weight:600;
+  text-decoration:none;
+}
+.skip:focus{top:16px}
+
+/* Header */
+.site-header{background:var(--bg);border-bottom:1px solid var(--border)}
+.header-inner{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px 32px;
+  padding-top:16px;
+  padding-bottom:16px;
+}
+.brand{display:flex;align-items:center;gap:16px;font-weight:700;font-size:1.125rem;letter-spacing:-.01em}
+.logo{width:40px;height:40px;border-radius:10px;overflow:hidden;flex:none}
+.logo svg{display:block;width:100%;height:100%}
+.site-nav ul{display:flex;flex-wrap:wrap;gap:8px 24px}
+.site-nav a{
+  display:inline-block;
+  padding:8px 0;
+  color:var(--text);
+  font-weight:500;
+  font-size:.9375rem;
+  text-decoration:none;
+}
+.site-nav a:hover{text-decoration:underline}
+
+/* Hero */
+.hero{background:var(--hero-bg);color:var(--hero-text);--focus:#F4B23E}
+.hero-inner{
+  display:flex;
+  align-items:center;
+  gap:40px;
+  padding-top:64px;
+  padding-bottom:64px;
+}
+.hero-logo{width:120px;height:120px;border-radius:24px;overflow:hidden;flex:none}
+.hero-logo svg{display:block;width:100%;height:100%}
+.hero-body{flex:1;min-width:0}
+.hero h1{
+  margin-bottom:16px;
+  font-size:clamp(2rem,5vw,3rem);
+  font-weight:700;
+  letter-spacing:-.02em;
+}
+.lead{
+  max-width:62ch;
+  margin-bottom:24px;
+  font-size:1.125rem;
+  line-height:1.65;
+  color:var(--hero-muted);
+}
+.cmd{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+  padding:8px 8px 8px 16px;
+  background:var(--code-bg);
+  border:1px solid var(--code-border);
+  border-radius:var(--radius);
+}
+.hero .cmd{max-width:660px;margin-bottom:24px}
+.cmd pre{
+  flex:1 1 auto;
+  min-width:0;
+  margin:0;
+  padding:8px 0;
+  overflow-x:auto;
+}
+.cmd pre:focus-visible{outline-offset:-4px}
+.cmd code{
+  color:var(--code-text);
+  font-size:.9375rem;
+  line-height:1.5;
+  white-space:pre;
+}
+.copy{
+  flex:none;
+  padding:8px 16px;
+  font:inherit;
+  font-size:.8125rem;
+  font-weight:600;
+  line-height:1;
+  color:var(--code-text);
+  background:transparent;
+  border:1px solid var(--code-border);
+  border-radius:8px;
+  cursor:pointer;
+}
+.copy:hover{background:rgba(245,241,232,.1)}
+.copy[hidden]{display:none}
+.copy.copied{border-color:var(--code-text)}
+.actions{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:24px}
+.btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:16px 24px;
+  border:1px solid transparent;
+  border-radius:8px;
+  font-size:1rem;
+  font-weight:600;
+  text-decoration:none;
+  transition:background-color .15s,border-color .15s,color .15s;
+}
+.btn-primary{background:var(--cream);color:var(--ink)}
+.btn-primary:hover{background:#FFFFFF;color:var(--ink)}
+.btn-ghost{border-color:var(--cream);color:var(--cream)}
+.btn-ghost:hover{background:rgba(245,241,232,.12);color:var(--cream)}
+.meta{color:var(--hero-muted);font-size:.9375rem}
+.meta a{color:var(--cream)}
+.meta a:hover{color:#FFFFFF}
+
+/* Sections */
+.section{padding-top:64px;padding-bottom:64px}
+.section h2{margin-bottom:32px;font-size:clamp(1.5rem,3vw,2rem);letter-spacing:-.01em}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:24px}
+.card{
+  min-width:0;
+  padding:24px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+}
+.card h3{margin-bottom:8px;font-size:1.0625rem}
+.card p{color:var(--muted);font-size:.9375rem;line-height:1.6}
+.executor{border-top:3px solid var(--accent)}
+.executor:nth-child(1){--accent:var(--lilac)}
+.executor:nth-child(2){--accent:var(--amber)}
+.executor:nth-child(3){--accent:var(--teal)}
+.executor:nth-child(4){--accent:var(--coral)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px}
+.fact{
+  min-width:0;
+  padding:24px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+}
+.fact h3{margin-bottom:8px;font-size:1rem}
+.fact p{color:var(--muted);font-size:.9375rem;line-height:1.6}
+
+/* Install */
+.requirements{max-width:72ch;margin-bottom:24px;color:var(--muted)}
+.steps{display:grid;gap:24px;max-width:840px}
+.step{
+  min-width:0;
+  padding:24px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+}
+.step h3{margin-bottom:8px;font-size:1rem}
+.step p{margin-bottom:16px;color:var(--muted);font-size:.9375rem}
+.notes{max-width:72ch;margin-top:24px}
+.notes p{margin-bottom:8px;color:var(--muted);font-size:.9375rem}
+.notes p:last-child{margin-bottom:0}
+
+/* Your data */
+.data{
+  max-width:840px;
+  padding:32px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+}
+.data p{max-width:72ch;margin-bottom:16px;color:var(--muted)}
+.data p:last-child{margin-bottom:0}
+
+/* Footer */
+.site-footer{padding-top:40px;padding-bottom:40px;border-top:1px solid var(--border);background:var(--bg)}
+.footer-inner{display:flex;flex-direction:column;gap:16px}
+.footer-nav ul{display:flex;flex-wrap:wrap;gap:8px 24px}
+.footer-nav a{
+  display:inline-block;
+  padding:4px 0;
+  color:var(--text);
+  font-weight:500;
+  font-size:.9375rem;
+  text-decoration:none;
+}
+.footer-nav a:hover{text-decoration:underline}
+.footer-note{max-width:72ch;color:var(--muted);font-size:.875rem}
+
+@media (max-width:800px){
+  .hero-inner{flex-direction:column;align-items:stretch;gap:32px;padding-top:48px;padding-bottom:48px}
+  .hero-logo{width:96px;height:96px;border-radius:20px}
+  .section{padding-top:48px;padding-bottom:48px}
+  .data{padding:24px}
+}
+@media (max-width:480px){
+  .wrap{padding-left:20px;padding-right:20px}
+  .cmd{padding-left:12px}
+  .actions .btn{flex:1 1 100%}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <div class="brand">
+      <span class="logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+          <rect width="100" height="100" fill="#1C1E33"/>
+          <path d="M62 40 L50 22.8 M62 40 L70.9 21 M62 40 L82.9 38.2 M62 40 L74 57.2" fill="none" stroke="#F5F1E8" stroke-width="2" stroke-opacity="0.45" stroke-linecap="round"/>
+          <line x1="25" y1="77" x2="62" y2="40" stroke="#F5F1E8" stroke-width="5.5" stroke-linecap="round"/>
+          <circle cx="23" cy="79" r="6.5" fill="#F5F1E8"/>
+          <circle cx="50" cy="22.8" r="6.5" fill="#A79BFF"/>
+          <circle cx="70.9" cy="21" r="6.5" fill="#F4B23E"/>
+          <circle cx="82.9" cy="38.2" r="6.5" fill="#2EC4B6"/>
+          <circle cx="74" cy="57.2" r="6.5" fill="#EE6C4D"/>
+        </svg>
+      </span>
+      <span>Orchestra</span>
+    </div>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="https://github.com/orwrkr/orchestra/blob/main/plugins/orchestra/README.md">Docs</a></li>
+        <li><a href="https://github.com/orwrkr/orchestra/blob/main/CHANGELOG.md">Changelog</a></li>
+        <li><a href="https://github.com/orwrkr/orchestra">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="wrap hero-inner">
+      <span class="hero-logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+          <rect width="100" height="100" fill="#1C1E33"/>
+          <path d="M62 40 L50 22.8 M62 40 L70.9 21 M62 40 L82.9 38.2 M62 40 L74 57.2" fill="none" stroke="#F5F1E8" stroke-width="2" stroke-opacity="0.45" stroke-linecap="round"/>
+          <line x1="25" y1="77" x2="62" y2="40" stroke="#F5F1E8" stroke-width="5.5" stroke-linecap="round"/>
+          <circle cx="23" cy="79" r="6.5" fill="#F5F1E8"/>
+          <circle cx="50" cy="22.8" r="6.5" fill="#A79BFF"/>
+          <circle cx="70.9" cy="21" r="6.5" fill="#F4B23E"/>
+          <circle cx="82.9" cy="38.2" r="6.5" fill="#2EC4B6"/>
+          <circle cx="74" cy="57.2" r="6.5" fill="#EE6C4D"/>
+        </svg>
+      </span>
+      <div class="hero-body">
+        <h1 id="hero-title">A multi-model orchestrator for Claude Code</h1>
+        <p class="lead">Your Claude Code session breaks a task down and decides who does each subtask, and at what effort: Claude subagents, Codex CLI, DeepSeek, or a pool of tasks for manual agents. Routing follows each model's strengths, your subscription limits and balance, and the rules you set per project.</p>
+        <div class="cmd">
+          <pre tabindex="0"><code id="install-command">claude plugin install orchestra --marketplace orwrkr/orchestra</code></pre>
+          <button class="copy" type="button" hidden aria-label="Copy the install command" data-copy-target="install-command">Copy</button>
+        </div>
+        <div class="actions">
+          <a class="btn btn-primary" href="#install">Get started</a>
+          <a class="btn btn-ghost" href="https://github.com/orwrkr/orchestra">View on GitHub</a>
+        </div>
+        <p class="meta">MIT licensed · <a href="https://github.com/orwrkr/orchestra/releases/latest">Latest release</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="who-title">
+    <div class="wrap">
+      <h2 id="who-title">Who does the work</h2>
+      <ul class="cards">
+        <li class="card executor">
+          <h3>Claude subagents</h3>
+          <p>Haiku, Sonnet, Opus and Fable, each at the effort level the subtask needs, inside your session.</p>
+        </li>
+        <li class="card executor">
+          <h3>Codex CLI</h3>
+          <p>On your ChatGPT subscription or an API key, in the background, in its own sandbox.</p>
+        </li>
+        <li class="card executor">
+          <h3>DeepSeek</h3>
+          <p>On an API key, as a full agent: headless Claude Code on DeepSeek's Anthropic-compatible API, paid from your balance.</p>
+        </li>
+        <li class="card executor">
+          <h3>Manual task pool</h3>
+          <p>Tasks for Antigravity, Cursor and similar agents. You pick a task and paste one line. Orchestra never drives these apps itself: it only writes task files and reads results.</p>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="facts-title">
+    <div class="wrap">
+      <h2 id="facts-title">What it takes into account</h2>
+      <ul class="facts">
+        <li class="fact">
+          <h3>Model registry</h3>
+          <p>Difficulty, cost and strengths per model and effort, with cross-review between model families for significant code.</p>
+        </li>
+        <li class="fact">
+          <h3>Subscription limits</h3>
+          <p>Limits and balances you report in plain words, or that executors report themselves. When the Claude 5-hour window would expire largely unused, Claude takes work that would otherwise cost money.</p>
+        </li>
+        <li class="fact">
+          <h3>Spend limits</h3>
+          <p>USD caps for API-billed executors (<code>orch spend</code>): a manual counter for prepaid keys, a monthly budget otherwise.</p>
+        </li>
+        <li class="fact">
+          <h3>Executor profiles</h3>
+          <p>Per project: which key or account, which models, which rules, or <code>off</code>.</p>
+        </li>
+        <li class="fact">
+          <h3>Usage log</h3>
+          <p>Which model did what in each session, and how many tokens it spent (<code>orch usage</code>).</p>
+        </li>
+        <li class="fact">
+          <h3>DeepSeek as the lead</h3>
+          <p><code>orch launch deepseek</code> runs the same setup with DeepSeek orchestrating, optionally with Claude switched off.</p>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" id="install" aria-labelledby="install-title">
+    <div class="wrap">
+      <h2 id="install-title">Install</h2>
+      <p class="requirements">Requires Claude Code, Python 3.8 or newer (standard library only) and git. Codex CLI and a DeepSeek API key are optional.</p>
+      <div class="steps">
+        <div class="step">
+          <h3>Option 1 — The plugin only</h3>
+          <div class="cmd">
+            <pre tabindex="0"><code id="plugin-command">claude plugin install orchestra --marketplace orwrkr/orchestra</code></pre>
+            <button class="copy" type="button" hidden aria-label="Copy the install command" data-copy-target="plugin-command">Copy</button>
+          </div>
+        </div>
+        <div class="step">
+          <h3>Option 2 — From a clone</h3>
+          <p>Also puts <code>orch</code> in your terminal (needed for <code>orch launch</code>).</p>
+          <div class="cmd">
+            <pre tabindex="0"><code id="clone-command">git clone https://github.com/orwrkr/orchestra &amp;&amp; cd orchestra &amp;&amp; bash install.sh</code></pre>
+            <button class="copy" type="button" hidden aria-label="Copy the clone command" data-copy-target="clone-command">Copy</button>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <p>Then start <code>claude</code> in your project and run <code>/orchestra:status</code>. <code>orch doctor</code> shows what is available.</p>
+        <p>It works with Claude Code on WSL, Linux and macOS, and natively on Windows.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="data-title">
+    <div class="wrap">
+      <h2 id="data-title">Your data</h2>
+      <div class="data">
+        <p>No telemetry. Hooks and the status line work on your machine. <code>orch</code> makes one network request of its own: your DeepSeek account balance (<code>ORCH_BALANCE=off</code> turns it off).</p>
+        <p>Each executor sends the task, the project rules and the files it reads to its own provider, on your account.</p>
+        <p><a href="https://github.com/orwrkr/orchestra/blob/main/plugins/orchestra/README.md#what-it-runs-sends-and-fetches">What it runs, sends and fetches</a></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <nav class="footer-nav" aria-label="Footer">
+      <ul>
+        <li><a href="https://github.com/orwrkr/orchestra/blob/main/LICENSE">License</a></li>
+        <li><a href="https://github.com/orwrkr/orchestra/blob/main/SECURITY.md">Security</a></li>
+        <li><a href="https://github.com/orwrkr/orchestra/blob/main/CHANGELOG.md">Changelog</a></li>
+        <li><a href="https://github.com/orwrkr/orchestra">GitHub</a></li>
+      </ul>
+    </nav>
+    <p class="footer-note">Orchestra is an independent project, not affiliated with Anthropic, OpenAI, DeepSeek or Google.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  function selectAndCopy(source, done) {
+    var range = document.createRange();
+    range.selectNodeContents(source);
+    var selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    try {
+      if (document.execCommand("copy")) done();
+    } catch (e) {}
+    selection.removeAllRanges();
+  }
+
+  var buttons = document.querySelectorAll("button[data-copy-target]");
+  for (var i = 0; i < buttons.length; i++) {
+    (function (button) {
+      var source = document.getElementById(button.getAttribute("data-copy-target"));
+      if (!source) return;
+      button.hidden = false;
+      button.addEventListener("click", function () {
+        var text = source.textContent.trim();
+        function flash() {
+          button.textContent = "Copied";
+          button.classList.add("copied");
+          window.setTimeout(function () {
+            button.textContent = "Copy";
+            button.classList.remove("copied");
+          }, 1500);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(flash, function () {
+            selectAndCopy(source, flash);
+          });
+        } else {
+          selectAndCopy(source, flash);
+        }
+      });
+    })(buttons[i]);
+  }
+})();
+</script>
+</body>
+</html>

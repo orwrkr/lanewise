@@ -1,6 +1,6 @@
 ---
 name: orch-sonnet-medium
-description: Partitura executor (Claude Sonnet 5.5 · effort medium) — routine implementation, tests following existing patterns, documentation, review of small diffs (difficulty ≤3). Called by the orchestrator per the orchestra registry, not directly.
+description: Partitura executor (Claude Sonnet 5.5 · effort medium) — routine implementation, tests following existing patterns, documentation, review of small diffs (difficulty ≤3). Called by the orchestrator per the Partitura registry, not directly.
 model: sonnet
 effort: medium
 ---

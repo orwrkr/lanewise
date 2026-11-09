@@ -1,6 +1,6 @@
 ---
 name: orch-sonnet-high
-description: Partitura executor (Claude Sonnet 5.5 · effort high) — medium-complexity features, debugging, review of other models' code (difficulty ≤4). Called by the orchestrator per the orchestra registry, not directly.
+description: Partitura executor (Claude Sonnet 5.5 · effort high) — medium-complexity features, debugging, review of other models' code (difficulty ≤4). Called by the orchestrator per the Partitura registry, not directly.
 model: sonnet
 effort: high
 ---

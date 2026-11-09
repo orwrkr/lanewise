@@ -1,6 +1,6 @@
 ---
 name: orch-opus-high
-description: Partitura executor (Claude Opus 5.5 · effort high) — hard debugging, cross-module changes, security review (difficulty ≤5). Called by the orchestrator per the orchestra registry, not directly.
+description: Partitura executor (Claude Opus 5.5 · effort high) — hard debugging, cross-module changes, security review (difficulty ≤5). Called by the orchestrator per the Partitura registry, not directly.
 model: opus
 effort: high
 ---

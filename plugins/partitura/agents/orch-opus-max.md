@@ -1,6 +1,6 @@
 ---
 name: orch-opus-max
-description: Partitura executor (Claude Opus 5.5 · effort max) — the hardest correctness and architecture questions — rarely, expensive. Called by the orchestrator per the orchestra registry, not directly.
+description: Partitura executor (Claude Opus 5.5 · effort max) — the hardest correctness and architecture questions — rarely, expensive. Called by the orchestrator per the Partitura registry, not directly.
 model: opus
 effort: max
 ---

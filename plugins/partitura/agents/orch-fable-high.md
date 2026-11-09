@@ -1,6 +1,6 @@
 ---
 name: orch-fable-high
-description: Partitura executor (Claude Fable 5.1 · effort high) — frontier tasks where Opus and Codex Sol have failed — only with the operator's permission. Called by the orchestrator per the orchestra registry, not directly.
+description: Partitura executor (Claude Fable 5.1 · effort high) — frontier tasks where Opus and Codex Sol have failed — only with the operator's permission. Called by the orchestrator per the Partitura registry, not directly.
 model: fable
 effort: high
 ---

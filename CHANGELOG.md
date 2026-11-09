@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.34.1
+
+- **The rename reaches the last two texts.** The six subagents' descriptions said "per the orchestra registry", and
+  the plugin README said to disable it through `/plugin` → orchestra; both now use the new name. The self-test
+  checks the plugin and its documents for the old name, except where a line explains the rename.
+
 ## 0.34.0
 
 - **Orchestra is now Partitura.** Anthropic's plugin directory reserves "Orchestra" for an existing publisher, so

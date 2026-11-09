@@ -58,7 +58,7 @@ If you already have a personal registry `~/.orchestra/providers.yaml`, it overri
 
 ### What the plugin changes and how to remove it
 
-It is installed and removed **the standard way**: `install.sh` calls `claude plugin marketplace add` and `claude plugin install` and never edits `settings.json` or other Claude Code files by hand. Hooks, commands, subagents and the skill live inside the plugin and go away with it. To disable it without removing: `/plugin` → orchestra → Disable, or `claude plugin disable partitura@partitura` (re-enable with `enable`).
+It is installed and removed **the standard way**: `install.sh` calls `claude plugin marketplace add` and `claude plugin install` and never edits `settings.json` or other Claude Code files by hand. Hooks, commands, subagents and the skill live inside the plugin and go away with it. To disable it without removing: `/plugin` → partitura → Disable, or `claude plugin disable partitura@partitura` (re-enable with `enable`).
 
 Outside Claude Code the plugin creates only:
 - the launchers `~/.local/bin/orch` (plus `orch.cmd` on Windows);

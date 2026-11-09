@@ -1,6 +1,6 @@
 ---
 name: orch-haiku-low
-description: Partitura executor (Claude Haiku 5.5 · effort low) — code search, context gathering, mechanical edits, summarization (difficulty 1–2). Called by the orchestrator per the orchestra registry, not directly.
+description: Partitura executor (Claude Haiku 5.5 · effort low) — code search, context gathering, mechanical edits, summarization (difficulty 1–2). Called by the orchestrator per the Partitura registry, not directly.
 model: haiku
 effort: low
 ---

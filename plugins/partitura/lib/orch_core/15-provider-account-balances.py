@@ -5,7 +5,7 @@
 # estimates orch's own runs (tokens × prices); this is the provider's own figure. A provider is one fetch function and one BALANCE_PROVIDERS entry. Only what
 # an ordinary key can read counts, and only DeepSeek offers it (GET /user/balance). OpenAI and Anthropic keep their
 # billing and cost reports behind admin keys, and Google offers no balance API for the Gemini API or Vertex AI, so
-# those scopes keep the estimate (`orch balance` says so). ~/.orchestra/balances.json keeps, per scope label,
+# those scopes keep the estimate (`orch balance` says so). ~/.partitura/balances.json keeps, per scope label,
 # {amount, currency, at} and the last failure {error: {message, at}}; a failed fetch keeps the last amount. The key is
 # never written anywhere, never printed, and no message contains it. The status line only reads that file.
 

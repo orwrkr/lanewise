@@ -2,8 +2,8 @@
 #
 # The second status line shows this session's cumulative input/output per provider, with cache reads beside them. The
 # numbers must agree with `orch usage`: the orchestrator thread + subagents come from the transcript (each message
-# counted once), the CLI executors from ~/.orchestra/usage.jsonl. Transcripts grow to many megabytes, so each file
-# is parsed incrementally: ~/.orchestra/session_tokens/<session>.json holds the byte offset already parsed and the
+# counted once), the CLI executors from ~/.partitura/usage.jsonl. Transcripts grow to many megabytes, so each file
+# is parsed incrementally: ~/.partitura/session_tokens/<session>.json holds the byte offset already parsed and the
 # running totals; only appended bytes are read, a partial last line is left for the next call.
 #
 # The status line runs on every update and the next update may kill it, so a refresh rewrites only this session's small

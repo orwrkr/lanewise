@@ -33,7 +33,7 @@ blocked, top up, then `orch spend reset <scope> [--limit N]` (the reset can also
   session is recorded at SessionEnd, split at counter resets and month starts, each message priced at its own time:
   what was spent before a reset stays out of the new counter, and a session across the 1st counts per month.
 - The cost is an **estimate**: tokens × the prices in `plugins/partitura/registry/prices.json` (a personal copy at
-  `~/.orchestra/prices.json` overrides it). Cache writes fold into the input price; DeepSeek uses its peak rates,
+  `~/.partitura/prices.json` overrides it). Cache writes fold into the input price; DeepSeek uses its peak rates,
   halved off-peak (see below). The cost is frozen into the ledger entry as `cost_usd` at run time, with the price
   `as_of`; later price changes don't rewrite history. It will not match the provider's invoice to the cent.
 
@@ -76,12 +76,12 @@ orch spend reset deepseek --project     # a project's own counter (needs its own
 `orch spend reset` on a `month` scope also moves its baseline for the rest of that month — the next month starts
 clean anyway. It prints what was spent, the old and new limits, and the kind.
 
-The config lives in `~/.orchestra/spend_limits.json` (baselines for manual counters live there too); a corrupt file
+The config lives in `~/.partitura/spend_limits.json` (baselines for manual counters live there too); a corrupt file
 refuses writes **and refuses runs** — `orch run` / `orch launch` / `orch key` cannot check the limit without it, so
 they fail closed (like a broken `profiles.json`) rather than silently count $0. `orch spend` still shows the
 defaults. Scopes are case-insensitive (`DEEPSEEK` → `deepseek`), must name a real provider or `<provider>@<profile>`,
 and `orch spend reset … --project` refuses a project that has no limit of its own. The counters are cached
-incrementally in `~/.orchestra/spend_cache.json`; a reset takes effect at once.
+incrementally in `~/.partitura/spend_cache.json`; a reset takes effect at once.
 
 ## When a key runs out: a fallback profile
 
@@ -107,7 +107,7 @@ and uses the account's currency. An empty value removes a field. Other providers
 they have no balance API.
 
 The first balance recorded by a hook or run preflight in a session becomes its baseline. It lives in
-`~/.orchestra/session_budget.json`, keyed by scope and session id, so compaction keeps it. Entries older than
+`~/.partitura/session_budget.json`, keyed by scope and session id, so compaction keeps it. Entries older than
 seven days are pruned on writes. A rise of at least 0.01 over the last recorded balance is a top-up and starts a
 new baseline. With no session id (a plain terminal), only the floor applies.
 
@@ -153,7 +153,7 @@ source to check.
 **Refreshing the prices.** `orch` makes no web request; a cheap agent reads the official pages and the operator
 confirms what it found. Nothing happens by itself.
 
-1. `orch prices check [--provider P]…` writes `~/.orchestra/prices/check-<stamp>/TASK.md`: each provider's price page
+1. `orch prices check [--provider P]…` writes `~/.partitura/prices/check-<stamp>/TASK.md`: each provider's price page
    and the model keys of our table that belong to it.
 2. The orchestrator gives it to a cheap executor with web access: in a Claude-led session a native subagent such as
    `partitura:orch-haiku-low`; otherwise `orch run claude|deepseek --mode analysis --allow
@@ -173,7 +173,7 @@ confirms what it found. Nothing happens by itself.
 
 `orch spend` is an **estimate of `orch`'s own runs** (tokens × prices). For a provider that reports a balance,
 `orch balance` also reads the provider's own figure with the key (`GET /user/balance` for DeepSeek) and keeps it in
-`~/.orchestra/balances.json`: per scope `{amount, currency, at}`, plus the last error and its time. A failed fetch keeps
+`~/.partitura/balances.json`: per scope `{amount, currency, at}`, plus the last error and its time. A failed fetch keeps
 the last amount; its age says how old it is. The currency is the provider's own (`$`, `¥` for CNY): nothing is
 converted, and the USD limits above stay as set by hand.
 

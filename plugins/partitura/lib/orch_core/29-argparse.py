@@ -232,7 +232,7 @@ def build_parser():
     x.add_argument("--effort", help="thinking level to select, e.g. High")
     x.add_argument("--prompt-file")
     x.add_argument("--write", action="store_true",
-                   help="the task changes files: it gets a worktree of its own, .orchestra/wt/<id> on branch ag/<id> "
+                   help="the task changes files: it gets a worktree of its own, .partitura/wt/<id> on branch ag/<id> "
                         "(default: read-only, in the project folder)")
     x.add_argument("--base", help="with --write: the ref the task's worktree starts from (default HEAD)")
     x.add_argument("--worktree", action="store_true", help=argparse.SUPPRESS)     # gone: refused, naming --write
@@ -253,7 +253,7 @@ def build_parser():
     x.add_argument("--effort")
     x.add_argument("--prompt-file")
     x.add_argument("--write", action="store_true",
-                   help="the task changes files: when taken it gets a worktree of its own, .orchestra/wt/<id> on "
+                   help="the task changes files: when taken it gets a worktree of its own, .partitura/wt/<id> on "
                         "branch ag/<id> (default: read-only, in the project folder)")
     x.add_argument("--base", help="with --write: the ref the task's worktree starts from (default HEAD)")
     x.add_argument("--worktree", action="store_true", help=argparse.SUPPRESS)     # gone: refused, naming --write
@@ -333,7 +333,7 @@ def build_parser():
                    help="show: that provider in full (its notes, slots and routes) instead of the brief view")
     g.add_argument("--full", action="store_true", help="show: the whole file")
     g.add_argument("--json", action="store_true", help="show: the parsed registry as JSON")
-    g.add_argument("--project", action="store_true", help="init into project .orchestra/ instead of ~/.orchestra/")
+    g.add_argument("--project", action="store_true", help="init into the project's .partitura/ instead of ~/.partitura/")
     g.add_argument("--force", action="store_true")
     g.add_argument("--accept", action="store_true",
                    help="diff: record the built-in registry's current version and hash in the copy as current")
@@ -356,6 +356,13 @@ def build_parser():
 
     x = sub.add_parser("footprint", help="what Partitura created outside Claude Code (cleanup list)")
     x.set_defaults(fn=cmd_footprint)
+
+    x = sub.add_parser("migrate", help="move the old .orchestra folders to .partitura (dry run by default)")
+    x.add_argument("path", nargs="?", metavar="PATH", help="one project (default: the current one)")
+    x.add_argument("--all", action="store_true", help="every project the plugin knows (usage ledger and profiles)")
+    x.add_argument("--home", action="store_true", help="the personal folder (the old ~/.orchestra)")
+    x.add_argument("--yes", action="store_true", help="move; without it only what would move is printed")
+    x.set_defaults(fn=cmd_migrate)
 
     k = sub.add_parser("key", help=argparse.SUPPRESS)      # internal: the apiKeyHelper command, hidden from --help
     k.add_argument("profile", help=argparse.SUPPRESS)

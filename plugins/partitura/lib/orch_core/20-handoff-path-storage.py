@@ -11,8 +11,9 @@ WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def meta_base(meta_path):
-    """Project root that owns a meta.json: <proj>/.orchestra/handoffs/<hid>/meta.json → <proj>. Path arithmetic
-    only (no .resolve(): a .orchestra symlink must not redirect the project), so it never depends on the cwd."""
+    """Project root that owns a meta.json: <proj>/<state>/handoffs/<hid>/meta.json → <proj> (the state folder is
+    .partitura, or .orchestra for a project that keeps the old name). Path arithmetic only (no .resolve(): a
+    state-folder symlink must not redirect the project), so it never depends on the cwd."""
     return meta_path.parents[3]
 
 

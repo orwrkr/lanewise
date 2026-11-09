@@ -6,7 +6,7 @@ pastes one line. For Antigravity this is a Google ToS requirement — violating 
 
 The operator keeps **one folder open in the agent** — the project folder — and never switches it, the way they work
 with Claude Code. A read-only task works right there; a task that changes files works in a worktree of its own that
-`orch` makes **inside** the project folder (`.orchestra/wt/<id>`), so the window never moves.
+`orch` makes **inside** the project folder (`.partitura/wt/<id>`), so the window never moves.
 
 ## When to hand off manually
 
@@ -40,13 +40,13 @@ waits are bounded; hooks and the status line skip busy state silently after a mu
 1. Accumulate small suitable tasks and hand them out **as a batch** in one TASK.md (parts 1..N, one RESULT.md).
 2. **Read-only is the default.** The agent reads and reports; it may write one file, its RESULT.md, and is told to
    run no shell commands (each can stop and wait for the operator's confirmation). A task that changes files takes
-   `--write`: `orch` makes a git worktree for it at the take, `<project>/.orchestra/wt/<id>` on branch `ag/<id>`
+   `--write`: `orch` makes a git worktree for it at the take, `<project>/.partitura/wt/<id>` on branch `ag/<id>`
    (`--base <ref>` picks the start, default `HEAD`, and goes only with `--write`). The agent works only inside that
-   folder and does not commit; TASK.md and RESULT.md stay in the project's `.orchestra/handoffs/<id>/` for both
+   folder and does not commit; TASK.md and RESULT.md stay in the project's `.partitura/handoffs/<id>/` for both
    kinds. Several writing tasks may be open at once and the project folder may be dirty: each has its own tree. A git
    repository is needed for `--write` (`offer` and `new` refuse otherwise); a read-only task works anywhere.
    `--worktree` is gone (it fails with a line naming `--write`). Tools that walk hidden folders (jest, for one) may
-   see an open nested worktree: exclude `.orchestra/` in their config if that matters.
+   see an open nested worktree: exclude `.partitura/` in their config if that matters.
 3. Task body (stdin or `--prompt-file`) per this template:
    ```
    ## Context              — what the project is, what's already done, key files
@@ -67,21 +67,21 @@ waits are bounded; hooks and the status line skip busy state silently after a mu
    ```
    orch handoff offer --title "<short>" --model "Gemini 4 Argon" --model-key gemini-4-argon \
      --effort High --fallback "codex gpt-6.1-sol high" --check-min 5 \
-     --prompt-file .orchestra/prompts/ag.md
+     --prompt-file .partitura/prompts/ag.md
    ```
    To the operator — one line: what you put in the pool and why. List: `orch handoff list`; the operator's board is
-   `.orchestra/MANUAL.md` (it can be kept open in an editor).
+   `.partitura/MANUAL.md` (it can be kept open in an editor).
 5. The operator picks: "AG-0004 to Antigravity" / "I'll take AG-0004" / "AG-0004 to Cursor" →
    `orch handoff take AG-0004 [--agent cursor] [--model …] --clip` and show the card from the output in full
    (project folder, model, thinking level, line to paste; with `--clip` it is already on the clipboard; a writing
    task's card also says where it works, and that there is no need to open it). The line is one line; a read-only
    task's says to run no shell commands, a writing task's names its worktree, and both say that if the agent's file
-   tools cannot open `.orchestra/` because git ignores it, it should say so in the chat and stop.
+   tools cannot open `.partitura/` because git ignores it, it should say so in the chat and stop.
 6. Immediately, bypassing the pool (the operator asked):
    ```
    orch handoff new --title "<short>" --model "Gemini 4 Argon" --model-key gemini-4-argon \
      --effort High --fallback "codex gpt-6.1-sol high" \
-     --pickup-min 30 --reassign-min 180 --max-open 2 --clip --prompt-file .orchestra/prompts/ag.md
+     --pickup-min 30 --reassign-min 180 --max-open 2 --clip --prompt-file .partitura/prompts/ag.md
    ```
    (numbers — from `operator` in the registry).
 
@@ -106,7 +106,7 @@ waits are bounded; hooks and the status line skip busy state silently after a mu
   `orch handoff close <id> --remove-worktree`. A read-only task's findings are in RESULT.md. You need not keep your
   own edits out of the project folder: the agent works elsewhere. A task whose RESULT.md says DONE already leaves
   the open list; `close` only archives it (it then leaves `orch status` and the board's open sections, and
-  `--remove-worktree` removes its worktree), while the files stay under `.orchestra/handoffs/<id>/`.
+  `--remove-worktree` removes its worktree), while the files stay under `.partitura/handoffs/<id>/`.
 - `STATUS BLOCKED/FAILED` → read RESULT.md; refine the task and hand it out again, or reassign.
 - `⌛ Manual pool: no task taken for N min …` — a pool check (see below).
 - `⏰ waiting for the operator for N min` (handed out but not started) → one short reminder, don't stop working.
@@ -158,15 +158,15 @@ the agent's name (`orch profile use cursor off`, `orch quota set cursor exhauste
   field made no promise: it counts as writing and gets a nested worktree at the take.
 - A folder that is not a git repository can hold read-only manual tasks: nothing needs git there. `--write` is
   refused at `offer` and `new` there (an old offer that counts as writing is not taken: run it automatically).
-- If `.orchestra/` is deleted by hand, git keeps stale worktree entries: run `git worktree prune` in the project.
-- A take refuses when something at `.orchestra/wt/<id>` isn't that task's worktree: a plain folder there would make git
+- If `.partitura/` is deleted by hand, git keeps stale worktree entries: run `git worktree prune` in the project.
+- A take refuses when something at `.partitura/wt/<id>` isn't that task's worktree: a plain folder there would make git
   answer for the project around it. Look at it, remove it, take again. A task whose preparation failed after its
   worktree was made keeps it on record: a later take reuses it, and a failed `new` is cleaned up with
   `orch handoff close <id> --remove-worktree`.
 
 ## Moving the project or switching Windows/WSL
 
-A task's `meta.json` stores its paths relative to the project root, not absolute, so the `.orchestra/` state
+A task's `meta.json` stores its paths relative to the project root, not absolute, so the `.partitura/` state
 survives a moved project folder and the same folder opened from native Windows or from WSL. The board, the
 handoff card and `orch handoff` output still print absolute paths for the environment they run in.
 

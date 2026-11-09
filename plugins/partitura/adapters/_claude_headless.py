@@ -1,7 +1,8 @@
 # Shared runner of Partitura's headless Claude Code executors (adapters `claude` and `deepseek`).
 #
 # Not an adapter itself: orch ignores adapter names that start with "_". The adapters import it from their own
-# directory, so if you override one of them in ~/.orchestra/adapters, copy this file next to it.
+# directory, so if you override one of them in the personal folder's adapters/ (~/.partitura; ~/.orchestra before
+# 0.35.0), copy this file next to it.
 import json
 import os
 import shlex
@@ -22,6 +23,16 @@ ENV_FILE_DENY = ["Read(**/.env)", "Read(**/.env.*)",
                "Bash(git grep *--no-index*)", "Bash(git grep *--untracked*)"]
 EXIT_QUOTA = 75
 KEEP_CLAUDE_VARS = ("CLAUDE_CODE_GIT_BASH_PATH",)
+
+
+def orch_home():
+    """The personal folder, in the same order as orch itself (00-header.py): ORCH_HOME; else ~/.partitura when it
+    exists; else the old ~/.orchestra when it exists; else ~/.partitura."""
+    v = os.environ.get("ORCH_HOME")
+    if v:
+        return Path(v)
+    new, old = Path.home() / ".partitura", Path.home() / ".orchestra"
+    return new if new.is_dir() or not old.is_dir() else old
 
 
 def utf8_stdio():
@@ -117,7 +128,7 @@ def settings_deny(say):
                 for rule in rules:
                     if isinstance(rule, str) and rule.split("(", 1)[0] in ("Read", "Bash"):
                         deny.append(rule)
-        if (d / ".git").exists() or (d / ".orchestra").exists():
+        if (d / ".git").exists() or (d / ".partitura").exists() or (d / ".orchestra").exists():
             break
         if d.parent == d:
             break

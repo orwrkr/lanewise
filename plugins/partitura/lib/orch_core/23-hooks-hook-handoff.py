@@ -42,7 +42,7 @@ def cmd_hook(a):
             except Exception:         # a busy lock costs only this cleanup, never the hook
                 pass
             return 0
-        has_state = (project_dir() / ".orchestra").exists()
+        has_state = (project_dir() / state_dir_name()).exists()
         entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT") or ""
         if not entrypoint.startswith("sdk"):
             heartbeat(sid)            # an active instance (for the budget's consumer count); a headless run doesn't count

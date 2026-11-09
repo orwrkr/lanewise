@@ -30,12 +30,12 @@ def cmd_status(a):
         where = project_dir()
         lines.append("Executor profiles for %s (orch profile show):" % canon_path(project_root(where)))
         lines += profile_lines(where, budget=False)
-    has_state = (project_dir() / ".orchestra").exists()
+    has_state = (project_dir() / state_dir_name()).exists()
     metas = [m for m in all_metas() if result_status(m) not in TERMINAL] if has_state else []
     if metas:
-        lines.append("Open manual tasks (pooled and handed out; board .orchestra/MANUAL.md):")
+        lines.append("Open manual tasks (pooled and handed out; board %s/MANUAL.md):" % state_dir_name())
         lines += ["  " + handoff_line(m) for m in metas]
-    if not a.brief and has_state:       # a read-only command must not create .orchestra in a folder it never used
+    if not a.brief and has_state:       # a read-only command must not create the state folder in a folder it never used
         events = check_events(mark=False)
         if events:
             lines.append("Unreported events:")
@@ -88,6 +88,20 @@ def launcher_python_warning(home=None):
         return ("records %s, which does not exist: orch does not start; re-run `bash install.sh` to record the "
                 "current interpreter" % exe)
     return None
+
+
+def old_state_folders():
+    """Paths still stored under the old folder name: the current project's and the personal one (not when ORCH_HOME
+    decides the home — nothing to move then). Hooks and the status line never mention them: only `orch doctor`."""
+    found = []
+    proj = project_dir()
+    if (proj / LEGACY_STATE_DIR_NAME).exists() and not (proj / STATE_DIR_NAME).exists():
+        found.append(proj / LEGACY_STATE_DIR_NAME)
+    home = Path.home()
+    if not os.environ.get("ORCH_HOME") and (home / LEGACY_STATE_DIR_NAME).exists() \
+            and not (home / STATE_DIR_NAME).exists():
+        found.append(home / LEGACY_STATE_DIR_NAME)
+    return found
 
 
 def cmd_doctor(a):
@@ -161,6 +175,9 @@ def cmd_doctor(a):
                                              if p.is_file() and not p.name.startswith(("_", "."))})) or "none")
     clip = next((c for c in ("clip.exe", "wl-copy", "xclip", "pbcopy") if shutil.which(c)), None)
     row("clipboard (optional)", True, clip or "none — copy the paste line by hand")
+    for p in old_state_folders():
+        print("⚠ %-22s %s is still under the name %s: orch migrate moves it (orch migrate --all --home for everything)"
+              % ("old folder name", p, LEGACY_STATE_DIR_NAME))
     return 0 if ok else 1
 
 

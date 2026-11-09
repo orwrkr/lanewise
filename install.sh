@@ -86,7 +86,15 @@ case ":$PATH:" in
   *) OFF_PATH=1 ;;
 esac
 
-HOME_DIR="${ORCH_HOME:-$HOME/.orchestra}"
+if [[ -n "${ORCH_HOME:-}" ]]; then
+  HOME_DIR="$ORCH_HOME"
+elif [[ -d "$HOME/.partitura" ]]; then
+  HOME_DIR="$HOME/.partitura"
+elif [[ -d "$HOME/.orchestra" ]]; then
+  HOME_DIR="$HOME/.orchestra"
+else
+  HOME_DIR="$HOME/.partitura"
+fi
 had_registry=0; [[ -f "$HOME_DIR/providers.yaml" ]] && had_registry=1
 $PY "$ORCH" registry init
 echo

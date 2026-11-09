@@ -6,24 +6,24 @@ guide; check the exact flags with `--help`. Almost everything is configured in t
 ## This project vs. every project
 
 Every setting is either scoped to **this project** (a path binding, a project file) or **personal, for every
-project** (files under `~/.orchestra/`). Personal data never goes into a repository.
+project** (files under `~/.partitura/`). Personal data never goes into a repository.
 
 **This project only:**
 
 | Setting | Command / file | Stored |
 |---|---|---|
-| Project registry | `orch registry init --project` → `<project>/.orchestra/providers.yaml` | in the project, git-excluded |
-| Profile for this project | `orch profile use <provider> <profile|off>` | `~/.orchestra/profiles.json`, keyed by path |
+| Project registry | `orch registry init --project` → `<project>/.partitura/providers.yaml` | in the project, git-excluded |
+| Profile for this project | `orch profile use <provider> <profile|off>` | `~/.partitura/profiles.json`, keyed by path |
 | Profile for a directory above it | `orch profile use <provider> <profile> --path /path/to/dir` | same file |
-| This project's own spend limit / mode | `orch spend limit <scope> N --project` | `~/.orchestra/spend_limits.json`, keyed by path |
+| This project's own spend limit / mode | `orch spend limit <scope> N --project` | `~/.partitura/spend_limits.json`, keyed by path |
 | Claude key profile's `apiKeyHelper` | written by `orch profile use claude <key-profile>` | `.claude/settings.local.json`, git-excluded |
 
-**Every project (personal, under `~/.orchestra/`):**
+**Every project (personal, under `~/.partitura/`):**
 
 | Setting | Command / file |
 |---|---|
-| API key values | `~/.orchestra/secrets.env` (edited by hand) |
-| Personal registry | `orch registry init` → `~/.orchestra/providers.yaml` |
+| API key values | `~/.partitura/secrets.env` (edited by hand) |
+| Personal registry | `orch registry init` → `~/.partitura/providers.yaml` |
 | Profile definitions and provider defaults | `orch profile set …`, `orch profile use … --default` → `profiles.json` |
 | Spend limits, modes, price table | `orch spend …` → `spend_limits.json`; `prices.json` |
 | Account balances (the provider's figure, shared by all keys of an account) | `orch balance` → `balances.json` |
@@ -31,7 +31,7 @@ project** (files under `~/.orchestra/`). Personal data never goes into a reposit
 | Status line | `"statusLine": { … "orch statusline" }` in Claude Code settings |
 
 Bindings and spend limits sit in the shared files but are **path-keyed**, so a project keeps its own effective
-values while the file is shared. `ORCH_HOME` relocates all of `~/.orchestra/` (separate per OS unless shared).
+values while the file is shared. `ORCH_HOME` relocates all of `~/.partitura/` (separate per OS unless shared).
 
 ## Executor profiles — `orch guide profiles`
 
@@ -52,7 +52,7 @@ tasks to use it for, free-form rules.
 - `orch` enforces `off`, `models`, the effort ceiling, the write ban and `max_open`; you honour `use_for`,
   `prefer_for` and `rules` when routing. A broken `profiles.json` refuses runs rather than silently re-enabling.
 - Session account budgets: `--session-soft PCT`, `--session-hard PCT`, `--balance-floor N` (DeepSeek only;
-  empty values clear fields). Baselines live in `~/.orchestra/session_budget.json`; see `orch guide spend`.
+  empty values clear fields). Baselines live in `~/.partitura/session_budget.json`; see `orch guide spend`.
 - `orch profile rules --set "TEXT"` records project-wide operator requirements; `--path /path/to/dir` covers a directory,
   and `--clear` removes the entry. `orch profile rules` shows all applicable entries.
 - A `fallback` is resolved by `orch` itself: while the profile's key is exhausted (spend limit reached, or an
@@ -62,9 +62,9 @@ tasks to use it for, free-form rules.
 ## API keys
 
 A profile stores **only the variable name** (`--key DEEPSEEK_API_KEY_WORK`); the value is a line
-`DEEPSEEK_API_KEY_WORK=sk-…` in `~/.orchestra/secrets.env` — the one place keys live, and only adapters that declare
+`DEEPSEEK_API_KEY_WORK=sk-…` in `~/.partitura/secrets.env` — the one place keys live, and only adapters that declare
 `# orch-secrets: …` ever receive a value. A session **never asks for a key's value, never prints it and never reads
-that file**; it only ever says "add `NAME=sk-…` to `~/.orchestra/secrets.env`". `orch doctor` reports whether each
+that file**; it only ever says "add `NAME=sk-…` to `~/.partitura/secrets.env`". `orch doctor` reports whether each
 declared key is set (`✔` / missing) without showing the value. A profile's `key` is explicit-only: a stray `NAME=…`
 line alone never switches a login profile to API billing.
 
@@ -77,10 +77,10 @@ Caps what API-billed executors spend (DeepSeek always; Codex/Claude only on a `k
   `--reset month|manual`; `--project` for this project's own counter.
 - Mode: `orch spend mode <scope> stop|evaluate|continue [--lead] [--overrun PCT]`.
 - After a top-up: `orch spend reset <scope> [--limit N]` (counts from zero from now).
-- Personal price table: `~/.orchestra/prices.json` overrides the built-in `registry/prices.json`.
-- Stored in `~/.orchestra/spend_limits.json`; a broken file refuses runs and writes.
+- Personal price table: `~/.partitura/prices.json` overrides the built-in `registry/prices.json`.
+- Stored in `~/.partitura/spend_limits.json`; a broken file refuses runs and writes.
 - The provider's balance of the account behind a key (DeepSeek): `orch balance [--json]`, kept in
-  `~/.orchestra/balances.json` and shown as `account $15.09` in the status line (after our `est. $1.47/$10`, in the same parentheses),
+  `~/.partitura/balances.json` and shown as `account $15.09` in the status line (after our `est. $1.47/$10`, in the same parentheses),
   `orch status` and the `account` column of `orch spend`; `ORCH_BALANCE=off` turns every request off. Other providers
   have no balance API for an ordinary key and show only the estimate. The account is shared by all its keys and can be
   spent from outside `orch`, so a drop in it says nothing about one key's spend: limits stay hand-set budgets for
@@ -108,7 +108,7 @@ rule in `SKILL.md`, with `prefer for` as the per-profile way to rank a provider 
   `operator` (the whole manual lane). Statuses: `low`, `exhausted`, `disabled`, `away`; `busy` is set by `orch`
   for a model at capacity and lifts by itself.
 - "I'm away" → `orch quota set operator away --until 19:00`; "I'm back" → `orch quota clear operator`.
-- Stored in `~/.orchestra/availability.json`, shared by all projects; `--until` lifts on its own.
+- Stored in `~/.partitura/availability.json`, shared by all projects; `--until` lifts on its own.
 
 ## The registry — `orch registry show`
 
@@ -116,8 +116,8 @@ The built-in `providers.yaml` plus your personal copy. What is in effect for thi
 the brief view (settings, slots with `good_for`, routes; no notes), `orch registry show <provider>` (that provider in
 full: its notes, slots and the routes that name them), `orch registry show --full` (the file itself; `--json` — the
 parsed registry). `orch registry path` prints the file's path. A copy that cannot be parsed is shown as is, after a
-line saying so. Precedence: `<project>/.orchestra/providers.yaml`, then
-`~/.orchestra/providers.yaml`, then the built-in one. Make a copy to edit: `orch registry init` (personal) or
+line saying so. Precedence: `<project>/.partitura/providers.yaml`, then
+`~/.partitura/providers.yaml`, then the built-in one. Make a copy to edit: `orch registry init` (personal) or
 `--project` (this project). A copy overrides the whole built-in registry, so when the built-in one has changed since
 the copy was made, SessionStart and `orch doctor` say so; `orch registry diff` shows what the copy changes and
 `orch registry diff --accept` records the built-in registry as current once you have taken over what you need.
@@ -149,7 +149,7 @@ any other credential. These are fixed for safety, not knobs.
 ## Projects with their own process
 
 A project's own workflow and commit rules come **first** — the plugin is a tool inside that process, not above it.
-When the operator records a decision, do it where the project asks; `.orchestra/` is local and outside git, so it is
+When the operator records a decision, do it where the project asks; `.partitura/` is local and outside git, so it is
 the place for plugin state, not for the project's own notes. There are three places for a constraint:
 
 - The project's `CLAUDE.md` and `AGENTS.md` live in its repository and reach every executor on their own, exactly

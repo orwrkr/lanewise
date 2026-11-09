@@ -38,7 +38,7 @@ terminal commands below use the clone and `install.sh`.
 
 Partitura works in Claude Code only. Its `bin/` folder puts `orch` on the Bash tool's PATH, and claude.ai and
 Cowork don't install a plugin that has one. It would not work there anyway: it needs hooks, local CLIs (`claude`,
-`codex`), `~/.orchestra/` and git worktrees on your machine.
+`codex`), `~/.partitura/` and git worktrees on your machine.
 
 You can keep the clone anywhere: the plugin is installed straight from this folder, and edits in it are "live" — they take effect after `/reload-plugins` or in a new session. Both environments are supported: Claude Code in **WSL** and Claude Code running **natively on Windows** (where its Bash tool is Git Bash). Each environment has its own Claude Code installation, so run `install.sh` in every environment you work in:
 
@@ -52,9 +52,9 @@ cd /c/path/to/repo && bash install.sh
 
 The script registers the marketplace, installs the plugin, puts `orch` into `~/.local/bin` (if `orch` isn't found afterwards, that folder is not on your PATH: see the root README, "Quick start"), creates your personal registry and then runs `orch doctor`. On Windows, instead of a symlink it installs the launchers `orch` (for Git Bash) and `orch.cmd` (for PowerShell and cmd); the Git Bash launcher records the interpreter's absolute path, so `orch` doesn't go through the Microsoft Store `python3` alias, and re-running `bash install.sh` refreshes it (also after installing or upgrading Python). Inside Claude Code sessions the Bash tool also finds the plugin's own `bin/orch`; it looks for Python itself, the same way the hooks do, so it works without a `python3` on PATH.
 
-`install.sh` is safe to re-run, including after moving the folder: it re-registers the marketplace at the current location. Personal data lives in `~/.orchestra/`, not in the repository: limits, your model registry, API keys. WSL and Windows use separate folders. If you want limits, registry and keys to be shared, set `export ORCH_HOME=/mnt/c/Users/<you>/.orchestra` in WSL (in `~/.bashrc`).
+`install.sh` is safe to re-run, including after moving the folder: it re-registers the marketplace at the current location. Personal data lives in `~/.partitura/`, not in the repository: limits, your model registry, API keys. WSL and Windows use separate folders. If you want limits, registry and keys to be shared, set `export ORCH_HOME=/mnt/c/Users/<you>/.partitura` in WSL (in `~/.bashrc`).
 
-If you already have a personal registry `~/.orchestra/providers.yaml`, it overrides the built-in one. Copy new entries into it from `registry/providers.yaml`, or recreate it: `orch registry init --force`. When the built-in registry changes later, SessionStart and `orch doctor` warn that the copy is stale: `orch registry diff` shows the difference and `orch registry diff --accept` records the built-in one as current. Up to version 0.4 the marketplace was called `orchestra-local`; `install.sh` removes that installation before adding the current one.
+If you already have a personal registry `~/.partitura/providers.yaml`, it overrides the built-in one. Copy new entries into it from `registry/providers.yaml`, or recreate it: `orch registry init --force`. When the built-in registry changes later, SessionStart and `orch doctor` warn that the copy is stale: `orch registry diff` shows the difference and `orch registry diff --accept` records the built-in one as current. Up to version 0.4 the marketplace was called `orchestra-local`; `install.sh` removes that installation before adding the current one.
 
 ### What the plugin changes and how to remove it
 
@@ -62,11 +62,11 @@ It is installed and removed **the standard way**: `install.sh` calls `claude plu
 
 Outside Claude Code the plugin creates only:
 - the launchers `~/.local/bin/orch` (plus `orch.cmd` on Windows);
-- personal data in `~/.orchestra/` (limits, profiles, keys, usage log, the isolated config of the DeepSeek executor);
-- in projects where you have used it: a `<project>/.orchestra/` folder (with the worktrees of manual tasks that change files in `.orchestra/wt/`: if you delete it by hand, run `git worktree prune`), `<project>.wt/` worktrees (`orch worktree`), for Antigravity the rule `<project>/.agents/rules/partitura-task.md` (it stays after a task closes), and their lines in `.git/info/exclude`. `.gitignore` is left alone; projects where the plugin was never used get nothing;
+- personal data in `~/.partitura/` (limits, profiles, keys, usage log, the isolated config of the DeepSeek executor);
+- in projects where you have used it: a `<project>/.partitura/` folder (with the worktrees of manual tasks that change files in `.partitura/wt/`: if you delete it by hand, run `git worktree prune`), `<project>.wt/` worktrees (`orch worktree`), for Antigravity the rule `<project>/.agents/rules/partitura-task.md` (it stays after a task closes), and their lines in `.git/info/exclude`. `.gitignore` is left alone; projects where the plugin was never used get nothing;
 - Codex account directories, if you created such profiles (`--home`).
 
-`orch footprint` shows the full list for the current environment. `bash uninstall.sh` removes the plugin and the launchers and lists what is left in projects; `--purge` also deletes `~/.orchestra/`.
+`orch footprint` shows the full list for the current environment. `bash uninstall.sh` removes the plugin and the launchers and lists what is left in projects; `--purge` also deletes `~/.partitura/`.
 
 Line endings are pinned to LF (`.gitattributes`), except for `*.cmd`, which use CRLF. If files still end up with CRLF (which breaks the bash scripts and `orch`), `install.sh` detects it and tells you how to fix it.
 
@@ -74,7 +74,7 @@ Line endings are pinned to LF (`.gitattributes`), except for `*.cmd`, which use 
 
 Partitura has no telemetry: it reports nothing to its author or to anyone else.
 
-- **Hooks** (SessionStart, UserPromptSubmit, PostToolUse, Stop, SessionEnd) run `orch hook <event>` on your machine. They read and write `~/.orchestra/` and the project's `.orchestra/`, and print short events into the session. The status line (`orch statusline`, if you set it) only reads local files.
+- **Hooks** (SessionStart, UserPromptSubmit, PostToolUse, Stop, SessionEnd) run `orch hook <event>` on your machine. They read and write `~/.partitura/` and the project's `.partitura/`, and print short events into the session. The status line (`orch statusline`, if you set it) only reads local files.
 - **`orch`'s only network request** is DeepSeek's balance, `GET https://api.deepseek.com/user/balance`, sent with each DeepSeek key your profiles use. It happens on `orch balance`, `orch status` and `orch spend`, before a DeepSeek run that a per-session budget checks and after every DeepSeek run, and on SessionStart through a detached `orch balance --quiet` when the stored figure is stale. `ORCH_BALANCE=off` turns it off everywhere. `orch prices check` makes no web request: it writes a task for an agent.
 - **Executors** start only through `orch run …` or `orch launch`. Each sends its provider the task prompt, the project rules (CLAUDE.md, AGENTS.md) and whatever files it reads or commands it runs in its working folder:
   - Codex: `codex exec` → OpenAI, on your Codex login or API key;
@@ -83,13 +83,13 @@ Partitura has no telemetry: it reports nothing to its author or to anyone else.
   - `orch launch deepseek`: an interactive Claude Code session whose every model request goes to DeepSeek.
 - **Claude subagents** (`orch-*`) run inside your session, like any Claude Code subagent.
 - **Manual agents** (Antigravity and similar) are never started or driven: Partitura writes task files and reads the results.
-- **Keys** live in `~/.orchestra/secrets.env` or the environment. Each reaches only the adapter that declares it (`# orch-secrets: …`), and `orch key` hands a Claude API-key profile's key to Claude Code as its `apiKeyHelper`. They are not plugin options (`userConfig`), which Claude Code keeps in secure storage. Claude Code passes those values to hooks and MCP servers but not to commands run through the Bash tool, and that is how `orch run` starts. Exporting a key into the session instead would hand it to every command the session runs.
+- **Keys** live in `~/.partitura/secrets.env` or the environment. Each reaches only the adapter that declares it (`# orch-secrets: …`), and `orch key` hands a Claude API-key profile's key to Claude Code as its `apiKeyHelper`. They are not plugin options (`userConfig`), which Claude Code keeps in secure storage. Claude Code passes those values to hooks and MCP servers but not to commands run through the Bash tool, and that is how `orch run` starts. Exporting a key into the session instead would hand it to every command the session runs.
 
 ### Codex
 Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex login`. The login is stored in `~/.codex` and is separate for Windows and WSL. The adapter is written in Python and drives `codex exec --json`: from the event stream it builds a compact log and a token count. On Windows it runs the native `codex.exe` from the npm package, bypassing the `codex.cmd` wrapper, and needs no Git Bash. If only the Codex app is installed, the adapter finds the `codex.exe` bundled with it. You can also point it at a binary explicitly: `ORCH_CODEX_BIN=<path>`. `codex debug models` lists the models available to your account.
 
 ### DeepSeek
-1. Get a key at platform.deepseek.com and put it in `~/.orchestra/secrets.env` (or in the `DEEPSEEK_API_KEY` environment variable):
+1. Get a key at platform.deepseek.com and put it in `~/.partitura/secrets.env` (or in the `DEEPSEEK_API_KEY` environment variable):
    ```
    DEEPSEEK_API_KEY=sk-…
    ```
@@ -99,9 +99,9 @@ Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex logi
 
 Multiple keys (personal, work) and per-project key selection are handled by [profiles](#executor-profiles-keys-accounts-rules-projects). A second Codex account is a profile too.
 
-`orch balance` reads the balance of the DeepSeek account behind a key from DeepSeek itself (`GET /user/balance`) and keeps it in `~/.orchestra/balances.json`. The status line then shows, for every API-billed scope of the directory, our own estimate and limit next to it, in parentheses after the session counter of the same name: `DeepSeek@client 1.5M/988k (est. $1.47/$10, account $15.09)`. The account figure is the provider's, shared by all keys of that account (which can also be spent from outside `orch`), so it is never a key's balance and a drop in it says nothing about one key's spend; limits stay hand-set budgets for `orch`'s own runs, and the provider's refusal (402) is what stops an empty account. Other providers give an ordinary key no balance to read, so they show only the estimate. See `orch guide spend`.
+`orch balance` reads the balance of the DeepSeek account behind a key from DeepSeek itself (`GET /user/balance`) and keeps it in `~/.partitura/balances.json`. The status line then shows, for every API-billed scope of the directory, our own estimate and limit next to it, in parentheses after the session counter of the same name: `DeepSeek@client 1.5M/988k (est. $1.47/$10, account $15.09)`. The account figure is the provider's, shared by all keys of that account (which can also be spent from outside `orch`), so it is never a key's balance and a drop in it says nothing about one key's spend; limits stay hand-set budgets for `orch`'s own runs, and the provider's refusal (402) is what stops an empty account. Other providers give an ordinary key no balance to read, so they show only the estimate. See `orch guide spend`.
 
-`orch spend` prices tokens from a table (`registry/prices.json`, overridden by `~/.orchestra/prices.json`) and warns when a provider's prices are older than 30 days. `orch prices show` prints the table in effect with each provider's source and date. To refresh it, `orch prices check` writes a task for a cheap agent with web access (`orch` itself makes no web request); `orch prices diff <its report>` shows what the report would change, and `orch prices apply <its report> --yes`, after your confirmation, writes dated entries to your personal file. A newer plugin version's built-in prices replace an older check. See `orch guide spend`.
+`orch spend` prices tokens from a table (`registry/prices.json`, overridden by `~/.partitura/prices.json`) and warns when a provider's prices are older than 30 days. `orch prices show` prints the table in effect with each provider's source and date. To refresh it, `orch prices check` writes a task for a cheap agent with web access (`orch` itself makes no web request); `orch prices diff <its report>` shows what the report would change, and `orch prices apply <its report> --yes`, after your confirmation, writes dated entries to your personal file. A newer plugin version's built-in prices replace an older check. See `orch guide spend`.
 
 Codex model capacity failures return exit 75 and block only the selected model for about ten minutes.
 On native Windows, write workers may need a scratch directory with readable parents and explicit `--add-dir`
@@ -124,7 +124,7 @@ when the adapter exits 0; the orchestrator reads and handles the report.
 | Risk | Mitigation |
 |---|---|
 | The executor latches onto your session (message-channel socket and token, session id, effort) | `orch` strips every `CLAUDECODE` / `CLAUDE_*` variable from the executor's environment (except the Git Bash path) |
-| It uses your Claude subscription, your settings or your `ANTHROPIC_*` variables | a config directory of its own, `~/.orchestra/workers/deepseek-<platform>` (no OAuth, plugins or sessions); all `ANTHROPIC_*` are replaced with DeepSeek values; the variables are set only for the child process, your terminal is unchanged |
+| It uses your Claude subscription, your settings or your `ANTHROPIC_*` variables | a config directory of its own, `~/.partitura/workers/deepseek-<platform>` (no OAuth, plugins or sessions); all `ANTHROPIC_*` are replaced with DeepSeek values; the variables are set only for the child process, your terminal is unchanged |
 | Hooks fire — yours, the plugin's or the project's | no plugins are installed in its config; `--setting-sources user` doesn't load the project's `.claude/settings*.json`; `ORCH_WORKER` silences Partitura's hooks if the plugin loads anyway |
 | MCP servers, auto-memory | `--strict-mcp-config`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
 | The executor starts delegating on its own | with `ORCH_WORKER` set, `orch run` / `orch handoff` refuse to run; it is not given the Agent tool |
@@ -275,7 +275,7 @@ A profile describes **how** the orchestrator uses an executor: with which API ke
 An executor on an API key instead of a login is a profile too — Codex here, and the same shape for Claude:
 
 ```bash
-# `work` is a free label, not a fixed word; the key itself goes into ~/.orchestra/secrets.env as
+# `work` is a free label, not a fixed word; the key itself goes into ~/.partitura/secrets.env as
 #   CODEX_API_KEY_WORK=sk-…  (never into the command, the repository or your shell history)
 orch profile set codex work --key CODEX_API_KEY_WORK
 orch profile use codex work       # binds the profile to the project in the current directory
@@ -286,7 +286,7 @@ None of this is needed with the usual ChatGPT login (`codex login`): the built-i
 You can manage profiles right in the session, in plain words or with `/partitura:profile`: "don't use DeepSeek in this project", "use DeepSeek with the work key here", "don't offer Antigravity in this project", "leave Codex alone by default". The orchestrator turns this into commands:
 
 ```bash
-# several DeepSeek keys: the keys themselves go in ~/.orchestra/secrets.env, the profile holds only the variable name
+# several DeepSeek keys: the keys themselves go in ~/.partitura/secrets.env, the profile holds only the variable name
 #   DEEPSEEK_API_KEY=sk-…        (personal)
 #   DEEPSEEK_API_KEY_WORK=sk-…   (work)
 orch profile set deepseek personal --key DEEPSEEK_API_KEY --default
@@ -334,7 +334,7 @@ Project rules are private requirements for the orchestrator, independent of prof
 
 What a project binding gives you:
 - **Its own balance and its own limit.** If the `work` key runs out of money, only `deepseek@work` is blocked. Projects on other keys keep working. "Topped up DeepSeek" lifts the blocks on all keys.
-- **Keys stay out of the repository.** Everything is stored in `~/.orchestra/profiles.json`, with the project path recorded in a normalized form (`c:/users/…`). If `ORCH_HOME` is shared, the bindings match between Windows and WSL.
+- **Keys stay out of the repository.** Everything is stored in `~/.partitura/profiles.json`, with the project path recorded in a normalized form (`c:/users/…`). If `ORCH_HOME` is shared, the bindings match between Windows and WSL.
 - **A corrupted file doesn't re-enable what you turned off.** If `profiles.json` can't be read, CLI executors and manual tasks are not started, and `orch status` warns about it.
 
 A profile with an API `key` is **API-billed** (per token), not a subscription: `orch status` shows it bills to the key,
@@ -353,7 +353,7 @@ binds a profile for `orch run claude` only and says so.
 
 Tasks that are worth doing by hand in Antigravity (UI checks in a browser, a broad review, a second opinion from another model family, long autonomous work) go **into a pool** instead of being dumped on you right away. You choose what to take and when.
 
-1. **Browse the pool:** `/partitura:manual` (or "what's in the pool?"). The same list is in `<project>/.orchestra/MANUAL.md`, which you can keep open in your editor. It shows each task, the suggested agent and model, and how long it has been waiting.
+1. **Browse the pool:** `/partitura:manual` (or "what's in the pool?"). The same list is in `<project>/.partitura/MANUAL.md`, which you can keep open in your editor. It shows each task, the suggested agent and model, and how long it has been waiting.
 2. **Take a task:** "AG-0004 to Antigravity" (or "AG-0004 to Cursor"). The orchestrator runs `orch handoff take`: it completes TASK.md in the project folder and shows a card with the folder, the model and thinking level, and the line to paste — on your clipboard only with `--clip`, which `/partitura:manual` passes.
 3. You keep the project folder open in the agent, pick the model and paste the line. **That's it.** You don't need to report back when it's done: the agent writes `RESULT.md` itself.
 
@@ -362,9 +362,9 @@ The pool has a clock that runs from your last take (or from when the pool opened
 **How the agent learns it is part of the system.** `orch` adds to TASK.md:
 - the role: you are a Partitura executor, the task was set by the orchestrator (Claude Code), which will also review the result;
 - links to the project rules (`CLAUDE.md`, `AGENTS.md` — whichever exist);
-- the protocol: on start, `RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: product · model`, at the end `DONE`, `BLOCKED` or `FAILED` and a report; the scope; a ban on launching other agents. A task is **read-only** by default: the agent may write only its `RESULT.md` and is told to run no shell commands, since each one can stop and wait for your confirmation. A task that changes files (`--write`) works in a git worktree of its own that `orch` makes inside the project folder (`.orchestra/wt/<id>`, branch `ag/<id>`) when the task is taken; it leaves the changes uncommitted and the orchestrator reviews and commits them. Either way the agent keeps the project folder open and is never switched: you do not open the worktree. Several such tasks can be open at once, and the project folder may be dirty. A folder that is not a git repository takes read-only tasks only. Tools that walk hidden folders (jest, for one) may see an open nested worktree.
+- the protocol: on start, `RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: product · model`, at the end `DONE`, `BLOCKED` or `FAILED` and a report; the scope; a ban on launching other agents. A task is **read-only** by default: the agent may write only its `RESULT.md` and is told to run no shell commands, since each one can stop and wait for your confirmation. A task that changes files (`--write`) works in a git worktree of its own that `orch` makes inside the project folder (`.partitura/wt/<id>`, branch `ag/<id>`) when the task is taken; it leaves the changes uncommitted and the orchestrator reviews and commits them. Either way the agent keeps the project folder open and is never switched: you do not open the worktree. Several such tasks can be open at once, and the project folder may be dirty. A folder that is not a git repository takes read-only tasks only. Tools that walk hidden folders (jest, for one) may see an open nested worktree.
 
-For Antigravity, the project folder also gets one general rule, `.agents/rules/partitura-task.md`, with `trigger: always_on`. Antigravity injects it into every turn, so the protocol isn't lost in a long session; it applies only when a message names a task id, so several open tasks do not mislead each other. The rule is excluded from git and stays after a task closes. Antigravity needs no extra setup. If you like, add a line to your global rules (`~/.gemini/GEMINI.md`): "follow tasks from `.orchestra/handoffs/*/TASK.md` strictly according to their protocol".
+For Antigravity, the project folder also gets one general rule, `.agents/rules/partitura-task.md`, with `trigger: always_on`. Antigravity injects it into every turn, so the protocol isn't lost in a long session; it applies only when a message names a task id, so several open tasks do not mislead each other. The rule is excluded from git and stays after a task closes. Antigravity needs no extra setup. If you like, add a line to your global rules (`~/.gemini/GEMINI.md`): "follow tasks from `.partitura/handoffs/*/TASK.md` strictly according to their protocol".
 
 The `AGENT:` line goes into the usage log, so you can see who completed a manual task and with which model.
 
@@ -394,7 +394,7 @@ Session 3f9a1c2e · “Config parser” · 29.10 12:01–16:40
 ```
 
 - **Claude: main thread and subagents** — taken straight from the Claude Code session transcript: the model, effort and tokens of every response. For a subagent, its type and the task `description` are shown.
-- **Codex, DeepSeek and the Claude executor** — every `orch run` writes to `~/.orchestra/usage.jsonl` the model, the task (`--task` or the first line of the prompt), the status, the time and the tokens reported by the adapter.
+- **Codex, DeepSeek and the Claude executor** — every `orch run` writes to `~/.partitura/usage.jsonl` the model, the task (`--task` or the first line of the prompt), the status, the time and the tokens reported by the adapter.
 - **A DeepSeek-led session** shows `lead: deepseek…` in its header and DeepSeek model ids for the main thread and subagents.
 - **Manual agents** don't report tokens. For them you see who did the work (the `AGENT:` line from RESULT.md), with which model and how long it took.
 
@@ -417,7 +417,7 @@ This way the rules don't drift apart, and each agent sees them exactly once.
 
 ## Model registry
 
-`orch registry path` shows which file is currently in effect. Precedence: `<project>/.orchestra/providers.yaml`, then `~/.orchestra/providers.yaml`, then the built-in one. A copy records the version it was made from; when the built-in registry changes later, SessionStart and `orch doctor` warn that the copy is stale, and `orch registry diff` / `orch registry diff --accept` show the difference and record the built-in one as current.
+`orch registry path` shows which file is currently in effect. Precedence: `<project>/.partitura/providers.yaml`, then `~/.partitura/providers.yaml`, then the built-in one. A copy records the version it was made from; when the built-in registry changes later, SessionStart and `orch doctor` warn that the copy is stale, and `orch registry diff` / `orch registry diff --accept` show the difference and record the built-in one as current.
 
 What it contains:
 - **slots** — provider × model × effort, each with a cost (`cost`: the load on the subscription limit; for DeepSeek, the relative token price), a difficulty ceiling (`max_difficulty`) and strengths (`good_for`);
@@ -429,7 +429,7 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 
 ## New executors (CLI / API / MCP)
 
-- **CLI or API:** copy `adapters/_template.example` to `~/.orchestra/adapters/<name>` and add the provider with its slots to the registry. An adapter can be bash or Python: `orch` runs a Python adapter with its own interpreter, which is simpler on Windows. Invocation: `orch run <name> --model … --effort … --mode analysis|write [--allow …]`. The adapter contract is described in the template: environment variables, exit codes, `usage.json` with tokens, and the `orch-secrets`, `orch-limit-detect`, `orch-context-native` and `orch-profile-env` directives. Examples: `adapters/codex` is a CLI with its own agent loop, `adapters/deepseek` is an API without one (any Anthropic-compatible endpoint will do), `adapters/claude` is headless Claude Code on your own login; the last two share `adapters/_claude_headless.py`. An adapter that declares `# orch-launch: env` can also lead a session (`orch launch <name>`).
+- **CLI or API:** copy `adapters/_template.example` to `~/.partitura/adapters/<name>` and add the provider with its slots to the registry. An adapter can be bash or Python: `orch` runs a Python adapter with its own interpreter, which is simpler on Windows. Invocation: `orch run <name> --model … --effort … --mode analysis|write [--allow …]`. The adapter contract is described in the template: environment variables, exit codes, `usage.json` with tokens, and the `orch-secrets`, `orch-limit-detect`, `orch-context-native` and `orch-profile-env` directives. Examples: `adapters/codex` is a CLI with its own agent loop, `adapters/deepseek` is an API without one (any Anthropic-compatible endpoint will do), `adapters/claude` is headless Claude Code on your own login; the last two share `adapters/_claude_headless.py`. An adapter that declares `# orch-launch: env` can also lead a session (`orch launch <name>`).
 - **A manual agent** (Cursor, Windsurf, Jules…) needs no adapter: the same pool, `orch handoff take <id> --agent cursor`. Its profile and quota are tracked under its own name.
 - **MCP:** add the server to Claude Code and describe the provider in the registry with `lane: mcp`. You keep track of such a provider's quota with `orch quota`.
 
@@ -437,24 +437,26 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 
 | Path | Contents |
 |---|---|
-| `~/.orchestra/availability.json` | limits and availability, shared by all projects |
-| `~/.orchestra/providers.yaml` | your registry |
-| `~/.orchestra/secrets.env` | API keys (`DEEPSEEK_API_KEY=…`, `DEEPSEEK_API_KEY_WORK=…`), only for the adapters that declare them |
-| `~/.orchestra/profiles.json` | executor profiles, defaults and project bindings (`orch profile …`) |
-| `~/.orchestra/usage.jsonl` | usage log: runs, manual tasks, session snapshots (`orch usage`) |
-| `~/.orchestra/claude_usage.json` | the Claude subscription's last known window usage and its recent history, for the budget mode (`orch budget`) |
-| `~/.orchestra/codex_usage.json` | the Codex account's last known limits, per `CODEX_HOME` (the `Codex subscription:` line) |
-| `~/.orchestra/session_tokens/<session>.json` | one session's byte offsets and running token totals per account, for the status line's session part; removed a day after its last save |
-| `~/.orchestra/sessions.json` | active Claude Code sessions and Claude executor runs: the budget's consumer count |
-| `~/.orchestra/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
-| `<project>/.orchestra/runs/` | executor runs: prompt, role, project rules, response, log, tokens |
-| `<project>/.orchestra/handoffs/AG-…/` | manual tasks: meta, BODY.md, TASK.md, RESULT.md |
-| `<project>/.orchestra/MANUAL.md` | the manual task board: pool, assigned, completed |
-| `<project>/.orchestra/wt/<id>/` | the worktree of a manual task that changes files (inside the project folder, git-ignored) |
+| `~/.partitura/availability.json` | limits and availability, shared by all projects |
+| `~/.partitura/providers.yaml` | your registry |
+| `~/.partitura/secrets.env` | API keys (`DEEPSEEK_API_KEY=…`, `DEEPSEEK_API_KEY_WORK=…`), only for the adapters that declare them |
+| `~/.partitura/profiles.json` | executor profiles, defaults and project bindings (`orch profile …`) |
+| `~/.partitura/usage.jsonl` | usage log: runs, manual tasks, session snapshots (`orch usage`) |
+| `~/.partitura/claude_usage.json` | the Claude subscription's last known window usage and its recent history, for the budget mode (`orch budget`) |
+| `~/.partitura/codex_usage.json` | the Codex account's last known limits, per `CODEX_HOME` (the `Codex subscription:` line) |
+| `~/.partitura/session_tokens/<session>.json` | one session's byte offsets and running token totals per account, for the status line's session part; removed a day after its last save |
+| `~/.partitura/sessions.json` | active Claude Code sessions and Claude executor runs: the budget's consumer count |
+| `~/.partitura/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
+| `<project>/.partitura/runs/` | executor runs: prompt, role, project rules, response, log, tokens |
+| `<project>/.partitura/handoffs/AG-…/` | manual tasks: meta, BODY.md, TASK.md, RESULT.md |
+| `<project>/.partitura/MANUAL.md` | the manual task board: pool, assigned, completed |
+| `<project>/.partitura/wt/<id>/` | the worktree of a manual task that changes files (inside the project folder, git-ignored) |
 | `<project>.wt/<name>/` | worktrees for isolated tasks of automated executors (`orch worktree`, next to the repository) |
 | `<project>/.agents/rules/partitura-task.md` | the general Antigravity rule (always on, applies only to a named task); stays after a task closes |
 
-`.orchestra/` and the Antigravity rule are added to `.git/info/exclude` automatically (nothing is added outside a git repository), and `.gitignore` is left alone. `orch footprint` lists everything outside Claude Code.
+`.partitura/` and the Antigravity rule are added to `.git/info/exclude` automatically (nothing is added outside a git repository), and `.gitignore` is left alone. `orch footprint` lists everything outside Claude Code.
+
+Before 0.35.0 both folders were named `.orchestra` (`~/.orchestra/` and `<project>/.orchestra/`). `orch` still reads them there; `orch migrate` moves them to the new names — it prints what would move and changes nothing until run with `--yes` (`orch migrate --all --home` covers every known project and the personal folder).
 
 ## Alongside maestro-flow
 

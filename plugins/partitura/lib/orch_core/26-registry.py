@@ -29,7 +29,7 @@ def registry_current_agents(data):
 
 
 def registry_path():
-    for p in (project_dir() / ".orchestra" / "providers.yaml", ORCH_HOME / "providers.yaml",
+    for p in (project_dir() / state_dir_name() / "providers.yaml", ORCH_HOME / "providers.yaml",
               PLUGIN_ROOT / "registry" / "providers.yaml"):
         if p.exists():
             return p
@@ -504,7 +504,7 @@ def cmd_registry(a):
             return 2
         return registry_show(a)
     elif a.action == "init":
-        dest = (project_dir() / ".orchestra" / "providers.yaml") if a.project else (ORCH_HOME / "providers.yaml")
+        dest = (project_dir() / state_dir_name() / "providers.yaml") if a.project else (ORCH_HOME / "providers.yaml")
         if dest.exists() and not a.force:
             print("already exists: %s" % dest)
             return 0

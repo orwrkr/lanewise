@@ -57,7 +57,7 @@ plugin is enabled. Give Claude Code a multi-step task and the `orchestrate` skil
 
 ```bash
 npm i -g @openai/codex && codex login     # Codex
-# DeepSeek: add the line DEEPSEEK_API_KEY=sk-… to ~/.orchestra/secrets.env (never to a repository)
+# DeepSeek: add the line DEEPSEEK_API_KEY=sk-… to ~/.partitura/secrets.env (never to a repository)
 orch doctor                               # what is available
 ```
 
@@ -86,7 +86,7 @@ All eight commands, including `/partitura:quota`, `/partitura:done` and `/partit
 **Antigravity and other manual agents are never automated** — no `agy`, computer use, text pasting or OAuth (that
 violates Google's ToS). Partitura only writes task files for them and reads their results.
 
-Uninstall: `bash uninstall.sh` (standard `claude plugin uninstall`; `--purge` also deletes `~/.orchestra/`).
+Uninstall: `bash uninstall.sh` (standard `claude plugin uninstall`; `--purge` also deletes `~/.partitura/`).
 `orch footprint` lists everything the plugin created outside Claude Code.
 
 ## License

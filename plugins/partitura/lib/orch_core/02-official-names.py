@@ -165,8 +165,9 @@ _run_reads = {}                # status line: file contents already read in this
 
 
 @contextmanager
-def state_lock(path):
-    """Reentrant process lock on a stable sidecar file; the OS releases it on process death."""
+def state_lock(path, wait=None):
+    """Reentrant process lock on a stable sidecar file; the OS releases it on process death. `wait` overrides the
+    usual wait: 0 makes the call non-blocking (`orch migrate` checks the home's locks this way)."""
     path = Path(path)
     key = os.path.normcase(str(path.resolve()))
     if key in _held_locks:
@@ -174,7 +175,8 @@ def state_lock(path):
         return
     if not path.parent.is_dir():
         path.parent.mkdir(parents=True, exist_ok=True)
-    wait = STATUSLINE_LOCK_WAIT if _statusline_run else QUIET_LOCK_WAIT if _quiet_state else LOCK_WAIT
+    if wait is None:
+        wait = STATUSLINE_LOCK_WAIT if _statusline_run else QUIET_LOCK_WAIT if _quiet_state else LOCK_WAIT
     deadline = time.monotonic() + wait
     with path.open("a+b") as f:
         f.seek(0, os.SEEK_END)
@@ -398,25 +400,50 @@ def project_dir():
     return _toplevels[cwd]
 
 
+STATE_DIR_NAME = ".partitura"          # the project's state folder (runs, handoffs, worktrees, board)
+LEGACY_STATE_DIR_NAME = ".orchestra"   # its name before 0.35.0: still read, and moved by `orch migrate`
+
+
+def state_dir_name(where=None):
+    """The name of the project's state folder in use: .partitura when it exists, else the old .orchestra when it
+    exists, else .partitura (a new project). Both folders are never merged."""
+    proj = Path(where) if where is not None else project_dir()
+    for name in (STATE_DIR_NAME, LEGACY_STATE_DIR_NAME):
+        if (proj / name).exists():
+            return name
+    return STATE_DIR_NAME
+
+
 def state_dir(create=False):
-    """<project>/.orchestra. Creation is explicit: a command that only reads must not leave one in a folder where the
-    plugin was never used (README: "projects where the plugin was never used get nothing")."""
-    p = project_dir() / ".orchestra"
+    """<project>/.partitura, or the old <project>/.orchestra while a project keeps it. Creation is explicit: a command
+    that only reads must not leave one in a folder where the plugin was never used (README: "projects where the
+    plugin was never used get nothing")."""
+    p = project_dir() / state_dir_name()
     if create and not p.exists():
         p.mkdir(parents=True, exist_ok=True)
         ensure_git_exclude(project_dir())
     return p
 
 
-def ensure_git_exclude(proj, patterns=(".orchestra/",)):
-    """Keep the plugin's files out of git status without touching .gitignore (shared by all worktrees)."""
+def git_exclude_file(proj):
+    """The info/exclude of the repository that owns proj (the common git directory, shared by all worktrees)."""
     r = git(["rev-parse", "--git-common-dir"], proj)
     if r is None or r.returncode != 0:
-        return
+        return None
     common = Path(r.stdout.strip())
     if not common.is_absolute():
         common = (proj / common).resolve()
-    excl = common / "info" / "exclude"
+    return common / "info" / "exclude"
+
+
+def ensure_git_exclude(proj, patterns=None):
+    """Keep the plugin's files out of git status without touching .gitignore (shared by all worktrees). The default
+    pattern is the project's state folder, whichever name it uses."""
+    excl = git_exclude_file(proj)
+    if excl is None:
+        return
+    if patterns is None:
+        patterns = (state_dir_name(proj) + "/",)
     excl.parent.mkdir(parents=True, exist_ok=True)
     text = excl.read_text(encoding="utf-8") if excl.exists() else ""
     missing = [p for p in patterns if p not in text.split()]

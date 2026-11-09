@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.35.0
+
+- **The plugin's folders follow its name.** The personal folder is `~/.partitura` and a project's state folder is
+  `<project>/.partitura` (the `orch` CLI, the `ORCH_*` variables and `ORCH_HOME` keep their names). Both old names
+  keep working: `orch` reads `~/.orchestra` and `<project>/.orchestra` where they exist, so an upgrade changes
+  nothing in place and a project that keeps the old folder is not touched.
+- **`orch migrate` moves them** — `orch migrate [PATH] [--all] [--home] [--yes]`, a dry run by default: it prints
+  what would move and changes nothing until run with `--yes`. For a project it renames the folder, rewrites the
+  stored paths in `handoffs/*/meta.json` (workdir, TASK.md and RESULT.md paths, the paste line), repairs the git
+  worktrees under `wt/`, replaces the `.orchestra/` line in `.git/info/exclude`, rewrites the Antigravity rule and
+  regenerates `MANUAL.md`. `--home` moves `~/.orchestra` and the absolute paths into it in the home's top-level JSON
+  files (a Codex profile's `home`, say), and open sessions pick the new home up after `/reload-plugins`. `--all`
+  covers every known project — the usage log, the profile bindings and the current one. It skips, and says why: a
+  task that is handed out and unfinished (its agent writes RESULT.md to the old folder), a run whose process is
+  still alive, a personal folder another `orch` process is using, and a project that already has both folders
+  (nothing is merged). A rename that fails changes nothing, so it can be retried.
+- **`orch doctor` points at the old name**: one line when the current project or the personal folder still uses it;
+  hooks and the status line stay silent about it.
+
 ## 0.34.1
 
 - **The rename reaches the last two texts.** The six subagents' descriptions said "per the orchestra registry", and

@@ -1,6 +1,6 @@
 # ───────────────────────── profiles (keys/accounts, models, rules; default and per project) ─────────────────────────
 #
-# ~/.orchestra/profiles.json:
+# ~/.partitura/profiles.json:
 #   {"providers": {"deepseek": {"default": "personal",
 #                               "profiles": {"personal": {"key": "DEEPSEEK_API_KEY"},
 #                                            "work": {"key": "DEEPSEEK_API_KEY_WORK", "models": ["deepseek-flash"]}}}},

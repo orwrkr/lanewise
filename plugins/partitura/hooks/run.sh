@@ -11,7 +11,15 @@ case "$0" in    # hooks.json passes ".../hooks/run.sh": no `dirname` process the
   *) HERE="$(dirname "$0")" ;;
 esac
 ORCH="$HERE/../bin/orch"
-HOME_DIR="${ORCH_HOME:-$HOME/.orchestra}"
+if [ -n "${ORCH_HOME:-}" ]; then
+  HOME_DIR="$ORCH_HOME"
+elif [ -d "$HOME/.partitura" ]; then
+  HOME_DIR="$HOME/.partitura"
+elif [ -d "$HOME/.orchestra" ]; then
+  HOME_DIR="$HOME/.orchestra"
+else
+  HOME_DIR="$HOME/.partitura"
+fi
 CACHE="$HOME_DIR/.hook-python-${OSTYPE:-posix}"
 if [ -f "$CACHE" ]; then
   CACHED=""

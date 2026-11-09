@@ -11,7 +11,7 @@ native Windows) and the steps to reproduce. You should get a first answer within
 
 Partitura runs other AI agents on your machine and handles API keys, so these areas matter most:
 
-- **Secrets.** API keys live only in `~/.orchestra/secrets.env` and reach only the adapters that declare them
+- **Secrets.** API keys live only in `~/.partitura/secrets.env` and reach only the adapters that declare them
   (`# orch-secrets: …`). Profiles store variable names, never key values. A key showing up in a repository, a log,
   `orch` output or another adapter's environment is a vulnerability. Keys are not plugin options (`userConfig`):
   Claude Code never passes those to commands run through the Bash tool, which is how `orch` starts executors (plugin

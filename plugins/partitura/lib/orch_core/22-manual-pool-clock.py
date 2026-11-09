@@ -5,7 +5,7 @@ ASSIGNMENT_TIMEOUT_MIN = 10
 
 
 def pool_state(pool_ids, check_min=None):
-    """.orchestra/handoffs/.pool.json: pooled ids, when the pool opened, its check interval, the last check reported.
+    """<state>/handoffs/.pool.json: pooled ids, when the pool opened, its check interval, the last check reported.
     Updated on every meta save (write_board)."""
     path = handoffs_root() / ".pool.json"
     state = read_json(path, {}, recover_corrupt=True)
@@ -72,7 +72,8 @@ def pool_event(metas, mark=True):
 
 @locked("project")
 def write_board():
-    """<project>/.orchestra/MANUAL.md — the manual lane at a glance for the operator (any editor or the agent's IDE)."""
+    """<project>/.partitura/MANUAL.md (or the old .orchestra/) — the manual lane at a glance for the operator (any
+    editor or the agent's IDE)."""
     every = all_metas()
     metas = [m for m in every if not m.get("archived")]
     states = {m["id"]: result_status(m) for m in metas}       # no workdir scans: the board is rewritten from hooks

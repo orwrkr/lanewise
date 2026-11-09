@@ -5,7 +5,15 @@
 # The plugin's bin/ is on the Bash tool's PATH in every Claude Code session, and `python3` may be missing there: on
 # Windows there is often only `python`, or the Microsoft Store alias. The search and its cache are those of
 # hooks/run.sh: the interpreter that passed is kept per platform in $ORCH_HOME/.hook-python-<platform>.
-HOME_DIR="${ORCH_HOME:-$HOME/.orchestra}"
+if [ -n "${ORCH_HOME:-}" ]; then
+  HOME_DIR="$ORCH_HOME"
+elif [ -d "$HOME/.partitura" ]; then
+  HOME_DIR="$HOME/.partitura"
+elif [ -d "$HOME/.orchestra" ]; then
+  HOME_DIR="$HOME/.orchestra"
+else
+  HOME_DIR="$HOME/.partitura"
+fi
 CACHE="$HOME_DIR/.hook-python-${OSTYPE:-posix}"
 if [ -f "$CACHE" ]; then
   CACHED=""
@@ -63,7 +71,11 @@ _PART_NAME = _re.compile(r"[0-9][0-9]-[^\\/]+\.py$")
 
 
 def _cache_file():
-    home = _os.environ.get("ORCH_HOME") or _os.path.join(_os.path.expanduser("~"), ".orchestra")
+    home = _os.environ.get("ORCH_HOME")
+    if not home:               # the same order as ORCH_HOME in 00-header.py: new name, old name, new name
+        new = _os.path.join(_os.path.expanduser("~"), ".partitura")
+        old = _os.path.join(_os.path.expanduser("~"), ".orchestra")
+        home = new if _os.path.isdir(new) or not _os.path.isdir(old) else old
     return _os.path.join(home, ".pycache", "orch_core.%s.bin" % _sys.implementation.cache_tag)
 
 

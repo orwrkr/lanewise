@@ -35,7 +35,7 @@ PROTOCOL_WRITE = PROTOCOL_START + """2. Work only inside `{wt}`, a separate git 
    same paths as the project folder around it: every file you read or change for this task must be under that
    folder, never its same-named original at the project root. Local files (`.env`, `node_modules`, builds) may be
    missing: install dependencies as the project instructions say; do not copy secrets: if you need one,
-   `STATUS: BLOCKED`. In `.orchestra/` outside that folder touch nothing except `{rel}/RESULT.md`.
+   `STATUS: BLOCKED`. In `{state}/` outside that folder touch nothing except `{rel}/RESULT.md`.
 3. Do not start other agents or `orch`: assigning tasks is the orchestrator's job.
 4. Check the result against the acceptance criteria (run the listed commands/tests).
 5. Do not commit and do not switch branches: the orchestrator reviews the changes in that worktree and commits them.
@@ -45,11 +45,11 @@ PROTOCOL_WRITE = PROTOCOL_START + """2. Work only inside `{wt}`, a separate git 
    `## Verification` (commands and their outcome), `## Open questions`.
 7. Writing RESULT.md with a final status is the completion signal for the orchestrator. Change nothing after that.
 """
-# The paste line is one line, for the clipboard too. Both kinds stop where the agent's file tools cannot open
-# .orchestra/ (git ignores it) instead of reaching it through the terminal; a read-only task also runs no commands.
+# The paste line is one line, for the clipboard too. Both kinds stop where the agent's file tools cannot open the
+# state folder (git ignores it) instead of reaching it through the terminal; a read-only task also runs no commands.
 PASTE_BASE = ("Execute the task described in {rel}/TASK.md, by the execution protocol at the end of that file "
               "(RESULT.md status markers).")
-PASTE_STOP = (" If your file tools can't open .orchestra/ because git ignores it, don't use the terminal to get "
+PASTE_STOP = (" If your file tools can't open {state}/ because git ignores it, don't use the terminal to get "
               "around that: say so in the chat and stop.")
 PASTE_READ = PASTE_BASE + " Run no shell commands unless the task lists them." + PASTE_STOP
 PASTE_WRITE = PASTE_BASE + " Work only inside {wt}, a separate git worktree." + PASTE_STOP
@@ -64,11 +64,11 @@ trigger: always_on
 # Partitura tasks
 
 This applies only when a message names a Partitura task (an id such as AG-0004); other conversations ignore it.
-The task file is `.orchestra/handoffs/<id>/TASK.md`; carry it out strictly by the protocol at the end of that file.
-- At the start — `.orchestra/handoffs/<id>/RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: <product · model>`.
+The task file is `{state}/handoffs/<id>/TASK.md`; carry it out strictly by the protocol at the end of that file.
+- At the start — `{state}/handoffs/<id>/RESULT.md` with the lines `STATUS: IN_PROGRESS` and `AGENT: <product · model>`.
 - At the end — the same file with `STATUS: DONE | BLOCKED | FAILED` and the report sections: without it the
   orchestrator will not know the task is finished.
-- The project rules ({rules}) are mandatory; scope — that task only; in `.orchestra/` — only that task's RESULT.md and, for a task that changes files, its own worktree.
+- The project rules ({rules}) are mandatory; scope — that task only; in `{state}/` — only that task's RESULT.md and, for a task that changes files, its own worktree.
 - A task that changes files names its own worktree: work only inside it.
 """
 AGENT_RE = re.compile(r"^\s*AGENT:\s*(.+?)\s*$", re.M)

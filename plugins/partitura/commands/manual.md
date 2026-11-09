@@ -8,7 +8,7 @@ Workflow — per `orch guide manual`.
 
 1. Empty or "show" → `orch handoff list`. Answer compactly: what's in the pool (ID, task, proposed agent
    and model, how long it has waited) and what's handed out (status, who is working). Mention the board
-   `.orchestra/MANUAL.md`.
+   `.partitura/MANUAL.md`.
 2. "AG-… to <agent>" / "I'll take AG-…" → `orch handoff take <ID> [--agent <agent>] [--model "<model>"] --clip`
    and show the card from the output in full: folder, model, line to paste (it is already on the clipboard).
    A task that changes files is made a worktree at the take; the card says where it works.

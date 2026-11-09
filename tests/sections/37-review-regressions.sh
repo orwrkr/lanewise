@@ -595,7 +595,7 @@ def assignment_recovery():
     branch = "ag/" + hid.lower()
     subprocess.run(["git", "branch", branch], cwd=str(proj), check=True)     # the branch is left from the first try
     good(["handoff", "take", hid])
-    assert meta(hid)["branch"] == branch and meta(hid)["workdir"] == ".orchestra/wt/" + hid, meta(hid)
+    assert meta(hid)["branch"] == branch and meta(hid)["workdir"] == ".partitura/wt/" + hid, meta(hid)
     clear_tasks()
     hid = offered()
     task = meta(hid); task.update(offered=None, taken=m.iso(m.now()), assigning="failure")
@@ -636,13 +636,13 @@ def meta_paths():
     proj_str = str(proj.resolve())
     base = m.meta_base(m.handoffs_root() / "X-0001" / "meta.json")
     assert Path(str(base)) == Path(proj_str), (base, proj_str)
-    # meta_base is pure path arithmetic: it never calls .resolve(), so a symlinked .orchestra can't redirect the
+    # meta_base is pure path arithmetic: it never calls .resolve(), so a symlinked .partitura can't redirect the
     # project, and the result does not depend on the cwd.
     fake = m.handoffs_root() / "X-9999" / "meta.json"
     with mock.patch.object(m.Path, "resolve", side_effect=AssertionError("meta_base resolved the path")):
         assert Path(str(m.meta_base(fake))) == Path(proj_str)
     # relative → absolute in memory, absolute → relative on save (round-trip)
-    assert Path(m.abs_path(".orchestra/handoffs/X-0001/RESULT.md", base)) == proj / ".orchestra/handoffs/X-0001/RESULT.md"
+    assert Path(m.abs_path(".partitura/handoffs/X-0001/RESULT.md", base)) == proj / ".partitura/handoffs/X-0001/RESULT.md"
     assert Path(m.abs_path(".", base)) == Path(proj_str)
     assert Path(m.abs_path("../proj.wt/X-0001", base)) == Path(proj_str).parent / "proj.wt" / "X-0001"
     assert m.rel_path(proj_str, base) == "."
@@ -657,10 +657,10 @@ def meta_paths():
     # a real task: on-disk relative, in-memory absolute, the card prints the full path
     hid = re.search(r"AG-\d+", good(["handoff", "new", "--title", "paths"])).group()
     raw = meta(hid)
-    assert raw["workdir"] == "." and raw["task_path"].startswith(".orchestra/handoffs/"), raw
+    assert raw["workdir"] == "." and raw["task_path"].startswith(".partitura/handoffs/"), raw
     task = m.load_meta(hid)
     assert Path(task["workdir"]) == Path(proj_str), task
-    assert Path(task["result_path"]) == proj / ".orchestra/handoffs" / hid / "RESULT.md", task
+    assert Path(task["result_path"]) == proj / ".partitura/handoffs" / hid / "RESULT.md", task
     assert task["workdir"] in good(["handoff", "show", hid])
     # an old meta with absolute paths loads, works, and becomes relative after a save
     old = dict(raw)
@@ -670,7 +670,7 @@ def meta_paths():
     assert Path(m.load_meta(hid)["workdir"]) == Path(proj_str)
     m.save_meta(m.load_meta(hid))
     after = meta(hid)
-    assert after["workdir"] == "." and after["task_path"].startswith(".orchestra/handoffs/"), after
+    assert after["workdir"] == "." and after["task_path"].startswith(".partitura/handoffs/"), after
     clear_tasks()
 
 def spend_limits():
@@ -692,7 +692,7 @@ def spend_limits():
     # a dated price (gpt-6-astra): cheaper before the promo ends, higher after
     assert m.price_for("gpt-6-astra", "codex", dt.datetime(2026, 10, 15, tzinfo=dt.timezone.utc))["input"] == 5.0
     assert m.price_for("gpt-6-astra", "codex", dt.datetime(2026, 11, 5, tzinfo=dt.timezone.utc))["input"] == 10.0
-    # a personal ~/.orchestra/prices.json overrides per model, leaves the rest alone
+    # a personal ~/.partitura/prices.json overrides per model, leaves the rest alone
     (home / "prices.json").write_text(json.dumps(
         {"usd_per_1m_tokens": {"deepseek-v4-pro": {"input": 1.0, "cache_read": 0.1, "output": 2.0}}}), encoding="utf-8")
     assert m.price_for("deepseek-v4-pro", "deepseek", peak)["input"] == 1.0

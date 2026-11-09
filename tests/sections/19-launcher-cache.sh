@@ -44,7 +44,7 @@ lc_home3="$(native "$T/cache-home-3")"
 lc_cache3="$lc_home3/.pycache/orch_core.$lc_tag.bin"
 ORCH_HOME="$lc_home3" $PY "$lc_copy2/bin/orch" --help >/dev/null 2>&1
 lc_key0=$(lc_key "$lc_cache3")
-# a part before the last one (28-argparse.py ends with the __main__ call)
+# a part before the last one (29-argparse.py ends with the __main__ call)
 printf 'print("EXTRA-PART-RAN")\n' > "$lc_copy2/lib/orch_core/01-extra.py"
 out=$(ORCH_HOME="$lc_home3" $PY "$lc_copy2/bin/orch" --help 2>&1)
 lc_key1=$(lc_key "$lc_cache3")
@@ -117,7 +117,7 @@ m = importlib.util.module_from_spec(importlib.util.spec_from_loader("orch_under_
 loader.exec_module(m)
 name = lambda f: f.__code__.co_filename.replace("\\", "/")
 assert name(m.iso).endswith("lib/orch_core/01-helpers.py"), name(m.iso)
-assert name(m.main).endswith("lib/orch_core/28-argparse.py"), name(m.main)
+assert name(m.main).endswith("lib/orch_core/29-argparse.py"), name(m.main)
 assert os.path.normcase(os.path.realpath(str(m.PLUGIN_ROOT))) == os.path.normcase(os.path.realpath(sys.argv[2])), m.PLUGIN_ROOT
 m.cmd_status = lambda a: 42
 assert m.main(["status"]) == 42

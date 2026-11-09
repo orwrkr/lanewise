@@ -13,7 +13,7 @@ Translate the request into `orch profile …` commands per `orch guide profiles`
 3. New profile or an edit → `orch profile set <provider> <name> …` (fields — in `orch profile set --help`).
    Project-wide requirements → `orch profile rules --set "TEXT"` (or `--clear`, optionally `--path <directory>`).
    The API key in a profile is only the variable name (`--key DEEPSEEK_API_KEY_WORK`). Don't ask for the key itself
-   or write it in chat: the operator adds the line `NAME=sk-…` to `~/.orchestra/secrets.env` themselves. For a new
+   or write it in chat: the operator adds the line `NAME=sk-…` to `~/.partitura/secrets.env` themselves. For a new
    Codex account, give the operator the login command from the output (`! CODEX_HOME=… codex login`).
 4. Show the result of `orch profile show`. If the plan has unstarted subtasks on executors that are now disabled or
    restricted — replan them and say what changed.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Partitura adapter template for a new CLI/API executor.
-# 1) Copy it to ~/.orchestra/adapters/<provider> (or to the plugin's adapters/<provider>), chmod +x.
+# 1) Copy it to ~/.partitura/adapters/<provider> (or to the plugin's adapters/<provider>), chmod +x.
 #    An adapter may also be written in Python (first line `#!/usr/bin/env python3`): orch then runs it with
 #    its own interpreter, which is simpler on Windows. Example: adapters/deepseek.
 # 2) Add the provider and its slots to the registry (orch registry init → providers.yaml).
@@ -31,7 +31,7 @@
 #   Even without exit 75, orch itself scans the log for phrases like "usage limit", "429", "rate limit".
 #
 # Directives in the header comments (first 40 lines):
-#   # orch-secrets: NAME1 NAME2      — take these keys from ~/.orchestra/secrets.env (if not in the environment);
+#   # orch-secrets: NAME1 NAME2      — take these keys from ~/.partitura/secrets.env (if not in the environment);
 #                                      the profile field `key: VAR` supplies the value of VAR under the name NAME1
 #   # orch-secrets-explicit: NAME1   — NAME1 is supplied only by an explicit profile `key`, never from secrets.env:
 #                                      for an adapter whose default is a login (codex, claude), a stray NAME1= line in

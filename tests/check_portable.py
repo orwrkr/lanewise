@@ -65,11 +65,21 @@ def generic_key_var(var):
     return any(low.startswith(k + "_") and low[len(k) + 1:] in GENERIC_LABELS for k in STANDARD_KEYS)
 
 
+def orch_home():
+    """The personal folder, as orch resolves it: ORCH_HOME; else ~/.partitura; else the old ~/.orchestra that an
+    installation made before 0.35.0 still uses; else ~/.partitura."""
+    v = os.environ.get("ORCH_HOME")
+    if v:
+        return Path(v)
+    new, old = Path.home() / ".partitura", Path.home() / ".orchestra"
+    return new if new.is_dir() or not old.is_dir() else old
+
+
 def private_names(root):
-    """{name: where it came from} for private projects and clients: `private_terms.txt` in ~/.orchestra (one per line,
-    # for a comment), and this machine's profile names, key variables and bound folders from profiles.json. Empty
-    without ~/.orchestra (CI). The source lets a contributor see why a common-looking name was flagged."""
-    home = Path(os.environ.get("ORCH_HOME") or Path.home() / ".orchestra")
+    """{name: where it came from} for private projects and clients: `private_terms.txt` in the personal folder (one per
+    line, # for a comment), and this machine's profile names, key variables and bound folders from profiles.json.
+    Empty without one (CI). The source lets a contributor see why a common-looking name was flagged."""
+    home = orch_home()
     names = {}
 
     def add(name, source):
@@ -82,7 +92,7 @@ def private_names(root):
     for term in terms:
         term = term.strip()
         if term and not term.startswith("#"):
-            add(term, "private_terms.txt in ~/.orchestra")
+            add(term, "private_terms.txt in ~/.partitura")
     try:
         data = json.loads((home / "profiles.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
@@ -194,7 +204,7 @@ def scan_worktree(root, identities):
             return []
         # git can't read it (a worktree made on Windows, seen from WSL): that must not pass as clean
         paths = [str(p.relative_to(root)) for p in sorted(root.rglob("*"))
-                 if not {".git", ".orchestra", "__pycache__"} & set(p.relative_to(root).parts)]
+                 if not {".git", ".partitura", ".orchestra", "__pycache__"} & set(p.relative_to(root).parts)]
     out = []
     for rel in paths:
         path = root / rel

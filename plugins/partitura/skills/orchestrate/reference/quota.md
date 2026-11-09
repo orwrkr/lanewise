@@ -23,4 +23,4 @@ No reset time given — don't make one up: set it without `--until` and say the 
   the DeepSeek balance itself (exit 75) and records them on the profile's key.
 - `busy` is set automatically for a model at provider capacity and lifts by itself.
 - After any change, move unstarted subtasks off unavailable slots to their fallback.
-- Stored in `~/.orchestra/availability.json`, shared by all projects. If unreadable, reads warn and assume no restrictions; quota changes refuse until the file is fixed.
+- Stored in `~/.partitura/availability.json`, shared by all projects. If unreadable, reads warn and assume no restrictions; quota changes refuse until the file is fixed.

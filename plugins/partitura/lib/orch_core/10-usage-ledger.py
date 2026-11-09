@@ -1,6 +1,6 @@
 # ───────────────────────── usage ledger ─────────────────────────
 #
-# ~/.orchestra/usage.jsonl, one record per line: kind run (CLI executor: model, task, tokens from the adapter's
+# ~/.partitura/usage.jsonl, one record per line: kind run (CLI executor: model, task, tokens from the adapter's
 # usage.json), handoff (manual task: agent, model, minutes) and session (Claude Code main thread + subagents,
 # snapshot at SessionEnd so the numbers outlive transcript cleanup). `orch usage` joins them per session.
 

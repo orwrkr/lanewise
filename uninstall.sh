@@ -3,14 +3,14 @@
 # macOS or Git Bash on Windows).
 # Claude Code: the standard way, `claude plugin uninstall` + `claude plugin marketplace remove` (Claude Code
 # settings are not edited by hand). Outside Claude Code: the orch launchers in ~/.local/bin. Personal data
-# (~/.orchestra: limits, profiles, keys, usage log) is kept; --purge deletes it too.
-# Per-project state (<project>/.orchestra/ with the worktrees of tasks that change files in .orchestra/wt/, the
-# Antigravity rule <project>/.agents/rules/partitura-task.md (orchestra-task.md before 0.34.0), worktrees
-# <project>.wt/ from `orch worktree`) is left
-# alone: the script only lists it. If you delete .orchestra/ by hand, run `git worktree prune` in the project.
+# (~/.partitura, or ~/.orchestra before 0.35.0: limits, profiles, keys, usage log) is kept; --purge deletes it too.
+# Per-project state (<project>/.partitura/, or .orchestra before 0.35.0, with the worktrees of tasks that change
+# files in wt/, the Antigravity rule <project>/.agents/rules/partitura-task.md (orchestra-task.md before 0.34.0),
+# worktrees <project>.wt/ from `orch worktree`) is left alone: the script only lists it. If you delete the state
+# folder by hand, run `git worktree prune` in the project.
 #
 #   bash uninstall.sh            # plugin and launchers
-#   bash uninstall.sh --purge    # plus ~/.orchestra
+#   bash uninstall.sh --purge    # plus the personal folder
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +19,15 @@ MARKET="partitura"
 LEGACY_MARKETS="orchestra orchestra-local"     # marketplace names of earlier versions
 LEGACY_PLUGINS="orchestra"                     # the plugin's name before 0.34.0
 PURGE=0; [[ "${1:-}" == "--purge" ]] && PURGE=1
-HOME_DIR="${ORCH_HOME:-$HOME/.orchestra}"
+if [[ -n "${ORCH_HOME:-}" ]]; then
+  HOME_DIR="$ORCH_HOME"
+elif [[ -d "$HOME/.partitura" ]]; then
+  HOME_DIR="$HOME/.partitura"
+elif [[ -d "$HOME/.orchestra" ]]; then
+  HOME_DIR="$HOME/.orchestra"
+else
+  HOME_DIR="$HOME/.partitura"
+fi
 
 say()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }

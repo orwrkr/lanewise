@@ -9,15 +9,15 @@ The development rules — structure, compatibility, isolation, language, what to
 ```bash
 git clone https://github.com/orwrkr/partitura && cd partitura
 bash install.sh          # installs the plugin from this folder: edits are live after /reload-plugins
-git config core.hooksPath .githooks     # stops absolute paths, your user name and private names (~/.orchestra/private_terms.txt, your profile names) from reaching a commit or a push
+git config core.hooksPath .githooks     # stops absolute paths, your user name and private names (~/.partitura/private_terms.txt, your profile names) from reaching a commit or a push
 ```
 
 On Windows run it in Git Bash; under WSL run it inside WSL. Each environment has its own installation and its own
-`~/.orchestra/`.
+`~/.partitura/`.
 
-`~/.orchestra/private_terms.txt` is optional: one private name per line (`#` starts a comment). The portability
+`~/.partitura/private_terms.txt` is optional: one private name per line (`#` starts a comment). The portability
 guard reads it at run time and flags those names — together with your profile names, key variables and bound
-folders from `~/.orchestra/profiles.json` — in anything you would commit or push; each finding says where the name
+folders from `~/.partitura/profiles.json` — in anything you would commit or push; each finding says where the name
 came from, so a common-looking folder or profile name is not a mystery.
 
 ## Before you open a pull request
@@ -50,7 +50,7 @@ The maintainer works with coding agents, orchestrated by the plugin itself. The 
 
 1. **Pick the item.** Take the next item from [ROADMAP.md](ROADMAP.md), or start from an issue.
 2. **Write the spec.** Make it self-contained: context, goal, scope, acceptance criteria, how to verify, limits.
-   - For an executor, it goes in `.orchestra/prompts/<name>.md`, which git ignores. An executor sees only the spec, not
+   - For an executor, it goes in `.partitura/prompts/<name>.md`, which git ignores. An executor sees only the spec, not
      the conversation that led to it.
    - Use neutral labels such as `client` or `work`: executors copy what they read.
 3. **Make a worktree.** `orch worktree add <name>` creates `../<repo>.wt/<name>` on the branch `orch/<name>`. Give each

@@ -2,10 +2,10 @@
 # Partitura — executor registry (models × effort × lane)
 #
 # The orchestrator (Claude) reads it before distributing tasks. Edit freely:
-#   orch registry init            → a copy in ~/.orchestra/providers.yaml (for all projects)
-#   orch registry init --project  → a copy in <project>/.orchestra/providers.yaml (overrides)
+#   orch registry init            → a copy in ~/.partitura/providers.yaml (for all projects)
+#   orch registry init --project  → a copy in <project>/.partitura/providers.yaml (overrides)
 # The registry is what exists at all. What of it is allowed in a given project and with which key/account is
-# set by executor profiles (orch profile show; ~/.orchestra/profiles.json): they disable a provider,
+# set by executor profiles (orch profile show; ~/.partitura/profiles.json): they disable a provider,
 # narrow models and effort, forbid writing and set rules.
 # Models and effort levels change: check against /model in Claude Code, /model in codex,
 # the model picker in Antigravity and api-docs.deepseek.com (Codex: `codex debug models`). As of 2026-11-05.
@@ -178,7 +178,7 @@ providers:
     invoke: orch run deepseek --model <model> --effort <effort> --mode analysis|write [--cd <worktree>] [--allow 'Bash(<command>:*)']
     efforts: [low, medium, high, xhigh, max]
     notes: >
-      Pay per token from the DeepSeek balance (DEEPSEEK_API_KEY in the environment or ~/.orchestra/secrets.env).
+      Pay per token from the DeepSeek balance (DEEPSEEK_API_KEY in the environment or ~/.partitura/secrets.env).
       The executor is an isolated headless Claude Code with a DeepSeek model: Read/Grep/Glob/Edit/Write/Bash,
       but without hooks, plugins, MCP or the operator's settings. It can read and write only inside --cd;
       Bash — only git reads and the rules from --allow (grant tests and build explicitly, e.g.

@@ -69,7 +69,7 @@ SECRETS_FILE = ORCH_HOME / "secrets.env"
 
 
 def load_secrets():
-    """KEY=value lines of ~/.orchestra/secrets.env (API keys for adapters; never stored in a repository)."""
+    """KEY=value lines of ~/.partitura/secrets.env (API keys for adapters; never stored in a repository)."""
     try:
         text = SECRETS_FILE.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
@@ -310,7 +310,7 @@ def cmd_run(a):
     meta = {"id": run_id, "provider": provider, "profile": prof.name if prof.explicit else None,
             "profile_source": prof.source, "model": model, "effort": effort, "mode": a.mode, "task": task,
             "session": session_id(), "cwd": str(cwd), "started": iso(now()), "adapter": str(adapter),
-            "allow": a.allow or []}
+            "allow": a.allow or [], "pid": os.getpid()}
     write_json(run_dir / "meta.json", meta)
     role_file = run_dir / "role.md"
     role_file.write_text(WORKER_BRIEF.format(provider=provider, model=model or "default model",

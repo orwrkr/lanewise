@@ -62,10 +62,10 @@ def normalize_endpoint(url):
 
 
 def lead_endpoints():
-    """Endpoints of other providers that can lead a session (`# orch-endpoint:` in an adapter, here or in
-    ~/.orchestra/adapters). A gateway or proxy to Claude itself is not among them."""
+    """Endpoints of other providers that can lead a session (`# orch-endpoint:` in an adapter, here or in the personal
+    folder's adapters/). A gateway or proxy to Claude itself is not among them."""
     out = set()
-    home = Path(os.environ.get("ORCH_HOME") or (Path.home() / ".orchestra"))
+    home = H.orch_home()
     for base in (Path(__file__).resolve().parent, home / "adapters"):
         try:
             files = [f for f in base.iterdir() if f.is_file() and not f.name.startswith((".", "_"))]

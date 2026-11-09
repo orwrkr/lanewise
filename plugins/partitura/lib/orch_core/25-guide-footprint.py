@@ -37,12 +37,12 @@ def cmd_footprint(a):
                 print("  %s — account directory of profile %s@%s (holds the login; delete it yourself if the account "
                       "is no longer needed)" % (home, provider, name))
     projects = {r.get("project_path") for r in ledger_read() if r.get("project_path")}
-    if (project_dir() / ".orchestra").exists():
+    if (project_dir() / state_dir_name()).exists():
         projects.add(str(project_root(project_dir())))
     for p in sorted(x for x in projects if x):
         p = Path(p)
-        found = [s for s in (p / ".orchestra", p / AG_RULE_PATH, p / LEGACY_AG_RULE_PATH, p.parent / (p.name + ".wt"))
-                 if s.exists()]
+        found = [s for s in (p / STATE_DIR_NAME, p / LEGACY_STATE_DIR_NAME, p / AG_RULE_PATH, p / LEGACY_AG_RULE_PATH,
+                             p.parent / (p.name + ".wt")) if s.exists()]
         if found:
             names = []
             for s in found:                 # a path inside the project as it reads there, not the project's path again
@@ -51,9 +51,9 @@ def cmd_footprint(a):
                 except ValueError:
                     names.append(str(s))    # a sibling worktree, <project>.wt
             print("  project %s: %s (+ their lines in .git/info/exclude; %s is the general Antigravity rule, which "
-                  "stays after a task closes; .orchestra/wt/ holds the worktrees of tasks that change files, and if "
-                  ".orchestra/ is deleted by hand run `git worktree prune` there)"
-                  % (p, ", ".join(names), AG_RULE_PATH))
+                  "stays after a task closes; the state folder (its older name is %s) holds the worktrees of tasks "
+                  "that change files in wt/, and if it is deleted by hand run `git worktree prune` there)"
+                  % (p, ", ".join(names), AG_RULE_PATH, LEGACY_STATE_DIR_NAME))
     print("Remove everything outside Claude Code: bash uninstall.sh --purge (without --purge personal data is kept).")
     return 0
 

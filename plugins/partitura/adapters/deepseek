@@ -4,7 +4,7 @@
 # DeepSeek is a model API without an agent loop of its own. The loop (read/search/edit/run tools) is a headless
 # Claude Code (`claude -p`) pointed at DeepSeek's Anthropic-compatible endpoint. The worker is isolated from the
 # operator's Claude Code:
-#   - own config dir ~/.orchestra/workers/deepseek-<platform>: no operator settings, plugins, hooks, OAuth,
+#   - own config dir <personal folder>/workers/deepseek-<platform>: no operator settings, plugins, hooks, OAuth,
 #     sessions; auto-memory off;
 #   - --setting-sources user: hooks/settings of the target repo are not loaded (its CLAUDE.md is passed explicitly);
 #   - --strict-mcp-config: no MCP servers; session variables of the orchestrator are stripped (orch + below);
@@ -39,7 +39,7 @@ import _claude_headless as H  # noqa: E402
 BASE_URL = os.environ.get("ORCH_DEEPSEEK_BASE_URL") or "https://api.deepseek.com/anthropic"
 DEFAULT_MODEL = "deepseek-flash"
 FAST_MODEL = os.environ.get("ORCH_DEEPSEEK_FAST_MODEL") or "deepseek-flash"
-NO_KEY = "DEEPSEEK_API_KEY is not set — add a line DEEPSEEK_API_KEY=sk-… to ~/.orchestra/secrets.env (or the environment)"
+NO_KEY = "DEEPSEEK_API_KEY is not set — add a line DEEPSEEK_API_KEY=sk-… to %s (or the environment)"
 
 
 def say(msg):
@@ -81,7 +81,7 @@ def main():
     H.utf8_stdio()
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
-        say(NO_KEY)
+        say(NO_KEY % (H.orch_home() / "secrets.env"))
         return 1
     if "--launch-env" in sys.argv[1:]:
         return launch_env(key)
@@ -91,7 +91,7 @@ def main():
         return 127
     run_dir = Path(os.environ["ORCH_RUN_DIR"])
     model = os.environ.get("ORCH_MODEL") or DEFAULT_MODEL
-    home = Path(os.environ.get("ORCH_HOME") or Path.home() / ".orchestra")
+    home = H.orch_home()
     config_dir = home / "workers" / ("deepseek-" + sys.platform)
     config_dir.mkdir(parents=True, exist_ok=True)
     cmd = H.command(claude, model, run_dir, ["--setting-sources", "user"],

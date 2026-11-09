@@ -4,7 +4,7 @@
 # `orch spend` sets a USD limit per scope (a profile label: deepseek, deepseek@work, codex@work, claude@work, …)
 # for all projects or one project. Spend is counted from the usage ledger: executor `run` records whose
 # `billing` is api, and `session` records with a `lead` (the orchestrator itself on a key). The counters are
-# cached incrementally in ~/.orchestra/spend_cache.json (like session_tokens): byte offset + running totals,
+# cached incrementally in ~/.partitura/spend_cache.json (like session_tokens): byte offset + running totals,
 # restarted on a new calendar month or a shrunken ledger. --force does NOT bypass a limit, like profile max_open.
 
 def _read_prices(path):
@@ -45,7 +45,7 @@ def _price_layers():
 
 
 def load_prices():
-    """Built-in registry/prices.json, overridden per model (and per source) by a personal ~/.orchestra/prices.json,
+    """Built-in registry/prices.json, overridden per model (and per source) by a personal ~/.partitura/prices.json,
     except what a newer built-in source supersedes (see _price_layers)."""
     base, personal, personal_rates, personal_sources, _ = _price_layers()
     if not personal:

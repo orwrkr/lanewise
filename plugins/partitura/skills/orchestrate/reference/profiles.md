@@ -3,7 +3,7 @@
 A profile is an executor's settings: which API key or account, which models and efforts are allowed, whether it may
 write, which tasks to use it for, free-form rules. Each provider has a default profile; a project (or a directory
 containing all its projects) can pin another profile or `off`. The built-in profile `default` is the plain
-environment with no restrictions. Stored in `~/.orchestra/profiles.json` (shared by all projects, not in the
+environment with no restrictions. Stored in `~/.partitura/profiles.json` (shared by all projects, not in the
 repository). Effective ones — `orch status` / `orch profile show`; all of them — `orch profile list`; fields —
 `orch profile set --help`.
 
@@ -34,7 +34,7 @@ repository). Effective ones — `orch status` / `orch profile show`; all of them
 These private operator requirements survive profile fallback; profile `rules` belong to the key and lapse with it.
 
 - Never ask for or record the API key itself: the profile holds the variable name; the operator puts the value as a
-  line `NAME=sk-…` into `~/.orchestra/secrets.env`.
+  line `NAME=sk-…` into `~/.partitura/secrets.env`.
 - A profile with an API `key` is **API-billed** (per token), not a subscription: no `Codex subscription:` /
   `Claude subscription:` budget line, no SURPLUS/TIGHT, and routing treats it as the offload lane. The key is
   *explicit-only* — only the profile's `key` supplies it; a `NAME=…` line in `secrets.env` alone never switches a

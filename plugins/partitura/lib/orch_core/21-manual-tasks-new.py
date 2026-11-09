@@ -80,15 +80,19 @@ def task_writes(m):
 
 
 def nested_worktree(m):
-    """'.orchestra/wt/AG-0004' for a task whose worktree lives inside the project's state folder, else ''. A task of
-    an older version has its worktree next to the project (<project>.wt/) and is not nested."""
+    """'.partitura/wt/AG-0004' for a task whose worktree lives inside the project's state folder (under the name it
+    actually uses), else ''. A task of an older version has its worktree next to the project (<project>.wt/) and is
+    not nested."""
     if not m.get("branch") or not m.get("workdir"):
         return ""
-    try:
-        rel = Path(m["workdir"]).relative_to(state_dir(create=False) / "wt")
-    except ValueError:
-        return ""
-    return ".orchestra/wt/%s" % rel.as_posix()
+    proj = project_dir()
+    for name in (STATE_DIR_NAME, LEGACY_STATE_DIR_NAME):
+        try:
+            rel = Path(m["workdir"]).relative_to(proj / name / "wt")
+        except ValueError:
+            continue
+        return "%s/wt/%s" % (name, rel.as_posix())
+    return ""
 
 
 def is_git_repo(path):
@@ -102,8 +106,9 @@ def ensure_ag_rule(proj, rules):
         (proj / LEGACY_AG_RULE_PATH).unlink()
     except OSError:
         pass
+    state = state_dir_name(proj)
     rule = proj / AG_RULE_PATH
-    text = AG_RULE.format(rules=", ".join(rules) or "CLAUDE.md / AGENTS.md, if present")
+    text = AG_RULE.format(state=state, rules=", ".join(rules) or "CLAUDE.md / AGENTS.md, if present")
     try:
         if rule.is_file() and rule.read_text(encoding="utf-8") == text:
             return
@@ -111,23 +116,25 @@ def ensure_ag_rule(proj, rules):
         pass
     rule.parent.mkdir(parents=True, exist_ok=True)
     rule.write_text(text, encoding="utf-8")
-    ensure_git_exclude(proj, (".orchestra/", AG_RULE_PATH))
+    ensure_git_exclude(proj, (state + "/", AG_RULE_PATH))
 
 
 def assign_handoff(m, prof):
     """Hand a task to the agent that takes it: TASK.md (role, project rules, protocol) and the paste line. TASK.md and
-    RESULT.md live in the project's .orchestra/handoffs/<id>/ for every task. A read-only task works in the project
-    folder; a task that changes files gets a worktree of its own inside it, .orchestra/wt/<id>, on branch ag/<id>."""
+    RESULT.md live in the project's <state>/handoffs/<id>/ for every task (the state folder's name is the one the
+    project uses). A read-only task works in the project folder; a task that changes files gets a worktree of its own
+    inside it, <state>/wt/<id>, on branch ag/<id>."""
     proj = project_dir()
     hid = m["id"]
     writes = task_writes(m)
+    state = state_dir_name()
     branch = None
     if writes:
         workdir, branch = make_worktree(hid, m.get("base") or "HEAD", "ag/" + hid.lower(), root=state_dir(create=True) / "wt")
     else:
         workdir = proj
-    wt = ".orchestra/wt/%s" % hid
-    rel = ".orchestra/handoffs/%s" % hid
+    wt = "%s/wt/%s" % (state, hid)
+    rel = "%s/handoffs/%s" % (state, hid)
     task_dir = proj / rel
     task_dir.mkdir(parents=True, exist_ok=True)
     body = (handoffs_root() / hid / "BODY.md").read_text(encoding="utf-8")
@@ -139,7 +146,7 @@ def assign_handoff(m, prof):
     if rules:
         header += "- Project rules — mandatory, read them before you start: %s\n" % ", ".join("`%s`" % r for r in rules)
     header += "- Created: %s\n\n" % now().strftime("%Y-%m-%d %H:%M")
-    protocol = (PROTOCOL_WRITE if writes else PROTOCOL_READ).format(rel=rel, wt=wt, branch=branch)
+    protocol = (PROTOCOL_WRITE if writes else PROTOCOL_READ).format(rel=rel, wt=wt, branch=branch, state=state)
     (task_dir / "TASK.md").write_text(header + body.rstrip() + "\n" + protocol, encoding="utf-8")
     if m["provider"] == "antigravity":
         ensure_ag_rule(proj, rules)
@@ -147,7 +154,7 @@ def assign_handoff(m, prof):
         "taken": iso(now()), "profile": prof.name if prof.explicit else None, "workdir": str(workdir),
         "branch": branch, "task_path": str(task_dir / "TASK.md"),
         "result_path": str(task_dir / "RESULT.md"),
-        "paste": (PASTE_WRITE if writes else PASTE_READ).format(rel=rel, wt=wt),
+        "paste": (PASTE_WRITE if writes else PASTE_READ).format(rel=rel, wt=wt, state=state),
     })
     if branch:
         m["activity_baseline"] = scan_latest_mtime(workdir)   # the checkout is not "operator activity"

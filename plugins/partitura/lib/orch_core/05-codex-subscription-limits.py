@@ -3,7 +3,7 @@
 # Codex writes session logs to $CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl; a token_count event carries
 # `rate_limits` (5-hour and weekly windows by window_minutes). The format is undocumented — parse defensively:
 # anything unexpected means "no data", never an error. `orch statusline` caches the newest windows per account in
-# ~/.orchestra/codex_usage.json, keyed by the effective CODEX_HOME (so a profile with --home has its own entry);
+# ~/.partitura/codex_usage.json, keyed by the effective CODEX_HOME (so a profile with --home has its own entry);
 # `orch run codex` refreshes right after finishing. A window whose reset has passed counts as absent.
 
 CODEX_USAGE_FILE = ORCH_HOME / "codex_usage.json"

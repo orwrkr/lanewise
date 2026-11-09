@@ -74,11 +74,11 @@ non-overlapping files.
 `STATUS: DONE | PARTIAL | BLOCKED` with sections. Their own agent loop runs in a separate process (Codex — its own,
 DeepSeek — an isolated headless Claude Code); you see the outcome and the log. `orch` passes the executor role and
 the project rules (CLAUDE.md, AGENTS.md) itself — put only the task in the prompt.
-1. Prompt → a file `.orchestra/prompts/<short>.md` (context, goal, scope, acceptance criteria, how to verify):
+1. Prompt → a file `.partitura/prompts/<short>.md` (context, goal, scope, acceptance criteria, how to verify):
    the executor doesn't see our conversation.
 2. Writing task in parallel with other work → `orch worktree add <name>`, then `--cd <path>`.
 3. Launch **in the background** (Bash, `run_in_background: true`); `--task` is for the usage log:
-   `orch run codex --model gpt-6.1-terra --effort high --mode write --cd <path> --task "<short>" --prompt-file .orchestra/prompts/x.md`
+   `orch run codex --model gpt-6.1-terra --effort high --mode write --cd <path> --task "<short>" --prompt-file .partitura/prompts/x.md`
    `orch run deepseek --model deepseek-flash --effort high --mode write --cd <path> --allow 'Bash(npm test:*)' --task "<short>" --prompt-file …`
    The DeepSeek key and the Codex account come from the project profile. `--profile <name>` — only at the
    operator's direct request.
@@ -96,7 +96,7 @@ the project rules (CLAUDE.md, AGENTS.md) itself — put only the task in the pro
 7. **Always verify** the result (diff, tests, build), then cross-review if the code is significant.
 8. Executors don't delegate further: a BLOCKED asking for another executor or for permissions is yours to resolve.
 
-**Other providers** — adapter `adapters/<name>` (or `~/.orchestra/adapters/<name>`) + a registry entry, called as
+**Other providers** — adapter `adapters/<name>` (or `~/.partitura/adapters/<name>`) + a registry entry, called as
 `orch run <name> …`; an MCP provider — call its tool directly, quota via `orch quota`.
 
 ## 5. Manual lane (Antigravity and similar) — `orch guide manual`

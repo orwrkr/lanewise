@@ -18,6 +18,8 @@ Subcommands
   usage [--session|--list]   per session: which model did what and how many tokens
   guide [topic]              reference parts of the orchestrate skill
   footprint                  what Partitura created outside Claude Code (cleanup list)
+  migrate [PATH] [--all] [--home] [--yes]
+                             move the old .orchestra folders to .partitura (dry run by default)
   worktree add NAME          isolated git worktree for a write task
   registry path|show|init|diff
                              model registry (providers.yaml); show is brief, [PROVIDER|--full|--json] for more;
@@ -41,7 +43,23 @@ from pathlib import Path
 from types import SimpleNamespace
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-ORCH_HOME = Path(os.environ.get("ORCH_HOME", str(Path.home() / ".orchestra")))
+
+
+def resolve_home():
+    """The personal folder: ORCH_HOME when set; else ~/.partitura when it exists; else ~/.orchestra when it exists;
+    else ~/.partitura (new installs). Old folders keep working as they are — `orch migrate` moves them."""
+    v = os.environ.get("ORCH_HOME")
+    if v:
+        return Path(v)
+    new, old = Path.home() / ".partitura", Path.home() / ".orchestra"
+    if new.is_dir():
+        return new
+    if old.is_dir():
+        return old
+    return new
+
+
+ORCH_HOME = resolve_home()
 IS_WINDOWS = os.name == "nt"
 EXIT_QUOTA = 75
 EXIT_TIMEOUT = 124
@@ -63,7 +81,7 @@ SPEND_WARN_PCT = 80            # a warning (status line, 💡 event) starts at t
 SPEND_POLL_SECONDS = 15        # how often a run checks the executor's live token cost
 TERMINAL = ("DONE", "BLOCKED", "FAILED", "CANCELLED", "REASSIGNED")
 STATUS_RE = re.compile(r"^\s*STATUS:\s*([A-Z_]+)", re.M)
-SCAN_SKIP = {".git", ".orchestra", "node_modules", ".venv", "venv", "__pycache__", "bin", "obj",
+SCAN_SKIP = {".git", ".partitura", ".orchestra", "node_modules", ".venv", "venv", "__pycache__", "bin", "obj",
              "dist", "build", ".idea", ".vs", "target"}
 
 

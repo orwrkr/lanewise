@@ -6,7 +6,7 @@
 |---|---|
 | orchestrator (main thread) | the Claude Code session transcript: model, effort, tokens of every response |
 | subagent `orch-…` | the session's subagent files: agent type, task description (the `description` field of the Agent call), model |
-| `codex`, `deepseek@work`, … | the log `~/.orchestra/usage.jsonl`: `orch run` runs (model, `--task` or the prompt's first line, status, time, tokens from the adapter) |
+| `codex`, `deepseek@work`, … | the log `~/.partitura/usage.jsonl`: `orch run` runs (model, `--task` or the prompt's first line, status, time, tokens from the adapter) |
 | `antigravity (manual)` | manual tasks: agent and model from the `AGENT:` line in RESULT.md, status, time; manual agents don't report tokens |
 
 - `orch usage --list` — the project's recent sessions (and one row for the records made outside any session);

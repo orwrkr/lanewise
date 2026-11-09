@@ -3,4 +3,6 @@
 *.png binary
 *.jpg binary
 *.zip binary
-*.cmd text eol=crlf
+# cmd.exe wants CRLF. It is stored with CRLF and never converted, so a `git archive` matches the repository: the
+# plugin directory refuses a repository whose archive differs from it.
+*.cmd -text

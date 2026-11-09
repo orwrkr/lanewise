@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.33.3
+
+The first release since the repository went public. Behaviour is unchanged.
+
+- **The plugin has an icon** (`.claude-plugin/icon.png`, source `assets/icon.svg`), so `claude plugin validate
+  --strict` passes without warnings.
+- **The plugin README says what it runs, sends and fetches.** There is no telemetry. `orch` makes one network
+  request of its own, DeepSeek's balance, and the section lists what triggers it; `ORCH_BALANCE=off` turns it off. It
+  also says what each executor sends to which provider and where keys go.
+- **CodeQL and Dependabot** run on the repository. CodeQL checks the Python code and the workflows. Dependabot keeps
+  the workflows' actions current. Two names CodeQL took for secrets were renamed: `ENV_FILE_DENY`, the deny rules
+  that keep workers away from `.env` files, and `key_origin()`, which says where a key variable is set.
+
 ## 0.33.2
 
 - **Forked sessions no longer count copied history again.** Claude Code's `--fork-session` copies the earlier

@@ -11,6 +11,12 @@ At most one process item is in progress at a time. A new one starts only with th
 expected benefit and a limit on what it may cost ([AGENTS.md](AGENTS.md#rules)). Work on the workflow itself can
 quietly crowd out the product, and this rule keeps it in view.
 
+## Small
+
+- **`orch doctor` checks who can read `secrets.env`.** *product* On Linux, macOS and WSL, warn when
+  `~/.orchestra/secrets.env` can be read by group or others, and give the fix (`chmod 600`). Native Windows has no
+  such mode bits, so skip the check there. Why keys stay in that file: SECURITY.md, "Secrets".
+
 ## Parked
 
 - **A Gemini executor.** *product* Gemini CLI fits the adapter contract technically:

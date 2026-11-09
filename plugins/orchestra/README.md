@@ -36,6 +36,10 @@ Or, without a clone, from a terminal: `claude plugin install orchestra --marketp
 plugin's `orch` is then available to the session's Bash tool, but not in your terminal: for `orch launch` and the
 terminal commands below use the clone and `install.sh`.
 
+Orchestra works in Claude Code only. Its `bin/` folder puts `orch` on the Bash tool's PATH, and claude.ai and
+Cowork don't install a plugin that has one. It would not work there anyway: it needs hooks, local CLIs (`claude`,
+`codex`), `~/.orchestra/` and git worktrees on your machine.
+
 You can keep the clone anywhere: the plugin is installed straight from this folder, and edits in it are "live" — they take effect after `/reload-plugins` or in a new session. Both environments are supported: Claude Code in **WSL** and Claude Code running **natively on Windows** (where its Bash tool is Git Bash). Each environment has its own Claude Code installation, so run `install.sh` in every environment you work in:
 
 ```bash
@@ -79,7 +83,7 @@ Orchestra has no telemetry: it reports nothing to its author or to anyone else.
   - `orch launch deepseek`: an interactive Claude Code session whose every model request goes to DeepSeek.
 - **Claude subagents** (`orch-*`) run inside your session, like any Claude Code subagent.
 - **Manual agents** (Antigravity and similar) are never started or driven: Orchestra writes task files and reads the results.
-- **Keys** live in `~/.orchestra/secrets.env` or the environment. Each reaches only the adapter that declares it (`# orch-secrets: …`), and `orch key` hands a Claude API-key profile's key to Claude Code as its `apiKeyHelper`.
+- **Keys** live in `~/.orchestra/secrets.env` or the environment. Each reaches only the adapter that declares it (`# orch-secrets: …`), and `orch key` hands a Claude API-key profile's key to Claude Code as its `apiKeyHelper`. They are not plugin options (`userConfig`), which Claude Code keeps in secure storage. Claude Code passes those values to hooks and MCP servers but not to commands run through the Bash tool, and that is how `orch run` starts. Exporting a key into the session instead would hand it to every command the session runs.
 
 ### Codex
 Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex login`. The login is stored in `~/.codex` and is separate for Windows and WSL. The adapter is written in Python and drives `codex exec --json`: from the event stream it builds a compact log and a token count. On Windows it runs the native `codex.exe` from the npm package, bypassing the `codex.cmd` wrapper, and needs no Git Bash. If only the Codex app is installed, the adapter finds the `codex.exe` bundled with it. You can also point it at a binary explicitly: `ORCH_CODEX_BIN=<path>`. `codex debug models` lists the models available to your account.

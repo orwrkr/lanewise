@@ -1,4 +1,4 @@
-# Orchestra
+# <img src="assets/icon.svg" alt="" width="40" align="top"> Orchestra
 
 [![tests](https://github.com/orwrkr/orchestra/actions/workflows/tests.yml/badge.svg)](https://github.com/orwrkr/orchestra/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

@@ -66,6 +66,21 @@ Outside Claude Code the plugin creates only:
 
 Line endings are pinned to LF (`.gitattributes`), except for `*.cmd`, which use CRLF. If files still end up with CRLF (which breaks the bash scripts and `orch`), `install.sh` detects it and tells you how to fix it.
 
+### What it runs, sends and fetches
+
+Orchestra has no telemetry: it reports nothing to its author or to anyone else.
+
+- **Hooks** (SessionStart, UserPromptSubmit, PostToolUse, Stop, SessionEnd) run `orch hook <event>` on your machine. They read and write `~/.orchestra/` and the project's `.orchestra/`, and print short events into the session. The status line (`orch statusline`, if you set it) only reads local files.
+- **`orch`'s only network request** is DeepSeek's balance, `GET https://api.deepseek.com/user/balance`, sent with each DeepSeek key your profiles use. It happens on `orch balance`, `orch status` and `orch spend`, before a DeepSeek run that a per-session budget checks and after every DeepSeek run, and on SessionStart through a detached `orch balance --quiet` when the stored figure is stale. `ORCH_BALANCE=off` turns it off everywhere. `orch prices check` makes no web request: it writes a task for an agent.
+- **Executors** start only through `orch run …` or `orch launch`. Each sends its provider the task prompt, the project rules (CLAUDE.md, AGENTS.md) and whatever files it reads or commands it runs in its working folder:
+  - Codex: `codex exec` → OpenAI, on your Codex login or API key;
+  - DeepSeek: headless Claude Code (`claude -p`) → `https://api.deepseek.com/anthropic` with your DeepSeek key (`ORCH_DEEPSEEK_BASE_URL` changes the address);
+  - Claude: headless Claude Code on your own Claude login or API key → Anthropic;
+  - `orch launch deepseek`: an interactive Claude Code session whose every model request goes to DeepSeek.
+- **Claude subagents** (`orch-*`) run inside your session, like any Claude Code subagent.
+- **Manual agents** (Antigravity and similar) are never started or driven: Orchestra writes task files and reads the results.
+- **Keys** live in `~/.orchestra/secrets.env` or the environment. Each reaches only the adapter that declares it (`# orch-secrets: …`), and `orch key` hands a Claude API-key profile's key to Claude Code as its `apiKeyHelper`.
+
 ### Codex
 Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex login`. The login is stored in `~/.codex` and is separate for Windows and WSL. The adapter is written in Python and drives `codex exec --json`: from the event stream it builds a compact log and a token count. On Windows it runs the native `codex.exe` from the npm package, bypassing the `codex.cmd` wrapper, and needs no Git Bash. If only the Codex app is installed, the adapter finds the `codex.exe` bundled with it. You can also point it at a binary explicitly: `ORCH_CODEX_BIN=<path>`. `codex debug models` lists the models available to your account.
 

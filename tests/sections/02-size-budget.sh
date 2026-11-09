@@ -1,7 +1,7 @@
 echo "── size budget (what the plugin puts into a session)"
 # standalone setup (a no-op once the earlier sections have run)
 ROOT_REPO="$(cd "$PLUGIN/../.." && pwd)"
-SIZES="$(native "$PLUGIN/tests/check_sizes.py")"
+SIZES="$(native "$TESTS/check_sizes.py")"
 out=$($PY "$SIZES" --root "$(native "$ROOT_REPO")" 2>&1); rc=$?
 [[ $rc -eq 0 ]] && ok "the repository is within its size budgets" || { bad "a size budget is exceeded"; echo "$out"; }
 SZ="$T/sizes-tree"; mkdir -p "$SZ/plugins/orchestra" || die "cannot create the size-budget tree"

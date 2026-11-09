@@ -1,9 +1,9 @@
 echo "── test runner (section list and selection)"
-RT="$PLUGIN/tests/run_tests.sh"
+RT="$TESTS/run_tests.sh"
 out=$(bash "$RT" --list 2>&1); rc=$?
 expect_rc 0 $rc "--list succeeds"
 missing=""
-for f in "$PLUGIN"/tests/sections/[0-9][0-9]-*.sh; do
+for f in "$TESTS"/sections/[0-9][0-9]-*.sh; do
   n="${f##*/}"; n="${n%.sh}"
   case "$out" in *"$n  "*) ;; *) missing="$missing $n" ;; esac
 done

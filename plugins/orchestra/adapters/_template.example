@@ -53,7 +53,7 @@ set -euo pipefail
 
 # Example: an HTTP API (key from the environment or secrets.env, never from project files) — text answer only,
 # no agent loop: good for a review/second opinion, not for editing code
-# curl -sS https://api.example.com/v1/chat -H "Authorization: Bearer $EXAMPLE_API_KEY" \
+# curl -sS "<the provider's chat endpoint>" -H "Authorization: Bearer <its key variable>" \
 #   --data-binary @"$ORCH_PROMPT_FILE" > "$ORCH_OUTPUT_FILE"
 
 echo "template adapter: edit me" >&2

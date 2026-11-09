@@ -4,7 +4,8 @@
 # Usage: bash tests/run_tests.sh
 set -uo pipefail
 die() { echo "Self-test setup failed: $*" >&2; exit 1; }
-PLUGIN="$(cd "$(dirname "$0")/.." && pwd)" || die "cannot locate plugin"
+TESTS="$(cd "$(dirname "$0")" && pwd)" || die "cannot locate the tests"
+PLUGIN="$(cd "$TESTS/../plugins/orchestra" && pwd)" || die "cannot locate plugin"
 PY=""
 # Real interpreters before a Windows Store / Python install manager alias (…/WindowsApps/), as hooks/run.sh does: an
 # alias costs a redirect on every start, and the install manager reads a script's first line (bin/orch: #!/bin/sh).

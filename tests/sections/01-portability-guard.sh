@@ -1,5 +1,5 @@
 echo "── portability guard (no machine-specific content)"
-GUARD="$(native "$PLUGIN/tests/check_portable.py")"
+GUARD="$(native "$TESTS/check_portable.py")"
 ROOT_REPO="$(cd "$PLUGIN/../.." && pwd)"
 out=$($PY "$GUARD" --root "$(native "$ROOT_REPO")" 2>&1); rc=$?
 [[ $rc -eq 0 ]] && ok "the repository itself is clean" || { bad "machine-specific content in the repository"; echo "$out"; }

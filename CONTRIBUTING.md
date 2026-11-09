@@ -23,11 +23,11 @@ came from, so a common-looking folder or profile name is not a mystery.
 ## Before you open a pull request
 
 ```bash
-bash plugins/orchestra/tests/run_tests.sh      # must end with "failed: 0"
+bash tests/run_tests.sh      # must end with "failed: 0"
 claude plugin validate ./plugins/orchestra && claude plugin validate .
 ```
 
-While you work, `bash plugins/orchestra/tests/run_tests.sh --list` shows the sections and `run_tests.sh <slug>` runs
+While you work, `bash tests/run_tests.sh --list` shows the sections and `run_tests.sh <slug>` runs
 one alone, in seconds to a couple of minutes; run the whole suite before you open the pull request.
 
 Running the suite natively on Windows (Git Bash) takes half an hour or more: use WSL, or let CI run it on your pull

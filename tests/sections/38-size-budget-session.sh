@@ -1,6 +1,6 @@
 echo "── size budget: session start in a used home"
 # standalone setup (a no-op once the earlier sections have run)
-SIZES="$(native "$PLUGIN/tests/check_sizes.py")"
+SIZES="$(native "$TESTS/check_sizes.py")"
 # what every session starts with, measured on a copy of the suite's home as the tests above left it (profiles, limits,
 # spend, manual tasks): a copy, so this hook run registers no session in the suite's own home
 rm -rf "$T/sizes-home" && cp -R "$ORCH_HOME" "$T/sizes-home" || die "cannot copy the suite's home"

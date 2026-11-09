@@ -26,7 +26,7 @@ jobs:
         run: |
           git config --global user.name "ci"
           git config --global user.email "ci@example.invalid"
-          bash plugins/orchestra/tests/run_tests.sh
+          bash tests/run_tests.sh
 
   python38:
     name: Python 3.8 compatibility

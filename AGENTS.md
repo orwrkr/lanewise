@@ -30,7 +30,7 @@ be in the user's language; whatever goes into the repository is English.
   `deepseek` — headless Claude Code on the DeepSeek API, also the `orch launch deepseek` lead; `claude` — headless
   Claude Code on the user's own login; `_claude_headless.py` — shared by the last two; contract template)
 - `plugins/orchestra/bin/orch.cmd` — `orch` launcher for PowerShell/cmd on Windows
-- `plugins/orchestra/tests/run_tests.sh` — self-test (fake codex and claude, temporary git repository): preamble
+- `tests/run_tests.sh` — self-test (fake codex and claude, temporary git repository): preamble
   `lib.sh`, then `sections/NN-<slug>.sh`; `--list` names them, `run_tests.sh <sel>…` runs some alone
 - `install.sh` / `uninstall.sh` — plugin install and uninstall (the standard way, via `claude plugin`)
 - `.github/workflows/tests.yml` — CI: the self-test on Ubuntu and Windows, Python 3.8 compatibility
@@ -39,7 +39,7 @@ be in the user's language; whatever goes into the repository is English.
 ## Before committing
 
 ```bash
-wsl.exe -- bash -lc 'bash plugins/orchestra/tests/run_tests.sh'   # must report failed: 0; from the repo root, default WSL distro
+wsl.exe -- bash -lc 'bash tests/run_tests.sh'   # must report failed: 0; from the repo root, default WSL distro
 claude plugin validate ./plugins/orchestra && claude plugin validate .
 ```
 While working, run just the sections you touched (`run_tests.sh <slug>`); the full suite before a commit.

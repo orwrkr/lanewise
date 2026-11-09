@@ -109,7 +109,7 @@ def report(rows):
 
 def main():
     p = argparse.ArgumentParser(description="A size budget for what the plugin puts into a session.")
-    p.add_argument("--root", default=str(Path(__file__).resolve().parents[3]),
+    p.add_argument("--root", default=str(Path(__file__).resolve().parents[1]),
                    help="repository root (default: the one this script is in)")
     p.add_argument("--output", metavar="NAME", choices=sorted(OUTPUT_BUDGETS),
                    help="measure the text on stdin against the budget of this output: " + ", ".join(sorted(OUTPUT_BUDGETS)))

@@ -23,7 +23,3 @@ quietly crowd out the product, and this rule keeps it in view.
   here (AGENTS.md). Gemini CLI is left to Code Assist Enterprise and paid Gemini API or Vertex keys, and scripted use
   through a consumer login risks the account. Revisit if a paid Gemini API key or Vertex project is wanted. A quota hit
   shows up only as exit 1 with text on stderr, so the adapter would have to read that text.
-
-## Release
-
-The repository stays private until the items above are done. Making it public is the maintainer's decision.

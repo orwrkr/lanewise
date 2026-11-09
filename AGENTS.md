@@ -55,7 +55,7 @@ Changed `orch` behaviour — add a check to its section in `tests/sections/`. Ch
   tests or commit messages (examples use `/path/to/…`, `<you>`; test data, the user `me`); the repository works from any
   location. `tests/check_portable.py` enforces this in the self-test and in the git hooks (`.githooks`); don't bypass it.
 - No names of private projects or clients, in code, tests, docs, sample data, commit messages or tags, in any commit:
-  this repository is or may become public. Use a neutral label (`client`, `work`), also in specifications given to
+  this repository is public. Use a neutral label (`client`, `work`), also in specifications given to
   executors, which copy what they read. The guard reads the names at run time from `~/.orchestra` (`private_terms.txt`,
   this machine's profile names, key variables and bound folders), and its `pre-push` hook checks every commit a push
   would send; CI has no such list, so this holds only on a machine that has it.

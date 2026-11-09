@@ -11,6 +11,13 @@ At most one process item is in progress at a time. A new one starts only with th
 expected benefit and a limit on what it may cost ([AGENTS.md](AGENTS.md#rules)). Work on the workflow itself can
 quietly crowd out the product, and this rule keeps it in view.
 
+## Next
+
+- **The plugin's folders follow its name.** *product* 0.34.0 renamed Orchestra to Partitura but kept the internal
+  names: `~/.orchestra`, `<project>/.orchestra/`, the `ORCH_*` variables. Move the folders to `.partitura` the way the
+  Antigravity rule moved: `orch` renames them on first use, fixes their lines in `.git/info/exclude` and any git
+  worktrees under them, and still reads the old place while a folder has not moved.
+
 ## Small
 
 - **`orch doctor` checks who can read `secrets.env`.** *product* On Linux, macOS and WSL, warn when

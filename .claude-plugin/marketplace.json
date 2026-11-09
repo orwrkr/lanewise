@@ -1,14 +1,14 @@
 {
-  "name": "orchestra",
-  "description": "The Orchestra plugin: a multi-model orchestrator for Claude Code (Claude + Codex + DeepSeek + manual agents such as Antigravity)",
+  "name": "partitura",
+  "description": "The Partitura plugin: a multi-model orchestrator for Claude Code (Claude + Codex + DeepSeek + manual agents such as Antigravity)",
   "owner": {
     "name": "Roman Obukhov",
     "url": "https://github.com/orwrkr"
   },
   "plugins": [
     {
-      "name": "orchestra",
-      "source": "./plugins/orchestra",
+      "name": "partitura",
+      "source": "./plugins/partitura",
       "description": "Multi-model orchestrator for Claude Code: Claude subagents + Codex CLI + DeepSeek + a pool of manual tasks for Antigravity, quota- and profile-aware routing by model and effort, DeepSeek as an alternative lead, per-session usage log"
     }
   ]

@@ -26,7 +26,7 @@ PLACEHOLDER_USERS = {"me", "you", "user", "username", "name", "example", "public
 GENERIC_NAMES = {"root", "user", "admin", "administrator", "runner", "runneradmin", "ubuntu", "home", "github", "test", "ci",
                  "ci@example.invalid"}
 # Profile labels and folders that name nothing private, and the standard key variables.
-GENERIC_LABELS = {"default", "personal", "work", "main", "off", "inherit", "login", "key", "client", "orchestra", "orchestrator"}
+GENERIC_LABELS = {"default", "personal", "work", "main", "off", "inherit", "login", "key", "client", "orchestra", "orchestrator", "partitura"}
 STANDARD_KEYS = {"deepseek_api_key", "anthropic_api_key", "anthropic_auth_token", "openai_api_key", "codex_api_key",
                  "gemini_api_key", "google_api_key"}
 # A drive path below these is the same on every machine.

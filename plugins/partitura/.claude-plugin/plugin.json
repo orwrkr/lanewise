@@ -1,0 +1,22 @@
+{
+  "name": "partitura",
+  "version": "0.34.0",
+  "description": "Multi-model orchestrator: routes subtasks to Claude subagents, Codex CLI, DeepSeek (isolated headless Claude Code on the DeepSeek API) and a pool of manual tasks (Antigravity & co) by difficulty, effort, subscription limits, balance, operator availability and per-project executor profiles (API keys, Codex accounts, rules); USD spend limits for API-billed executors (orch spend); DeepSeek can lead instead of Claude, with Claude switched off entirely; per-session usage log (model, task, tokens); WSL/Linux and native Windows",
+  "author": {
+    "name": "Roman Obukhov",
+    "url": "https://github.com/orwrkr"
+  },
+  "homepage": "https://github.com/orwrkr/partitura",
+  "repository": "https://github.com/orwrkr/partitura",
+  "keywords": [
+    "orchestration",
+    "codex",
+    "deepseek",
+    "antigravity",
+    "multi-model",
+    "routing",
+    "profiles",
+    "usage"
+  ],
+  "license": "MIT"
+}

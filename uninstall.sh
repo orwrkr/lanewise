@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Removes the Orchestra plugin from Claude Code in THIS environment (WSL / Linux / macOS or Git Bash on Windows).
+# Removes the Partitura plugin (called Orchestra before 0.34.0) from Claude Code in THIS environment (WSL / Linux /
+# macOS or Git Bash on Windows).
 # Claude Code: the standard way, `claude plugin uninstall` + `claude plugin marketplace remove` (Claude Code
 # settings are not edited by hand). Outside Claude Code: the orch launchers in ~/.local/bin. Personal data
 # (~/.orchestra: limits, profiles, keys, usage log) is kept; --purge deletes it too.
 # Per-project state (<project>/.orchestra/ with the worktrees of tasks that change files in .orchestra/wt/, the
-# Antigravity rule <project>/.agents/rules/orchestra-task.md, worktrees <project>.wt/ from `orch worktree`) is left
+# Antigravity rule <project>/.agents/rules/partitura-task.md (orchestra-task.md before 0.34.0), worktrees
+# <project>.wt/ from `orch worktree`) is left
 # alone: the script only lists it. If you delete .orchestra/ by hand, run `git worktree prune` in the project.
 #
 #   bash uninstall.sh            # plugin and launchers
@@ -12,9 +14,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ORCH="$ROOT/plugins/orchestra/bin/orch"
-MARKET="orchestra"
-LEGACY_MARKETS="orchestra-local"     # marketplace names of earlier versions
+ORCH="$ROOT/plugins/partitura/bin/orch"
+MARKET="partitura"
+LEGACY_MARKETS="orchestra orchestra-local"     # marketplace names of earlier versions
+LEGACY_PLUGINS="orchestra"                     # the plugin's name before 0.34.0
 PURGE=0; [[ "${1:-}" == "--purge" ]] && PURGE=1
 HOME_DIR="${ORCH_HOME:-$HOME/.orchestra}"
 
@@ -34,19 +37,21 @@ TMPF="$(mktemp)"
 [[ -n "$PY" && -f "$ORCH" ]] && "$PY" "$ORCH" footprint 2>/dev/null | sed -n '/^Outside Claude Code/,$p' | grep '  project ' > "$TMPF" || true
 
 if command -v claude >/dev/null 2>&1; then
-  say "Removing the plugin orchestra@$MARKET and the marketplace $MARKET (the standard way, via claude plugin)"
-  claude plugin uninstall "orchestra@$MARKET" >/dev/null 2>&1 && say "plugin removed" || warn "the plugin was not installed"
+  say "Removing the plugin partitura@$MARKET and the marketplace $MARKET (the standard way, via claude plugin)"
+  claude plugin uninstall "partitura@$MARKET" >/dev/null 2>&1 && say "plugin removed" || warn "the plugin was not installed"
   claude plugin marketplace remove "$MARKET" >/dev/null 2>&1 && say "marketplace removed" || warn "the marketplace was not registered"
   for m in $LEGACY_MARKETS; do          # an installation of an earlier version, if any
-    claude plugin uninstall "orchestra@$m" >/dev/null 2>&1 && say "plugin orchestra@$m removed" || true
+    for p in $LEGACY_PLUGINS; do
+      claude plugin uninstall "$p@$m" >/dev/null 2>&1 && say "plugin $p@$m removed" || true
+    done
     claude plugin marketplace remove "$m" >/dev/null 2>&1 && say "marketplace $m removed" || true
   done
 else
-  warn "claude CLI not found: remove the plugin in Claude Code via /plugin → orchestra → Uninstall"
+  warn "claude CLI not found: remove the plugin in Claude Code via /plugin → partitura → Uninstall"
 fi
 
 for f in "$HOME/.local/bin/orch" "$HOME/.local/bin/orch.cmd"; do
-  if [[ -L "$f" ]] || { [[ -f "$f" ]] && grep -q "orch launcher\|plugins/orchestra/bin/orch" "$f" 2>/dev/null; }; then
+  if [[ -L "$f" ]] || { [[ -f "$f" ]] && grep -q "orch launcher\|plugins/partitura/bin/orch\|plugins/orchestra/bin/orch" "$f" 2>/dev/null; }; then
     rm -f "$f" && say "removed launcher $(wpath "$f")"
   fi
 done
@@ -58,7 +63,7 @@ elif [[ -d "$HOME_DIR" ]]; then
 fi
 
 if [[ -s "$TMPF" ]]; then
-  warn "Orchestra state is left in projects (excluded from git via .git/info/exclude); delete it by hand if you don't need it:"
+  warn "Partitura state is left in projects (excluded from git via .git/info/exclude); delete it by hand if you don't need it:"
   cat "$TMPF"
 fi
 rm -f "$TMPF"

@@ -56,19 +56,22 @@ grep -q "Branch" "$TK" && bad "a read-only TASK.md names a branch" || ok "a read
 contains "$(cat "$MP/.orchestra/MANUAL.md")" "in the project folder: \`$NMP\`" "the board follows the card"
 
 # one general rule file, not one per task
-RULE="$MP/.agents/rules/orchestra-task.md"
+RULE="$MP/.agents/rules/partitura-task.md"
 [[ -f "$RULE" ]] && grep -q "trigger: always_on" "$RULE" && ok "Antigravity rule written into the project folder" || bad "rule missing"
-grep -q "This applies only when a message names an Orchestra task (an id such as AG-0004); other conversations ignore it." "$RULE" \
+grep -q "This applies only when a message names a Partitura task (an id such as AG-0004); other conversations ignore it." "$RULE" \
   && grep -q "The task file is \`.orchestra/handoffs/<id>/TASK.md\`" "$RULE" && ok "the rule is general: it names no task" || bad "rule text"
 grep -q "A task that changes files names its own worktree: work only inside it." "$RULE" && ok "the rule tells a writing task to stay in its worktree" || bad "rule: worktree line"
 grep -q "$R1" "$RULE" && bad "the rule names the first task" || ok "the rule does not name the task that wrote it"
-grep -q "^.agents/rules/orchestra-task.md$" "$MP/.git/info/exclude" && ok "the rule is excluded from git" || bad "rule not excluded"
+grep -q "^.agents/rules/partitura-task.md$" "$MP/.git/info/exclude" && ok "the rule is excluded from git" || bad "rule not excluded"
 RULE_SUM=$(cksum < "$RULE")
 out=$(printf 'x' | mt $ORCH handoff new --title "read two" --max-open 99); R2=$(mt_id "$out")
 [[ "$(cksum < "$RULE")" == "$RULE_SUM" && $(ls "$MP/.agents/rules" | wc -l) -eq 1 ]] && ok "two open tasks share the one rule file" || bad "rule changed or multiplied"
 echo "stale" > "$RULE"
+printf 'old rule\n' > "$MP/.agents/rules/orchestra-task.md"      # the rule's name before 0.34.0
 printf 'x' | mt $ORCH handoff new --title "read three" --max-open 99 >/dev/null
 [[ "$(cksum < "$RULE")" == "$RULE_SUM" ]] && ok "a different rule file is rewritten at the next assignment" || bad "rule not restored"
+[[ ! -e "$MP/.agents/rules/orchestra-task.md" ]] && ok "the rule under its name before 0.34.0 goes away" \
+  || bad "the old rule file is left beside the new one"
 
 # a read-only task starts with its RESULT.md only: a file touched in the project after the take starts nothing
 sleep 2; echo "other work" >> "$MP/f.txt"
@@ -267,7 +270,7 @@ expect_rc 1 $rc "offer --write outside git is refused"
 contains "$out" "give the task read-only" "offer --write outside git: says what to do"
 out=$(printf 'x' | ng $ORCH handoff offer --title "no git, offered" --max-offers 99); NGO=$(mt_id "$out")
 ng $ORCH handoff take "$NGO" --max-open 99 >/dev/null; expect_rc 0 $? "outside git: offer and take (read-only)"
-[[ -f "$NG/.orchestra/handoffs/$NGO/TASK.md" && -f "$NG/.agents/rules/orchestra-task.md" ]] && ok "outside git: TASK.md and the rule are written" || bad "outside git: files missing"
+[[ -f "$NG/.orchestra/handoffs/$NGO/TASK.md" && -f "$NG/.agents/rules/partitura-task.md" ]] && ok "outside git: TASK.md and the rule are written" || bad "outside git: files missing"
 [[ -e "$NG/.git" ]] && bad "orch created a repository" || ok "outside git: nothing creates a repository"
 out=$(printf 'x' | ng $ORCH handoff offer --title "no git, old" --max-offers 99); NGW=$(mt_id "$out")
 $PY - "$(native "$NG/.orchestra/handoffs/$NGW/meta.json")" <<'EOF'
@@ -281,13 +284,13 @@ contains "$out" "needs a git repository for its worktree" "and the line says why
 contains "$(ng $ORCH handoff list)" "$NGW *OFFERED" "it stays in the pool"
 printf 'STATUS: DONE\nok\n' > "$NG/.orchestra/handoffs/$NGO/RESULT.md"
 out=$(ng $ORCH handoff check); contains "$out" "$NGO finished: STATUS DONE" "outside git: completion detected"
-out=$(ng $ORCH footprint); contains "$out" ".agents/rules/orchestra-task.md" "footprint names the general Antigravity rule"
+out=$(ng $ORCH footprint); contains "$out" ".agents/rules/partitura-task.md" "footprint names the general Antigravity rule"
 contains "$out" "git worktree prune" "footprint tells what to do about worktree entries if .orchestra/ is deleted by hand"
-contains "$out" "project .*: \.orchestra, \.agents/rules/orchestra-task.md" "footprint names the project's own paths relative to it"
-grep -q "orchestra-task.md" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh names the rule" || bad "uninstall.sh does not name the rule"
+contains "$out" "project .*: \.orchestra, \.agents/rules/partitura-task.md" "footprint names the project's own paths relative to it"
+grep -q "partitura-task.md" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh names the rule" || bad "uninstall.sh does not name the rule"
 grep -q "git worktree prune" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh mentions git worktree prune" || bad "uninstall.sh: prune"
 grep -q "Yours to remove: the clone folder" "$PLUGIN/../../uninstall.sh" && ok "uninstall.sh: the clone folder and a PATH line you added are yours to remove" || bad "uninstall.sh: no line about the clone folder"
-grep -q "orchestra-task.md" "$PLUGIN/README.md" && ok "README names the rule among what the plugin leaves behind" || bad "README: rule missing"
+grep -q "partitura-task.md" "$PLUGIN/README.md" && ok "README names the rule among what the plugin leaves behind" || bad "README: rule missing"
 grep -q "effort High --worktree\|always \`--worktree\`" "$PLUGIN/skills/orchestrate/reference/manual.md" && bad "manual.md still offers --worktree" || ok "manual.md no longer offers --worktree"
 grep -q "\[--worktree\]" "$PLUGIN/registry/providers.yaml" && bad "the registry still offers --worktree" || ok "the registry no longer offers --worktree"
 cd "$REPO" || die "back from the manual-task fixtures"

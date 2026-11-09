@@ -4,7 +4,7 @@ out=$(FAKE_CODEX=ok CLAUDECODE=1 CLAUDE_CODE_MESSAGING_TOKEN=parent-secret \
 expect_rc 0 $rc "successful run"
 contains "$out" "\[OK\]" "status OK printed"
 contains "$out" "add a function" "final output returned"
-contains "$out" "Prompt was: # Role: Orchestra executor" "executor role goes before the task"
+contains "$out" "Prompt was: # Role: Partitura executor" "executor role goes before the task"
 contains "$out" "STATUS: DONE | PARTIAL | BLOCKED" "role defines the report format"
 contains "$out" 'Run an allowed command on its own, without `cd`, `git -C`, `&&`, `;` or' "role: run an allowed command unwrapped"
 contains "$out" "a permission rule matches the command as written" "role: says why a wrapped command is denied"

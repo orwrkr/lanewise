@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 100 100">
-  <title>Orchestra</title>
+  <title>Partitura</title>
   <!-- A conductor's baton pointing at four executors. Full-bleed square: hosts round the corners themselves. -->
   <rect width="100" height="100" fill="#1C1E33"/>
   <path d="M62 40 L50 22.8 M62 40 L70.9 21 M62 40 L82.9 38.2 M62 40 L74 57.2" fill="none" stroke="#F5F1E8"

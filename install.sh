@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the Orchestra plugin into Claude Code straight from THIS folder.
+# Installs the Partitura plugin (called Orchestra before 0.34.0) into Claude Code straight from THIS folder.
 # Environments: WSL / Linux / macOS and Windows (Git Bash, for Claude Code running natively on Windows).
 # Each environment has its own Claude Code installation: run the script in every environment you work in.
 # The installation is "live": edits in the repository take effect after /reload-plugins or in a new session.
@@ -9,10 +9,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ORCH="$ROOT/plugins/orchestra/bin/orch"
-MARKET="orchestra"
-PLUGIN="orchestra@$MARKET"
-LEGACY_MARKETS="orchestra-local"     # marketplace names of earlier versions
+ORCH="$ROOT/plugins/partitura/bin/orch"
+MARKET="partitura"
+PLUGIN="partitura@$MARKET"
+LEGACY_MARKETS="orchestra orchestra-local"     # marketplace names of earlier versions
+LEGACY_PLUGINS="orchestra"                     # the plugin's name before 0.34.0
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) WIN=1 ;; *) WIN=0 ;; esac
 
 say()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
@@ -53,7 +54,9 @@ MARKETS="$(claude plugin marketplace list 2>/dev/null || true)"
 for m in $MARKET $LEGACY_MARKETS; do
   if grep -qE "(^|[^[:alnum:]_-])$m([^[:alnum:]_-]|$)" <<<"$MARKETS"; then
     say "Removing the previous installation of $m"
-    claude plugin uninstall "orchestra@$m" >/dev/null 2>&1 || true
+    for p in partitura $LEGACY_PLUGINS; do
+      claude plugin uninstall "$p@$m" >/dev/null 2>&1 || true
+    done
     claude plugin marketplace remove "$m" >/dev/null 2>&1 || true
   fi
 done
@@ -66,12 +69,12 @@ say "Installing $PLUGIN"
 claude plugin install "$PLUGIN"
 
 mkdir -p "$HOME/.local/bin"
-chmod +x "$ORCH" "$ROOT"/plugins/orchestra/adapters/{codex,deepseek,claude} 2>/dev/null || true
+chmod +x "$ORCH" "$ROOT"/plugins/partitura/adapters/{codex,deepseek,claude} 2>/dev/null || true
 if [[ $WIN == 1 ]]; then
   # in Git Bash a symlink is a plain copy, but orch finds adapters and the registry next to itself: use launchers
   # the absolute path, not the command name: `python3` in Git Bash is often the Microsoft Store alias (~0.2 s a start)
   printf '#!/bin/sh\n# orch launcher (Git Bash) → %s\nexec "%s" "%s" "$@"\n' "$ORCH" "$PYEXE" "$(cygpath -m "$ORCH")" > "$HOME/.local/bin/orch"
-  printf '@echo off\r\nrem orch launcher (cmd / PowerShell)\r\ncall "%s" %%*\r\n' "$(cygpath -w "$ROOT/plugins/orchestra/bin/orch.cmd")" \
+  printf '@echo off\r\nrem orch launcher (cmd / PowerShell)\r\ncall "%s" %%*\r\n' "$(cygpath -w "$ROOT/plugins/partitura/bin/orch.cmd")" \
     > "$HOME/.local/bin/orch.cmd"
   say "orch → ~/.local/bin/orch (Git Bash) and orch.cmd (PowerShell / cmd)"
 else
@@ -98,7 +101,7 @@ fi
 grep -q '✔ Codex CLI' <<<"$DOCTOR" || warn "Codex CLI not found: npm i -g @openai/codex && codex login"
 grep -q '✔ DEEPSEEK_API_KEY\|✔ DeepSeek@' <<<"$DOCTOR" || \
   warn "DeepSeek: put the key as a DEEPSEEK_API_KEY=sk-… line in $(wpath "$HOME_DIR/secrets.env") (not in the repository)"
-say "Executor profiles: orch profile show · manual task pool: /orchestra:manual · session usage: orch usage (inside a Claude Code session)"
+say "Executor profiles: orch profile show · manual task pool: /partitura:manual · session usage: orch usage (inside a Claude Code session)"
 say "DeepSeek as the lead instead of Claude: orch launch deepseek [--no-claude] (from a terminal)"
 say "Claude budget mode (use the 5-hour window before it expires): set \"orch statusline\" as your status line (orch guide budget)"
 say "What the plugin created outside Claude Code: orch footprint · uninstall: bash uninstall.sh [--purge]"

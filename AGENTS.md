@@ -1,6 +1,6 @@
-# Orchestra — plugin development
+# Partitura — plugin development
 
-The repository is a Claude Code marketplace (`orchestra`) with a single plugin `plugins/orchestra/`: an orchestrator
+The repository is a Claude Code marketplace (`partitura`) with a single plugin `plugins/partitura/`: an orchestrator
 that hands out subtasks to Claude subagents, Codex CLI, DeepSeek and manual agents (Antigravity and similar), and
 can run with DeepSeek instead of Claude as the lead. These are the shared rules for any agent working on the
 repository: Codex and Antigravity read this file themselves, Claude Code — via `CLAUDE.md` (`@AGENTS.md`), the
@@ -16,20 +16,20 @@ be in the user's language; whatever goes into the repository is English.
 
 ## Structure
 
-- `plugins/orchestra/bin/orch` — `orch` launcher: runs the parts below, with cached bytecode
-- `plugins/orchestra/lib/orch_core/NN-<area>.py` — CLI code by area (Python 3.8+, stdlib only). The parts run in
+- `plugins/partitura/bin/orch` — `orch` launcher: runs the parts below, with cached bytecode
+- `plugins/partitura/lib/orch_core/NN-<area>.py` — CLI code by area (Python 3.8+, stdlib only). The parts run in
   name order in one namespace and must parse as one file when joined; code goes in its area's part
-- `plugins/orchestra/skills/orchestrate/SKILL.md` — core routing rules (loaded on every skill invocation — keep it
+- `plugins/partitura/skills/orchestrate/SKILL.md` — core routing rules (loaded on every skill invocation — keep it
   compact); details — `skills/orchestrate/reference/*.md`, served by `orch guide <section>`
-- `plugins/orchestra/registry/providers.yaml` — built-in model registry; the personal one — `~/.orchestra/providers.yaml`
-- `plugins/orchestra/agents/orch-*.md` — executor subagents (model + effort)
-- `plugins/orchestra/commands/*.md` — `/orchestra:*`
-- `plugins/orchestra/hooks/hooks.json` — SessionStart / UserPromptSubmit / PostToolUse / Stop / SessionEnd →
+- `plugins/partitura/registry/providers.yaml` — built-in model registry; the personal one — `~/.orchestra/providers.yaml`
+- `plugins/partitura/agents/orch-*.md` — executor subagents (model + effort)
+- `plugins/partitura/commands/*.md` — `/partitura:*`
+- `plugins/partitura/hooks/hooks.json` — SessionStart / UserPromptSubmit / PostToolUse / Stop / SessionEnd →
   `hooks/run.sh` → `orch hook <event>`
-- `plugins/orchestra/adapters/` — adapters for automated executors (Python: `codex` — `codex exec --json`;
+- `plugins/partitura/adapters/` — adapters for automated executors (Python: `codex` — `codex exec --json`;
   `deepseek` — headless Claude Code on the DeepSeek API, also the `orch launch deepseek` lead; `claude` — headless
   Claude Code on the user's own login; `_claude_headless.py` — shared by the last two; contract template)
-- `plugins/orchestra/bin/orch.cmd` — `orch` launcher for PowerShell/cmd on Windows
+- `plugins/partitura/bin/orch.cmd` — `orch` launcher for PowerShell/cmd on Windows
 - `tests/run_tests.sh` — self-test (fake codex and claude, temporary git repository): preamble
   `lib.sh`, then `sections/NN-<slug>.sh`; `--list` names them, `run_tests.sh <sel>…` runs some alone
 - `install.sh` / `uninstall.sh` — plugin install and uninstall (the standard way, via `claude plugin`)
@@ -40,7 +40,7 @@ be in the user's language; whatever goes into the repository is English.
 
 ```bash
 wsl.exe -- bash -lc 'bash tests/run_tests.sh'   # must report failed: 0; from the repo root, default WSL distro
-claude plugin validate ./plugins/orchestra && claude plugin validate .
+claude plugin validate ./plugins/partitura && claude plugin validate .
 ```
 While working, run just the sections you touched (`run_tests.sh <slug>`); the full suite before a commit.
 Git Bash on Windows is left to CI (`.github/workflows/tests.yml`): five minutes there, half an hour or more locally,
@@ -90,7 +90,7 @@ Changed `orch` behaviour — add a check to its section in `tests/sections/`. Ch
   `.agents/rules/orchestra-task.md`, and, for a task that changes files, its git worktree `.orchestra/wt/<id>`.
 - Personal data (limits, the personal registry, profiles and project bindings, keys, usage log) lives in
   `~/.orchestra/`, not in the repository.
-- Bump the version in `plugins/orchestra/.claude-plugin/plugin.json` when behaviour changes: plugin installs from
+- Bump the version in `plugins/partitura/.claude-plugin/plugin.json` when behaviour changes: plugin installs from
   GitHub are cached by version.
 - A version that reaches `main` gets a signed tag `vX.Y.Z` on its last commit, at the merge, once CI is green on its
   pull request (`.github/workflows/tests.yml`: the self-test on Ubuntu and Windows, vermin). A tag never moves: a fix

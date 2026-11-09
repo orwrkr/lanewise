@@ -88,7 +88,7 @@ main = [a("m1", "claude-opus-5-5", 10, 100, 1000, 50), a("m1", "claude-opus-5-5"
 open(os.path.join(d, "sess-test.jsonl"), "w", encoding="utf-8").write("\n".join(main) + "\n")
 open(os.path.join(d, "sess-test", "subagents", "agent-a1.jsonl"), "w", encoding="utf-8").write(
     a("s1", "claude-sonnet-5-5", 3, 30, 300, 7, agent="a1", effort="medium") + "\n")
-json.dump({"agentType": "orchestra:orch-sonnet-high", "description": "Find naïve parse calls"},
+json.dump({"agentType": "partitura:orch-sonnet-high", "description": "Find naïve parse calls"},
           open(os.path.join(d, "sess-test", "subagents", "agent-a1.meta.json"), "w", encoding="utf-8"), ensure_ascii=False)
 EOF
 out=$($ORCH usage)

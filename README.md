@@ -1,6 +1,6 @@
-# <img src="assets/icon.svg" alt="" width="40" align="top"> Orchestra
+# <img src="assets/icon.svg" alt="" width="40" align="top"> Partitura
 
-[![tests](https://github.com/orwrkr/orchestra/actions/workflows/tests.yml/badge.svg)](https://github.com/orwrkr/orchestra/actions/workflows/tests.yml)
+[![tests](https://github.com/orwrkr/partitura/actions/workflows/tests.yml/badge.svg)](https://github.com/orwrkr/partitura/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **A multi-model orchestrator plugin for [Claude Code](https://claude.com/claude-code).** The lead session breaks a
@@ -23,10 +23,12 @@ entirely if you want.
 Works with Claude Code in WSL/Linux and natively on Windows. Needs Claude Code itself (installed and logged in),
 Python ≥ 3.8 (standard library only) and git; npm only for the optional Codex line below.
 
+Partitura was called **Orchestra** before 0.34.0: [upgrading](CHANGELOG.md#0340) takes one command.
+
 ## Quick start
 
 ```bash
-git clone https://github.com/orwrkr/orchestra && cd orchestra
+git clone https://github.com/orwrkr/partitura && cd partitura
 bash install.sh                 # Git Bash on Windows; inside WSL for a WSL installation
 ```
 
@@ -47,10 +49,10 @@ Or without a clone, from a terminal (the plugin's `orch` is then not in your ter
 tool):
 
 ```bash
-claude plugin install orchestra --marketplace orwrkr/orchestra
+claude plugin install partitura --marketplace orwrkr/partitura
 ```
 
-Then `cd` into your project, start `claude` and run `/orchestra:status`; `claude plugin list` shows whether the
+Then `cd` into your project, start `claude` and run `/partitura:status`; `claude plugin list` shows whether the
 plugin is enabled. Give Claude Code a multi-step task and the `orchestrate` skill takes over. Optional executors:
 
 ```bash
@@ -63,26 +65,26 @@ In `orch doctor`, `✔` is fine, `·` is optional and not set up, `✘` is a pro
 
 | In a session | |
 |---|---|
-| `/orchestra:run <task>` | plan → assign models and effort → execute |
-| `/orchestra:status` | limits, profiles, manual tasks |
-| `/orchestra:manual` | the manual task pool: "AG-0004 to Antigravity" |
-| `/orchestra:profile …` | "no DeepSeek in this project", "Codex on the second account" |
-| `/orchestra:usage` | who did what and how many tokens it took |
+| `/partitura:run <task>` | plan → assign models and effort → execute |
+| `/partitura:status` | limits, profiles, manual tasks |
+| `/partitura:manual` | the manual task pool: "AG-0004 to Antigravity" |
+| `/partitura:profile …` | "no DeepSeek in this project", "Codex on the second account" |
+| `/partitura:usage` | who did what and how many tokens it took |
 
-All eight commands, including `/orchestra:quota`, `/orchestra:done` and `/orchestra:away`:
-[plugin documentation](plugins/orchestra/README.md#usage).
+All eight commands, including `/partitura:quota`, `/partitura:done` and `/partitura:away`:
+[plugin documentation](plugins/partitura/README.md#usage).
 
 ## Documentation
 
-- [Plugin documentation](plugins/orchestra/README.md) — executors and their isolation, profiles, the manual lane,
+- [Plugin documentation](plugins/partitura/README.md) — executors and their isolation, profiles, the manual lane,
   DeepSeek as the lead, the usage log, the registry, adding executors, storage, uninstalling
-- [Routing rules](plugins/orchestra/skills/orchestrate/SKILL.md) the lead follows, and their
-  [reference sections](plugins/orchestra/skills/orchestrate/reference/)
-- [Model registry](plugins/orchestra/registry/providers.yaml)
+- [Routing rules](plugins/partitura/skills/orchestrate/SKILL.md) the lead follows, and their
+  [reference sections](plugins/partitura/skills/orchestrate/reference/)
+- [Model registry](plugins/partitura/registry/providers.yaml)
 - [Contributing](CONTRIBUTING.md) · [Development rules](AGENTS.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 **Antigravity and other manual agents are never automated** — no `agy`, computer use, text pasting or OAuth (that
-violates Google's ToS). Orchestra only writes task files for them and reads their results.
+violates Google's ToS). Partitura only writes task files for them and reads their results.
 
 Uninstall: `bash uninstall.sh` (standard `claude plugin uninstall`; `--purge` also deletes `~/.orchestra/`).
 `orch footprint` lists everything the plugin created outside Claude Code.

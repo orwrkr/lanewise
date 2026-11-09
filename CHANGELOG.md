@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.34.0
+
+- **Orchestra is now Partitura.** Anthropic's plugin directory reserves "Orchestra" for an existing publisher, so
+  the plugin, its marketplace, its documentation and the repository (now
+  [orwrkr/partitura](https://github.com/orwrkr/partitura); GitHub redirects the old address) take the new name.
+  Commands are `/partitura:*`, subagent types `partitura:orch-*`, the skill `partitura:orchestrate`, and the plugin
+  folder `plugins/partitura`. The `orch` CLI, `~/.orchestra`, the `ORCH_*` variables and `<project>/.orchestra/`
+  keep their names, so limits, profiles, keys, the usage log and manual tasks carry over as they are.
+- **Upgrading.** From a clone: `git pull`, then `bash install.sh` in every environment where you installed it (Git
+  Bash and WSL). It removes `orchestra@orchestra` and its marketplace and installs `partitura@partitura`. Without a
+  clone:
+  `claude plugin uninstall orchestra@orchestra && claude plugin marketplace remove orchestra && claude plugin install partitura --marketplace orwrkr/partitura`.
+- **Old names keep working where they were stored.**
+  - A personal registry made before 0.34.0 still names subagents `orchestra:orch-…`. `orch registry show` reads
+    them as `partitura:orch-…` in every view. `orch registry diff --accept` brings the copy up to date.
+  - The Antigravity rule `.agents/rules/orchestra-task.md` becomes `partitura-task.md` at a project's next manual
+    task, and `orch footprint` lists the old file until then.
+- **The self-test moved** from `plugins/orchestra/tests` to `tests/` at the repository root, so installs no longer
+  carry it.
+
 ## 0.33.3
 
 The first release since the repository went public. Behaviour is unchanged.

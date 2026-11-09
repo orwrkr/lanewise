@@ -74,7 +74,7 @@ def description(text):
 
 def repository_sizes(root):
     """[(name, tokens, budget)] for the repository's budgeted files."""
-    plugin = root / "plugins" / "orchestra"
+    plugin = root / "plugins" / "partitura"
     out = []
     total = 0
     for pattern in ("agents/*.md", "skills/*/SKILL.md", "commands/*.md"):

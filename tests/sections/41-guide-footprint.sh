@@ -15,7 +15,7 @@ grep -q 'subscription slots before API-billed' "$PLUGIN/skills/orchestrate/SKILL
 grep -q 'subscriptions go before API-billed' "$PLUGIN/skills/orchestrate/reference/budget.md" && ok "budget guide states the default order" || bad "budget.md lost the default order"
 out=$($ORCH footprint); contains "$out" "$ORCH_HOME" "footprint names ORCH_HOME"
 contains "$out" "  project .*proj.*\.orchestra" "footprint lists project state"
-contains "$out" "claude plugin uninstall orchestra@orchestra " "footprint shows the standard uninstall"
+contains "$out" "claude plugin uninstall partitura@partitura " "footprint shows the standard uninstall"
 grep -q '"SessionEnd"' "$PLUGIN/hooks/hooks.json" && ok "SessionEnd hook registered" || bad "SessionEnd hook missing"
 grep -q 'run.sh\\" session-end' "$PLUGIN/hooks/hooks.json" && ok "SessionEnd → orch hook session-end" || bad "session-end wiring"
 

@@ -25,6 +25,13 @@ Before 0.35.0 both folders were named `.orchestra`.
 - **Manual agents** (Antigravity and similar) receive nothing from the plugin. It writes task files into your
   project, and you hand them over yourself.
 
+What those providers do with the data is governed by their own privacy policies:
+
+- Anthropic (Claude, and Claude Code itself): [anthropic.com/legal/privacy](https://www.anthropic.com/legal/privacy)
+- OpenAI (Codex): [openai.com/policies](https://openai.com/policies/), which lists the privacy policy for your region
+- DeepSeek: [DeepSeek Privacy Policy](https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html)
+- Google (Antigravity, when you use it for a manual task): [policies.google.com/privacy](https://policies.google.com/privacy)
+
 The plugin README lists every case, with what triggers it:
 [What it runs, sends and fetches](plugins/partitura/README.md#what-it-runs-sends-and-fetches).
 

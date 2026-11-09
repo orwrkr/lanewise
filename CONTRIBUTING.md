@@ -41,7 +41,8 @@ request, and keep a local Windows run for debugging a Windows-specific failure (
   `tests/check_sizes.py` holds what the plugin loads into a session to a budget.
 
 Signed commits (SSH or GPG) are preferred. CI runs the self-test on Ubuntu and Windows and checks Python 3.8
-compatibility with vermin.
+compatibility with vermin. CodeQL scans the Python code and the workflows on every pull request, and Dependabot
+keeps the workflows' actions current.
 
 ## How a change ships
 

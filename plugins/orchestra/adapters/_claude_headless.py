@@ -17,7 +17,7 @@ GIT_READ = ["Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(g
 # rules to a Bash command that names the file (`cat .env`), but a search that walks the tree prints what it finds in
 # ignored files, and it auto-approves such commands as read-only. So those are denied: the Grep tool does the same job
 # and skips ignored and hidden files.
-SECRET_DENY = ["Read(**/.env)", "Read(**/.env.*)",
+ENV_FILE_DENY = ["Read(**/.env)", "Read(**/.env.*)",
                "Bash(grep *)", "Bash(egrep *)", "Bash(fgrep *)", "Bash(rg *)", "Bash(ag *)", "Bash(ack *)",
                "Bash(git grep *--no-index*)", "Bash(git grep *--untracked*)"]
 EXIT_QUOTA = 75
@@ -126,7 +126,7 @@ def settings_deny(say):
 
 
 def disallowed_tools(say):
-    return SECRET_DENY + settings_deny(say)
+    return ENV_FILE_DENY + settings_deny(say)
 
 
 def command(claude, model, run_dir, isolation, extra_args, say):

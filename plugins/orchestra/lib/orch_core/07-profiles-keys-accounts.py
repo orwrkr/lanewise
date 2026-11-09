@@ -321,7 +321,8 @@ def profile_limits(prof, model, effort, mode):
     return model, effort, notes, None
 
 
-def secret_source(var):
+def key_origin(var):
+    """Where the key variable `var` is set: "environment", the secrets file's path, or None. Never the value."""
     if os.environ.get(var):
         return "environment"
     return str(SECRETS_FILE) if load_secrets().get(var) else None
@@ -407,7 +408,7 @@ def describe_profile(prof, profs=None):
     else:
         parts = ["%s (%s)" % (prof.name, prof.source)]
     if d.get("key"):
-        parts.append("key %s %s" % (d["key"], "✔" if secret_source(d["key"]) else "✘ not in secrets.env"))
+        parts.append("key %s %s" % (d["key"], "✔" if key_origin(d["key"]) else "✘ not in secrets.env"))
     for f in sorted(set(d) - set(RULE_FIELDS) - {"key", "max_open"}):
         parts.append("%s %s" % (f, d[f]))
     if d.get("models"):

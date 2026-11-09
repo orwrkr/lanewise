@@ -122,7 +122,7 @@ def cmd_doctor(a):
     if os.environ.get("ORCH_LEAD"):
         row("lead", True, "%s · %s %s" % (scope_name(os.environ["ORCH_LEAD"]),
                                           display_name(os.environ.get("ORCH_LEAD_MODEL")) or "?", lead_via_text()))
-    src = secret_source("DEEPSEEK_API_KEY")
+    src = key_origin("DEEPSEEK_API_KEY")
     row("DEEPSEEK_API_KEY", bool(src), ("set: " + src) if src else "missing — add a line DEEPSEEK_API_KEY=sk-… to %s"
         % SECRETS_FILE, optional=True)
     data, err = load_profiles()
@@ -134,7 +134,7 @@ def cmd_doctor(a):
             for name, d in provider_section(data, provider)[1].items():
                 d = d if isinstance(d, dict) else {}
                 if d.get("key"):
-                    src = secret_source(d["key"])
+                    src = key_origin(d["key"])
                     row("%s@%s key" % (display_name(provider), name), bool(src), ("%s set: %s" % (d["key"], src)) if src else
                         "missing — add a line %s=… to %s" % (d["key"], SECRETS_FILE), optional=True)
                 if provider == "codex" and d.get("home") and not d.get("key") and cx:

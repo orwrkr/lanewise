@@ -302,7 +302,7 @@ def cmd_profile(a):
         print("saved %s: %s" % (p.label, describe_profile(p, sec["profiles"])))
         for n in notes:
             print(n)
-        if prof.get("key") and not secret_source(prof["key"]):
+        if prof.get("key") and not key_origin(prof["key"]):
             print("no key yet: add a line %s=sk-… to %s (not to the repository, not to the chat)"
                   % (prof["key"], SECRETS_FILE))
         if prof.get("home"):

@@ -75,6 +75,13 @@ Line endings are pinned to LF (`.gitattributes`), except for `*.cmd`, which use 
 Partitura has no telemetry: it reports nothing to its author or to anyone else.
 
 - **Hooks** (SessionStart, UserPromptSubmit, PostToolUse, Stop, SessionEnd) run `orch hook <event>` on your machine. They read and write `~/.partitura/` and the project's `.partitura/`, and print short events into the session. The status line (`orch statusline`, if you set it) only reads local files.
+  - Each hook is one line in `hooks/hooks.json`, `sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" <event>`. `run.sh` only finds a Python 3.8+ interpreter and runs the plugin's own `bin/orch hook <event>`; it remembers the interpreter in `~/.partitura/.hook-python-<platform>`.
+  - A hook is written as one line, not as a program plus a list of arguments, because of native Windows: Claude Code runs a one-line hook in Git Bash, while a hook with arguments starts only where Windows itself finds `sh`.
+- **The `orch` launcher** (`bin/orch`; Claude Code puts the plugin's `bin/` on the Bash tool's PATH) runs the plugin's own Python source, `lib/orch_core/*.py`, as one program.
+  - The status line and every hook start it, so it keeps the compiled bytecode in `~/.partitura/.pycache/` and runs it from there, as Python's own `__pycache__` does.
+  - The cache is keyed by a SHA-256 of those sources and the Python version, so a changed file or another Python compiles anew. `PYTHONDONTWRITEBYTECODE=1` keeps it from writing the cache.
+  - Nothing is downloaded, and nothing but these files is decoded or run.
+- **Nothing is installed for you.** Commands in this README that install software, such as `npm i -g @openai/codex` for the optional Codex executor, are for you to run if you want that tool; the plugin downloads and installs nothing.
 - **`orch`'s only network request** is DeepSeek's balance, `GET https://api.deepseek.com/user/balance`, sent with each DeepSeek key your profiles use. It happens on `orch balance`, `orch status` and `orch spend`, before a DeepSeek run that a per-session budget checks and after every DeepSeek run, and on SessionStart through a detached `orch balance --quiet` when the stored figure is stale. `ORCH_BALANCE=off` turns it off everywhere. `orch prices check` makes no web request: it writes a task for an agent.
 - **Executors** start only through `orch run …` or `orch launch`. Each sends its provider the task prompt, the project rules (CLAUDE.md, AGENTS.md) and whatever files it reads or commands it runs in its working folder:
   - Codex: `codex exec` → OpenAI, on your Codex login or API key;

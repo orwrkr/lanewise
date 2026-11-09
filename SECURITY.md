@@ -20,5 +20,9 @@ Partitura runs other AI agents on your machine and handles API keys, so these ar
   a non-Claude lead's endpoint and token), must not be able to delegate further (`ORCH_WORKER`), and must stay within
   the permissions of their mode (`analysis` / `write`, `--allow` rules).
 - **Hooks.** Plugin hooks run on every prompt and tool call; they must never execute content from task files.
+- **Code from the personal folder.** `bin/orch` runs the bytecode it compiled from its own sources and cached in
+  `~/.partitura/.pycache/`, and `hooks/run.sh` starts the interpreter it remembered in `~/.partitura/`. Whoever can
+  write to that folder can therefore run code as you, as with the plugin's own files: keep it yours alone. A way to
+  make the plugin run anything other than its own files from there is a vulnerability.
 
 Manual agents (Antigravity and similar) are never automated by design: Partitura only writes task files for them.

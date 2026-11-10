@@ -69,3 +69,5 @@ The maintainer works with coding agents, orchestrated by the plugin itself. The 
    - Watch CI on `main`.
    - Remove the worktree and the branch.
    - Delete the item from ROADMAP.md.
+
+Renaming the plugin is a change of its own, with a checklist from the two renames so far: [RENAMING.md](RENAMING.md).

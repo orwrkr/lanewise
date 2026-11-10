@@ -71,7 +71,7 @@ phrase = "Flash is the default"
 assert phrase in data["providers"]["deepseek"]["notes"]
 print("BRIEF-NO-NOTES-OK" if phrase not in brief and "DEEPSEEK_API_KEY" not in brief else "BRIEF-NO-NOTES-BAD")
 print("BRIEF-COMMENT-OK" if "# cross-review" in brief and "# both, independently" in brief else "BRIEF-COMMENT-BAD")
-print("BRIEF-AGENT-OK" if "agent=partitura:orch-opus-high" in brief else "BRIEF-AGENT-BAD")
+print("BRIEF-AGENT-OK" if "agent=lanewise:orch-opus-high" in brief else "BRIEF-AGENT-BAD")
 EOF
 )
 for k in BRIEF-SIZE-OK BRIEF-SLOTS-OK BRIEF-ROUTES-OK BRIEF-NEVER-AUTO-OK BRIEF-FOOTER-OK BRIEF-NO-NOTES-OK BRIEF-COMMENT-OK BRIEF-AGENT-OK; do
@@ -137,25 +137,31 @@ contains "$out" "$cx_pat" "install.sh's Codex pattern occurs in doctor's output"
 ds_pat=$(sed -n "s/^grep -q '\([^']*\)' <<<\"\$DOCTOR\" || .*/\1/p" "$INSTALL_SH" | grep -F DEEPSEEK | head -1)
 contains "$out" "$ds_pat" "install.sh's DeepSeek pattern occurs in doctor's output"
 bash -n "$INSTALL_SH" && ok "install.sh parses" || bad "install.sh has a syntax error"
-# the plugin was Orchestra before 0.34.0: both scripts remove that installation too
+# the plugin was Partitura before 0.36.0 and Orchestra before 0.34.0: both scripts remove those installations too
 for s in "$INSTALL_SH" "$PLUGIN/../../uninstall.sh"; do
-  grep -q '^LEGACY_MARKETS="orchestra orchestra-local"' "$s" && grep -q '^LEGACY_PLUGINS="orchestra"' "$s" \
-    && grep -q 'claude plugin uninstall "$p@$m"' "$s" && ok "${s##*/}: removes orchestra@orchestra, the old name" \
-    || bad "${s##*/}: does not remove the installation under the old name"
+  grep -q '^LEGACY_MARKETS="partitura orchestra orchestra-local"' "$s" \
+    && grep -q '^LEGACY_PLUGINS="partitura orchestra"' "$s" \
+    && grep -q 'claude plugin uninstall "$p@$m"' "$s" \
+    && ok "${s##*/}: removes partitura@partitura and orchestra@orchestra, the old names" \
+    || bad "${s##*/}: does not remove the installations under the old names"
 done
-# a personal registry made before 0.34.0 names subagents orchestra:orch-…: every view shows partitura:orch-…
-RA="$T/registry-alias"; mkdir -p "$RA"
-sed 's/partitura:orch-/orchestra:orch-/g' "$PLUGIN/registry/providers.yaml" > "$RA/providers.yaml"
-grep -q "agent: orchestra:orch-haiku-low" "$RA/providers.yaml" && ok "fixture: a registry with the old agent names" \
-  || bad "fixture: no orchestra: agent in the copy"
-out=$(ORCH_HOME="$RA" $ORCH registry show 2>&1)
-contains "$out" "agent=partitura:orch-haiku-low" "registry show: an orchestra: agent reads as partitura:"
-[[ "$out" == *"orchestra:orch-"* ]] && bad "registry show still prints an orchestra: agent" || ok "registry show prints no orchestra: agent"
-out=$(ORCH_HOME="$RA" $ORCH registry show --full 2>&1)
-contains "$out" "agent: partitura:orch-haiku-low" "registry show --full: the old agent name reads as the new one"
-[[ "$out" == *"orchestra:orch-"* ]] && bad "registry show --full still prints an orchestra: agent" || ok "registry show --full prints no orchestra: agent"
-out=$(ORCH_HOME="$RA" $ORCH registry show --json 2>&1)
-contains "$out" '"agent": "partitura:orch-haiku-low"' "registry show --json: the old agent name reads as the new one"
+# a personal registry made before 0.36.0 (or 0.34.0) names subagents partitura:orch-… (or orchestra:orch-…):
+# every view shows lanewise:orch-…
+for old in partitura orchestra; do
+  RA="$T/registry-alias-$old"; mkdir -p "$RA"
+  sed "s/lanewise:orch-/$old:orch-/g" "$PLUGIN/registry/providers.yaml" > "$RA/providers.yaml"
+  grep -q "agent: $old:orch-haiku-low" "$RA/providers.yaml" && ok "fixture: a registry with $old: agent names" \
+    || bad "fixture: no $old: agent in the copy"
+  out=$(ORCH_HOME="$RA" $ORCH registry show 2>&1)
+  contains "$out" "agent=lanewise:orch-haiku-low" "registry show: a $old: agent reads as lanewise:"
+  [[ "$out" == *"$old:orch-"* ]] && bad "registry show still prints a $old: agent" || ok "registry show prints no $old: agent"
+  out=$(ORCH_HOME="$RA" $ORCH registry show --full 2>&1)
+  contains "$out" "agent: lanewise:orch-haiku-low" "registry show --full: the $old agent name reads as the new one"
+  [[ "$out" == *"$old:orch-"* ]] && bad "registry show --full still prints a $old: agent" || ok "registry show --full prints no $old: agent"
+  out=$(ORCH_HOME="$RA" $ORCH registry show --json 2>&1)
+  contains "$out" '"agent": "lanewise:orch-haiku-low"' "registry show --json: the $old agent name reads as the new one"
+  [[ "$out" == *"$old:orch-"* ]] && bad "registry show --json still prints a $old: agent" || ok "registry show --json prints no $old: agent"
+done
 grep -q 'WindowsApps' "$INSTALL_SH" && ok "install.sh: a Microsoft Store alias is only the last resort" \
   || bad "install.sh does not skip a WindowsApps alias"
 grep -q 'exec "%s"' "$INSTALL_SH" && ok "install.sh: the Git Bash launcher names the interpreter's absolute path" \

@@ -1,0 +1,26 @@
+{
+  "name": "lanewise",
+  "version": "0.36.0",
+  "description": "Multi-model orchestrator: routes subtasks to Claude subagents, Codex CLI, DeepSeek (isolated headless Claude Code on the DeepSeek API) and a pool of manual tasks (Antigravity & co) by difficulty, effort, subscription limits, balance, operator availability and per-project executor profiles (API keys, Codex accounts, rules); USD spend limits for API-billed executors (orch spend); DeepSeek can lead instead of Claude, with Claude switched off entirely; per-session usage log (model, task, tokens); WSL/Linux and native Windows",
+  "author": {
+    "name": "Roman Obukhov",
+    "url": "https://github.com/orwrkr"
+  },
+  "homepage": "https://orwrkr.github.io/lanewise/",
+  "repository": "https://github.com/orwrkr/lanewise",
+  "documentationUrl": "https://github.com/orwrkr/lanewise/blob/main/plugins/lanewise/README.md",
+  "supportUrl": "https://github.com/orwrkr/lanewise/issues",
+  "privacyPolicyUrl": "https://github.com/orwrkr/lanewise/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/orwrkr/lanewise/blob/main/TERMS.md",
+  "keywords": [
+    "orchestration",
+    "codex",
+    "deepseek",
+    "antigravity",
+    "multi-model",
+    "routing",
+    "profiles",
+    "usage"
+  ],
+  "license": "MIT"
+}

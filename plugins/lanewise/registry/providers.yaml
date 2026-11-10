@@ -1,0 +1,306 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Lanewise — executor registry (models × effort × lane)
+#
+# The orchestrator (Claude) reads it before distributing tasks. Edit freely:
+#   orch registry init            → a copy in ~/.lanewise/providers.yaml (for all projects)
+#   orch registry init --project  → a copy in <project>/.lanewise/providers.yaml (overrides)
+# The registry is what exists at all. What of it is allowed in a given project and with which key/account is
+# set by executor profiles (orch profile show; ~/.lanewise/profiles.json): they disable a provider,
+# narrow models and effort, forbid writing and set rules.
+# Models and effort levels change: check against /model in Claude Code, /model in codex,
+# the model picker in Antigravity and api-docs.deepseek.com (Codex: `codex debug models`). As of 2026-11-05.
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: 1
+
+policy:
+  # cost — relative load on subscription limits (1 cheap … 5 expensive); for DeepSeek —
+  # relative price of tokens paid from the balance (it doesn't spend subscription limits).
+  # billing (per provider): subscription — limits that reset (unused remainder expires); api — paid per token.
+  # Rule, among slots that suit the task: billing: subscription before billing: api and API-key profiles, unless the
+  # subscription is TIGHT or low (orch status, orch guide budget); then the cheapest slot that can handle the
+  # difficulty; on a tie — the pool that is less loaded today.
+  cross_review: true           # code from one model family is reviewed by another (claude · openai · deepseek)
+  parallel_write_isolation: worktree   # parallel writing tasks — each in its own worktree
+  codex_timeout: 45m
+  never_auto:                  # don't use without the operator's explicit permission
+    - codex/sol-ultra          # ultra burns the limit many times faster
+    - codex/astra-high         # Codex frontier model, the most expensive subscription slot
+    - claude/fable-high        # the most expensive slot
+
+operator:                      # manual lane = you (Antigravity and similar)
+  max_open_handoffs: 2         # on the operator's hands at the same time (handed out)
+  max_offers: 5                # in the manual task pool (orch handoff offer); the operator takes them
+  pool_check_min: 5            # N min without a take from the pool → a check: reclaim what is not worth waiting for, else one
+  pickup_reminder_min: 30      # not taken into work within N min → one reminder
+  reassign_after_min: 180      # not started within N min → reassign to the fallback
+  min_task_minutes: 20         # smaller ones aren't handed off manually (operator overhead)
+  batch_small_tasks: true      # accumulate small manual tasks and hand them out in one TASK.md
+
+difficulty:                    # the scale the orchestrator uses to label subtasks
+  1: mechanics — renaming, formatting, search, context gathering
+  2: routine — CRUD, simple tests, documentation, straightforward refactoring
+  3: ordinary engineering — a feature in one module, debugging with a reproduction
+  4: hard — cross-module changes, a non-obvious bug, performance, concurrency
+  5: critical — architecture, security, complex algorithms, unknown root cause
+
+providers:
+
+  # ───────────── Claude Code (native lane, the plugin's subagents) ─────────────
+  claude:
+    lane: native               # call: Agent tool with subagent_type = the agent field
+    billing: subscription      # 5-hour window + weekly limit; an API-key profile is billing: api
+    quota_key: claude          # can be more precise: claude/opus, claude/sonnet, claude/haiku
+    invoke_when_not_lead: orch run claude --model <alias> --effort <effort> --mode analysis|write [--cd <worktree>]
+    notes: >
+      Claude subscription. Opus and Sonnet may have separate limit pools (depends on the plan).
+      The main thread (orchestrator) is usually Opus: planning, integration, final decisions.
+      When the lead is not Claude (orch launch deepseek), Claude is an external executor: slot
+      claude/<alias>-<effort> → orch run claude --model <alias> --effort <effort>, in the background
+      (orch guide lead). Profile claude off → no Claude workers at all.
+    slots:
+      - id: claude/haiku-low
+        agent: lanewise:orch-haiku-low
+        model: Claude Haiku 5.5
+        effort: low
+        cost: 1
+        max_difficulty: 2
+        good_for: [code search, context gathering, mechanical edits, summarizing logs and diffs]
+      - id: claude/sonnet-medium
+        agent: lanewise:orch-sonnet-medium
+        model: Claude Sonnet 5.5
+        effort: medium
+        cost: 2
+        max_difficulty: 3
+        good_for: [routine implementation, tests following existing patterns, documentation, review of small diffs]
+      - id: claude/sonnet-high
+        agent: lanewise:orch-sonnet-high
+        model: Claude Sonnet 5.5
+        effort: high
+        cost: 3
+        max_difficulty: 4
+        good_for: [medium-complexity features, debugging, review of Codex code, UI code]
+      - id: claude/opus-high
+        agent: lanewise:orch-opus-high
+        model: Claude Opus 5.5
+        effort: high
+        cost: 4
+        max_difficulty: 5
+        good_for: [hard debugging, cross-module design, security review, analysing other executors' failures]
+      - id: claude/opus-max
+        agent: lanewise:orch-opus-max
+        model: Claude Opus 5.5
+        effort: max
+        cost: 5
+        max_difficulty: 5
+        good_for: [the hardest architecture and correctness questions — rarely]
+      - id: claude/fable-high
+        agent: lanewise:orch-fable-high
+        model: Claude Fable 5.1 (if available on your plan)
+        effort: high
+        cost: 5
+        max_difficulty: 5
+        good_for: [frontier tasks where Opus and Sol have already failed]
+
+  # ───────────── OpenAI Codex CLI (ChatGPT subscription, automated lane) ─────────────
+  codex:
+    lane: cli
+    billing: subscription
+    quota_key: codex          # more precise: codex/gpt-6.1-sol; a profile (second account) — codex@<profile>
+    invoke: orch run codex --model <model> --effort <effort> --mode analysis|write [--cd <worktree>]
+    efforts: [low, medium, high, xhigh, max, ultra]  # ultra — not on Luna; default model — from ~/.codex/config.toml
+    notes: >
+      Run in the background (run_in_background); long tasks — up to 45 min. Writing tasks
+      in parallel with others — only in a separate worktree (orch worktree add <name>).
+      The subscription limit is detected automatically (exit 75) and goes into orch quota.
+      A model at capacity reports CAPACITY, exits 75 and blocks only that model for about 10 minutes: take the fallback.
+      Native Windows write workers use a separate sandbox account that may not stat parents of the default temp
+      directory or projects under the operator's home; Git and mkdir -p in Git Bash can fail, and WSL is unreachable.
+      For tests creating temp repositories, grant a scratch directory with readable parents (e.g. C:/Users/Public/orch-scratch)
+      through ORCH_CODEX_EXTRA_ARGS="--add-dir C:/Users/Public/orch-scratch" and set TMPDIR to that directory.
+      Models (codex debug models): gpt-6.1-sol — the workhorse, gpt-6-astra — frontier (expensive),
+      gpt-6.1-terra — balanced, gpt-6-luna — fast and cheap; gpt-5.6-* — the previous generation.
+    slots:
+      - id: codex/luna-low
+        model: gpt-6-luna
+        effort: low
+        cost: 1
+        max_difficulty: 2
+        good_for: [quick checks, boilerplate code generation, bulk repetitive edits]
+      - id: codex/luna-medium
+        model: gpt-6-luna
+        effort: medium
+        cost: 1
+        max_difficulty: 2
+        good_for: [routine work, docstrings, simple tests]
+      - id: codex/terra-medium
+        model: gpt-6.1-terra
+        effort: medium
+        cost: 2
+        max_difficulty: 3
+        good_for: [ordinary implementation, tests, review of medium-sized diffs]
+      - id: codex/terra-high
+        model: gpt-6.1-terra
+        effort: high
+        cost: 3
+        max_difficulty: 4
+        good_for: [medium-complexity features, review of Claude code, refactoring a module]
+      - id: codex/sol-high
+        model: gpt-6.1-sol
+        effort: high
+        cost: 4
+        max_difficulty: 5
+        good_for: [complex implementation, adversarial review, hunting correctness bugs]
+      - id: codex/sol-xhigh
+        model: gpt-6.1-sol
+        effort: xhigh
+        cost: 5
+        max_difficulty: 5
+        good_for: [security audit, architecture critic, hard algorithms]
+      - id: codex/astra-high
+        model: gpt-6-astra
+        effort: high
+        cost: 5
+        max_difficulty: 5
+        good_for: [frontier tasks where Sol has already failed — only with explicit permission]
+      - id: codex/sol-ultra
+        model: gpt-6.1-sol
+        effort: ultra
+        cost: 5
+        max_difficulty: 5
+        good_for: [only with the operator's explicit permission]
+
+  # ───────────── DeepSeek (API key, automated lane) ─────────────
+  deepseek:
+    lane: cli
+    billing: api               # per token from the DeepSeek balance
+    quota_key: deepseek       # blocked as a whole: the balance is shared by all models
+    invoke: orch run deepseek --model <model> --effort <effort> --mode analysis|write [--cd <worktree>] [--allow 'Bash(<command>:*)']
+    efforts: [low, medium, high, xhigh, max]
+    notes: >
+      Pay per token from the DeepSeek balance (DEEPSEEK_API_KEY in the environment or ~/.lanewise/secrets.env).
+      The executor is an isolated headless Claude Code with a DeepSeek model: Read/Grep/Glob/Edit/Write/Bash,
+      but without hooks, plugins, MCP or the operator's settings. It can read and write only inside --cd;
+      Bash — only git reads and the rules from --allow (grant tests and build explicitly, e.g.
+      --allow 'Bash(npm test:*)'). Permission denials are listed at the end of the answer. No balance (402) →
+      exit 75 and a block until `orch quota clear deepseek`. Run in the background, like Codex.
+      Flash is the default: it is newer, ahead on coding and agentic work, and several times cheaper. Pro is taken
+      only when it is known to be needed — Flash failed at the task, or the reasoning is heavy on scientific or
+      factual knowledge.
+    slots:
+      - id: deepseek/flash-medium
+        model: deepseek-flash      # DeepSeek V4.1 Flash, 1M context (variant deepseek-flash[1m])
+        effort: medium
+        cost: 1
+        max_difficulty: 3
+        good_for: [routine implementation following existing patterns, bulk repetitive edits, tests, docstrings]
+      - id: deepseek/flash-high
+        model: deepseek-flash
+        effort: high
+        cost: 1
+        max_difficulty: 4
+        good_for: [implementation, debugging, cross-review of Claude and Codex code (the third family), tests,
+                   review of diffs, log analysis]
+      - id: deepseek/flash-max
+        model: deepseek-flash
+        effort: max
+        cost: 1
+        max_difficulty: 4
+        good_for: [hard debugging and cross-module changes, hard algorithms and correctness,
+                   an independent second opinion on architecture]
+      - id: deepseek/pro-high
+        model: deepseek-v4-pro     # DeepSeek V4 Pro
+        effort: high
+        cost: 3
+        max_difficulty: 4
+        good_for: [a second opinion when Flash failed at the task or its answer is in doubt,
+                   reasoning heavy on scientific or factual knowledge]
+      - id: deepseek/pro-max
+        model: deepseek-v4-pro
+        effort: max
+        cost: 4
+        max_difficulty: 4
+        good_for: [the hardest knowledge-heavy reasoning, after Flash]
+
+  # ───────────── Google Antigravity (MANUAL lane via the operator) ─────────────
+  antigravity:
+    lane: manual               # task pool: you take a task (orch handoff take) and paste one line into Antigravity
+    billing: subscription
+    quota_key: antigravity     # more precise: antigravity/gemini-4-argon, antigravity/claude-opus
+    invoke: orch handoff offer --title ... --model ... --effort ... [--write] [--fallback ...]   # immediately: handoff new
+    notes: >
+      No automated access to Antigravity: only you work in the official app.
+      The lane is asynchronous and slow to start: ONLY tasks off the critical path, large
+      (≥ min_task_minutes), self-contained. Read-only by default (works in the project folder); --write for one
+      that changes files (gets its own worktree inside the project folder). Each one has a fallback.
+      Gemini models and third-party ones (Claude/GPT) have separate quota counters in Antigravity.
+    slots:
+      - id: antigravity/argon-high
+        model: Gemini 4 Argon      # paid Google AI Pro (weekly quota) or Ultra
+        effort: High (thinking)
+        model_key: gemini-4-argon
+        cost: 3                    # 0 for your Claude/Codex limits, but it costs the operator's time
+        max_difficulty: 5
+        good_for: [UI verification in a browser with recordings/screenshots, broad survey of a large codebase,
+                   an independent second opinion from another family, a long autonomous task]
+      - id: antigravity/argon-medium
+        model: Gemini 4 Argon
+        effort: Medium (thinking)
+        model_key: gemini-4-argon
+        cost: 2
+        max_difficulty: 4
+        good_for: [medium isolated tasks, UI prototypes]
+      - id: antigravity/flash
+        model: Gemini 3.8 Flash
+        effort: Low/Medium
+        model_key: gemini-3.8-flash
+        cost: 1
+        max_difficulty: 2
+        good_for: [bulk mechanical work when Claude/Codex are running low]
+      - id: antigravity/claude-opus
+        model: Claude Opus 5.5 (in Antigravity)
+        effort: High
+        model_key: claude-opus
+        cost: 3
+        max_difficulty: 5
+        good_for: [an extra Opus pool when the Claude subscription limit is exhausted — for isolated tasks]
+
+  # ───────────── Templates for the future (uncomment and add an adapter) ─────────────
+  # gemini-api:                # Gemini via an AI Studio API key (pay per token)
+  #   lane: cli
+  #   quota_key: gemini-api
+  #   invoke: orch run gemini-api --model gemini-4-argon --effort high
+  #   slots: [...]
+  # cursor:                   # another manual agent: the same pool, orch handoff take <id> --agent cursor
+  #   lane: manual
+  #   quota_key: cursor
+  #   slots: [...]
+  # some-mcp:
+  #   lane: mcp                # the orchestrator calls the MCP tool directly
+  #   invoke: mcp__server__tool
+  #   quota_key: some-mcp
+
+# ───────────── Default routes (order = preference) ─────────────
+# The orchestrator takes the first AVAILABLE slot (orch status), taking pool balance into account.
+routing:
+  explore:            [claude/haiku-low, codex/luna-low]
+  mechanical:         [claude/haiku-low, codex/luna-medium, deepseek/flash-medium, antigravity/flash]
+  docs:               [claude/sonnet-medium, codex/luna-medium, deepseek/flash-medium]
+  implement_d2:       [codex/luna-medium, deepseek/flash-medium, claude/sonnet-medium]
+  implement_d3:       [claude/sonnet-high, codex/terra-high, deepseek/flash-high, codex/terra-medium]
+  implement_d4:       [codex/sol-high, claude/opus-high, deepseek/flash-max, claude/sonnet-high]
+  implement_d5:       [main-thread, claude/opus-high, codex/sol-xhigh]
+  debug_d3:           [claude/sonnet-high, codex/terra-high, deepseek/flash-high]
+  debug_d4_5:         [claude/opus-high, codex/sol-high]
+  tests:              [codex/terra-medium, deepseek/flash-high, claude/sonnet-medium]
+  review_of_claude:   [codex/sol-high, deepseek/flash-high, codex/terra-high]   # cross-review
+  review_of_codex:    [claude/opus-high, deepseek/flash-high, claude/sonnet-high]
+  review_of_deepseek: [claude/sonnet-high, codex/terra-high]
+  review_of_manual:   [codex/terra-high, claude/sonnet-high]
+  security:           [claude/opus-high, codex/sol-xhigh]       # both, independently
+  architecture:       [main-thread, codex/sol-xhigh, deepseek/flash-max]   # critics
+  ui_verify:          [antigravity/argon-high, claude/sonnet-high]
+  isolated_big_task:  [antigravity/argon-high, codex/sol-high, deepseek/flash-high]  # off the critical path
+  fallback_when_claude_exhausted:   [codex/*, deepseek/*, antigravity/claude-opus]
+  fallback_when_codex_exhausted:    [claude/*, deepseek/*, antigravity/argon-medium]
+  fallback_when_deepseek_exhausted: [codex/*, claude/*]

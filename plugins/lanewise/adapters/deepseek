@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+# Lanewise adapter: DeepSeek (API key) as a full agentic executor — and as the lead of a session (`orch launch`).
+#
+# DeepSeek is a model API without an agent loop of its own. The loop (read/search/edit/run tools) is a headless
+# Claude Code (`claude -p`) pointed at DeepSeek's Anthropic-compatible endpoint. The worker is isolated from the
+# operator's Claude Code:
+#   - own config dir <personal folder>/workers/deepseek-<platform>: no operator settings, plugins, hooks, OAuth,
+#     sessions; auto-memory off;
+#   - --setting-sources user: hooks/settings of the target repo are not loaded (its CLAUDE.md is passed explicitly);
+#   - --strict-mcp-config: no MCP servers; session variables of the orchestrator are stripped (orch + below);
+#   - ORCH_WORKER is set by orch: nested `orch run` / `orch handoff` are refused, plugin hooks stay silent;
+#   - --permission-mode dontAsk: only explicitly allowed actions run, the rest is denied without prompts:
+#       analysis → Read/Grep/Glob inside ORCH_CWD + read-only git;
+#       write    → plus Edit/Write confined to ORCH_CWD; any other command only via `orch run --allow RULE`.
+# The executor role and the project rules (CLAUDE.md with @imports, AGENTS.md — from orch) go into the system prompt;
+# token usage of the run goes to $ORCH_RUN_DIR/usage.json. Shared code: _claude_headless.py (keep it next to this file).
+#
+# `--launch-env` (orch launch deepseek): print, as JSON, the environment of an interactive Claude Code session whose
+# every model request goes to DeepSeek — main thread and subagents on ORCH_MODEL, background calls on the fast model;
+# the operator's ANTHROPIC_* variables are dropped, so no Anthropic credential reaches DeepSeek.
+#
+# orch-secrets: DEEPSEEK_API_KEY
+# orch-limit-detect: exit-code
+# orch-launch: env
+# orch-endpoint: https://api.deepseek.com/anthropic
+# orch-profile-env: fast_model=ORCH_DEEPSEEK_FAST_MODEL base_url=ORCH_DEEPSEEK_BASE_URL
+# Contract: adapters/_template.example. Exit 75 = balance exhausted (402, until manual clear) or rate limit (429).
+# Profiles (orch profile set deepseek <name> --key VAR …): orch passes the profile's key as DEEPSEEK_API_KEY.
+# Overrides: ORCH_CLAUDE_BIN, ORCH_DEEPSEEK_BASE_URL, ORCH_DEEPSEEK_FAST_MODEL, ORCH_DEEPSEEK_EXTRA_ARGS.
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.dont_write_bytecode = True        # no __pycache__ inside the plugin's adapters/
+import _claude_headless as H  # noqa: E402
+
+BASE_URL = os.environ.get("ORCH_DEEPSEEK_BASE_URL") or "https://api.deepseek.com/anthropic"
+DEFAULT_MODEL = "deepseek-flash"
+FAST_MODEL = os.environ.get("ORCH_DEEPSEEK_FAST_MODEL") or "deepseek-flash"
+NO_KEY = "DEEPSEEK_API_KEY is not set — add a line DEEPSEEK_API_KEY=sk-… to %s (or the environment)"
+
+
+def say(msg):
+    print("[deepseek] " + msg, flush=True)
+
+
+def model_env(model):
+    """Every model Claude Code may pick (aliases, subagents, background calls) → DeepSeek models."""
+    env = {"ANTHROPIC_BASE_URL": BASE_URL, "ANTHROPIC_MODEL": model,
+           "ANTHROPIC_DEFAULT_OPUS_MODEL": model, "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+           "ANTHROPIC_DEFAULT_HAIKU_MODEL": FAST_MODEL, "CLAUDE_CODE_SUBAGENT_MODEL": model,
+           "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+           "API_TIMEOUT_MS": os.environ.get("API_TIMEOUT_MS", "600000")}
+    if model.endswith("[1m]"):          # 1M context variant, compaction window as DeepSeek recommends
+        env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "786432"
+    return env
+
+
+def child_env(key, model, config_dir):
+    env = H.base_env(drop_anthropic=True)
+    env.update(model_env(model))
+    env.update({"ANTHROPIC_API_KEY": key, "CLAUDE_CONFIG_DIR": str(config_dir),
+                "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "DISABLE_AUTOUPDATER": "1"})
+    return env
+
+
+def launch_env(key):
+    """`orch launch deepseek`: the lead session's environment changes, as JSON on stdout."""
+    model = os.environ.get("ORCH_MODEL") or DEFAULT_MODEL
+    env = model_env(model)
+    env["ANTHROPIC_AUTH_TOKEN"] = key           # a bearer token: no "use this API key?" prompt, no OAuth sent
+    print(json.dumps({"set": env, "unset": sorted(k for k in os.environ if k.startswith("ANTHROPIC_")
+                                                or k == "CLAUDE_CODE_OAUTH_TOKEN"),
+                      "args": ["--model", model], "model": model, "fast_model": FAST_MODEL, "endpoint": BASE_URL}))
+    return 0
+
+
+def main():
+    H.utf8_stdio()
+    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not key:
+        say(NO_KEY % (H.orch_home() / "secrets.env"))
+        return 1
+    if "--launch-env" in sys.argv[1:]:
+        return launch_env(key)
+    claude = H.find_claude()
+    if not claude:
+        say("claude CLI not found: the DeepSeek executor is a headless Claude Code (or set ORCH_CLAUDE_BIN)")
+        return 127
+    run_dir = Path(os.environ["ORCH_RUN_DIR"])
+    model = os.environ.get("ORCH_MODEL") or DEFAULT_MODEL
+    home = H.orch_home()
+    config_dir = home / "workers" / ("deepseek-" + sys.platform)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    cmd = H.command(claude, model, run_dir, ["--setting-sources", "user"],
+                    os.environ.get("ORCH_DEEPSEEK_EXTRA_ARGS"), say)
+    result, rc = H.run(cmd, child_env(key, model, config_dir))
+
+    if result is None:
+        say("claude exited without a result (rc=%s) — see the log above" % rc)
+        return rc or 1
+    H.write_usage(run_dir, result, model)
+    text = result.get("result") or ""
+    status = result.get("api_error_status")
+    label = "deepseek" + ("@" + os.environ["ORCH_PROFILE"] if os.environ.get("ORCH_PROFILE") else "")
+    if result.get("is_error") or result.get("subtype") != "success":
+        say("error: %s" % H.one_line(text or result.get("subtype"), 500))
+        if status == 402 or "insufficient balance" in text.lower():
+            (run_dir / "quota_until").write_text("manual\n", encoding="utf-8")
+            say("the DeepSeek balance is empty (402). Top it up and clear the block: orch quota clear " + label)
+            return H.EXIT_QUOTA
+        if status == 429:
+            (run_dir / "quota_until").write_text("+15m\n", encoding="utf-8")
+            say("rate limit (429)")
+            return H.EXIT_QUOTA
+        if status == 401:
+            say("DeepSeek rejected the key (401) — check the key of %s (orch profile show)" % label)
+        return rc or 1
+    H.write_output(result)
+    say("done: %s turns, %.0f s" % (result.get("num_turns"), (result.get("duration_ms") or 0) / 1000.0))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

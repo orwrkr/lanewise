@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.36.0
+
+- **Partitura is now Lanewise.** An AI-agent orchestration product named Partitura already exists, so the plugin
+  takes a name of its own. **Where:** the repository is now [orwrkr/lanewise](https://github.com/orwrkr/lanewise);
+  [orwrkr/partitura](https://github.com/orwrkr/partitura) stays for a while with a notice pointing here.
+- **What changes, what stays.** Commands are `/lanewise:*`, subagent types `lanewise:orch-*`, the skill
+  `lanewise:orchestrate`, and the folders `~/.lanewise` and `<project>/.lanewise`. The `orch` CLI and the `ORCH_*`
+  variables keep their names, so scripts and settings that name them still work.
+- **Upgrading from a clone** (in every environment where you installed it — Git Bash and WSL):
+  `git remote set-url origin https://github.com/orwrkr/lanewise.git`, then `git pull`, `bash install.sh`,
+  `orch migrate --all --home` (a dry run) and `orch migrate --all --home --yes`, then `/reload-plugins` in open
+  sessions.
+- **Upgrading without a clone:** `claude plugin uninstall partitura@partitura && claude plugin marketplace remove
+  partitura`, then `claude plugin install lanewise --marketplace orwrkr/lanewise`.
+- **Old names that keep working.** A personal registry made before 0.36.0 still names subagents `partitura:orch-…`
+  (or `orchestra:orch-…` from before 0.34.0), and `orch registry show` reads them as `lanewise:orch-…` in every
+  view. The Antigravity rule `.agents/rules/partitura-task.md` (or `orchestra-task.md` before 0.34.0) becomes
+  `lanewise-task.md` at a project's next manual task, and `orch footprint` lists the old file until then. Folders
+  keep working where they are: `orch` reads `~/.partitura` and `~/.orchestra` (and `<project>/.partitura`,
+  `<project>/.orchestra`) until `orch migrate` moves them, and a place that has more than one of them is reported
+  instead of merged.
+
 ## 0.35.0
 
 - **The plugin's folders follow its name.** The personal folder is `~/.partitura` and a project's state folder is

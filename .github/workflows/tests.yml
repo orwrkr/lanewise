@@ -39,9 +39,9 @@ jobs:
       - run: pip install vermin
       - run: >
           vermin -t=3.8- --no-tips --violations
-          plugins/partitura/bin/orch
-          plugins/partitura/lib/orch_core/*.py
-          plugins/partitura/adapters/codex
-          plugins/partitura/adapters/deepseek
-          plugins/partitura/adapters/claude
-          plugins/partitura/adapters/_claude_headless.py
+          plugins/lanewise/bin/orch
+          plugins/lanewise/lib/orch_core/*.py
+          plugins/lanewise/adapters/codex
+          plugins/lanewise/adapters/deepseek
+          plugins/lanewise/adapters/claude
+          plugins/lanewise/adapters/_claude_headless.py

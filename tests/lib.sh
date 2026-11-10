@@ -5,7 +5,7 @@
 set -uo pipefail
 die() { echo "Self-test setup failed: $*" >&2; exit 1; }
 TESTS="$(cd "$(dirname "$0")" && pwd)" || die "cannot locate the tests"
-PLUGIN="$(cd "$TESTS/../plugins/partitura" && pwd)" || die "cannot locate plugin"
+PLUGIN="$(cd "$TESTS/../plugins/lanewise" && pwd)" || die "cannot locate plugin"
 PY=""
 # Real interpreters before a Windows Store / Python install manager alias (…/WindowsApps/), as hooks/run.sh does: an
 # alias costs a redirect on every start, and the install manager reads a script's first line (bin/orch: #!/bin/sh).
@@ -133,7 +133,7 @@ prompt = sys.stdin.read()
 rec = {"args": args, "allowed": args[args.index("--allowedTools") + 1:] if "--allowedTools" in args else [],
        "disallowed": args[args.index("--disallowedTools") + 1:args.index("--allowedTools")]
        if "--disallowedTools" in args and "--allowedTools" in args else [],
-       "role": "Partitura executor" in system, "claude_md": "PROJECT-RULES-MARKER" in system,
+       "role": "Lanewise executor" in system, "claude_md": "PROJECT-RULES-MARKER" in system,
        "agents_n": system.count("AGENTS-MARKER"), "claude_n": system.count("CLAUDE-MARKER"),
        "env": {k: os.environ.get(k) for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "ORCH_WORKER", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDECODE",

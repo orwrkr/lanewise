@@ -74,7 +74,7 @@ printf 'task' | $ORCH handoff new --title "flash" --model-key gemini-3.8-flash -
 printf 'task' | $ORCH handoff new --title "cap" --model-key gemini-4-argon --max-open 99 >/dev/null; expect_rc 75 $? "profile max_open caps open handoffs"
 $ORCH profile set antigravity argon --max-open "" >/dev/null
 out=$(printf 'task' | $ORCH handoff new --title "argon" --model-key gemini-4-argon --max-open 99); expect_rc 0 $? "allowed manual model passes"
-grep -q '"profile": "argon"' "$REPO/.partitura/handoffs/$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)/meta.json" && \
+grep -q '"profile": "argon"' "$REPO/.lanewise/handoffs/$(grep -o 'AG-[0-9]*' <<<"$out" | head -1)/meta.json" && \
   ok "handoff records its profile" || bad "handoff profile missing"
 out=$($ORCH doctor </dev/null); contains "$out" "DeepSeek@work key *DEEPSEEK_API_KEY_WORK set" "doctor checks profile keys"
 $ORCH profile rm deepseek work >/dev/null 2>&1; [[ $? -ne 0 ]] && ok "bound profile not removed silently" || bad "bound profile removed"

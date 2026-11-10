@@ -250,7 +250,7 @@ for path in docs:
     if not os.path.isfile(path):
         problems.append((path, 0, "the file is missing"))
         continue
-    name = os.path.relpath(path, root_dir).replace(os.sep, "/")             # plugins/partitura/...
+    name = os.path.relpath(path, root_dir).replace(os.sep, "/")             # plugins/lanewise/...
     for number, command in commands(path):
         checked += 1
         for where, token, reason in check(command, "%s:%d" % (name, number)):

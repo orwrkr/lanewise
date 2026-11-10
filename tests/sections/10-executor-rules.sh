@@ -5,9 +5,9 @@ printf '# Rules\nCLAUDE-MARKER\n@AGENTS.md\n' > "$REPO/CLAUDE.md"; printf 'AGENT
 FAKE_CLAUDE=ok $ORCH run deepseek --task "Café parser tests" "x" >/dev/null
 check 'r["claude_n"] == 1 and r["agents_n"] == 1' "deepseek: CLAUDE.md + AGENTS.md, @import inlined once"
 FAKE_CODEX=ok $ORCH run codex --model gpt-6.1-terra --effort high "implement" >/dev/null
-out=$(cat "$REPO"/.partitura/runs/cod-*/codex_prompt.md | tail -c 2000)
+out=$(cat "$REPO"/.lanewise/runs/cod-*/codex_prompt.md | tail -c 2000)
 contains "$out" "CLAUDE-MARKER" "codex: CLAUDE.md rules added to the prompt"
-grep -q "AGENTS-MARKER" "$REPO"/.partitura/runs/cod-*/codex_prompt.md && bad "codex got AGENTS.md twice" || ok "codex: AGENTS.md left to codex itself"
+grep -q "AGENTS-MARKER" "$REPO"/.lanewise/runs/cod-*/codex_prompt.md && bad "codex got AGENTS.md twice" || ok "codex: AGENTS.md left to codex itself"
 rm -f "$REPO/CLAUDE.md" "$REPO/AGENTS.md"
 out=$(FAKE_CODEX=ok $ORCH run codex --model gpt-6.1-terra "Implement the café parser"); contains "$out" "tokens: input 200 · cache 1.0k · output 30" "codex usage parsed from --json (cached split out)"
 $PY - "$ORCH_HOME/usage.jsonl" <<'EOF' && ok "ledger: runs with session, task, model, tokens" || bad "ledger content"
@@ -70,7 +70,7 @@ rm -f "$T/import-wt/AGENTS.md"
 out=$(FAKE_CODEX=ok $ORCH run codex --cd "$(native "$T/import-wt")" "review the form"); rc=$?
 expect_rc 0 $rc "a run in the worktree starts"
 RID=$(grep -o 'cod-[0-9]*-[0-9]*-[a-z0-9]*' <<<"$out" | head -1)
-[[ -n "$RID" ]] && grep -q "IGNORED-AGENTS" "$REPO/.partitura/runs/$RID/context.md" \
+[[ -n "$RID" ]] && grep -q "IGNORED-AGENTS" "$REPO/.lanewise/runs/$RID/context.md" \
   && ok "the ignored AGENTS.md reaches the run's context.md" || bad "the ignored AGENTS.md is missing from the run's context.md ($RID)"
 CFG="$T/claude-cfg/projects/$(native "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"; mkdir -p "$CFG/sess-test/subagents"
 $PY - "$CFG" <<'EOF'
@@ -88,7 +88,7 @@ main = [a("m1", "claude-opus-5-5", 10, 100, 1000, 50), a("m1", "claude-opus-5-5"
 open(os.path.join(d, "sess-test.jsonl"), "w", encoding="utf-8").write("\n".join(main) + "\n")
 open(os.path.join(d, "sess-test", "subagents", "agent-a1.jsonl"), "w", encoding="utf-8").write(
     a("s1", "claude-sonnet-5-5", 3, 30, 300, 7, agent="a1", effort="medium") + "\n")
-json.dump({"agentType": "partitura:orch-sonnet-high", "description": "Find naïve parse calls"},
+json.dump({"agentType": "lanewise:orch-sonnet-high", "description": "Find naïve parse calls"},
           open(os.path.join(d, "sess-test", "subagents", "agent-a1.meta.json"), "w", encoding="utf-8"), ensure_ascii=False)
 EOF
 out=$($ORCH usage)

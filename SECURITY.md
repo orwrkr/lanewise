@@ -3,15 +3,15 @@
 ## Reporting a vulnerability
 
 Please report security issues privately through
-[GitHub Security Advisories](https://github.com/orwrkr/partitura/security/advisories/new) rather than a public issue.
-Include the affected version (`plugins/partitura/.claude-plugin/plugin.json`), your platform (WSL/Linux/macOS or
+[GitHub Security Advisories](https://github.com/orwrkr/lanewise/security/advisories/new) rather than a public issue.
+Include the affected version (`plugins/lanewise/.claude-plugin/plugin.json`), your platform (WSL/Linux/macOS or
 native Windows) and the steps to reproduce. You should get a first answer within a week.
 
 ## What is in scope
 
-Partitura runs other AI agents on your machine and handles API keys, so these areas matter most:
+Lanewise runs other AI agents on your machine and handles API keys, so these areas matter most:
 
-- **Secrets.** API keys live only in `~/.partitura/secrets.env` and reach only the adapters that declare them
+- **Secrets.** API keys live only in `~/.lanewise/secrets.env` and reach only the adapters that declare them
   (`# orch-secrets: …`). Profiles store variable names, never key values. A key showing up in a repository, a log,
   `orch` output or another adapter's environment is a vulnerability. Keys are not plugin options (`userConfig`):
   Claude Code never passes those to commands run through the Bash tool, which is how `orch` starts executors (plugin
@@ -21,8 +21,10 @@ Partitura runs other AI agents on your machine and handles API keys, so these ar
   the permissions of their mode (`analysis` / `write`, `--allow` rules).
 - **Hooks.** Plugin hooks run on every prompt and tool call; they must never execute content from task files.
 - **Code from the personal folder.** `bin/orch` runs the bytecode it compiled from its own sources and cached in
-  `~/.partitura/.pycache/`, and `hooks/run.sh` starts the interpreter it remembered in `~/.partitura/`. Whoever can
-  write to that folder can therefore run code as you, as with the plugin's own files: keep it yours alone. A way to
-  make the plugin run anything other than its own files from there is a vulnerability.
+  `~/.lanewise/.pycache/`, and `hooks/run.sh` starts the interpreter it remembered in `~/.lanewise/`. A home that
+  keeps its name from before 0.36.0 (`~/.partitura`) or before 0.35.0 (`~/.orchestra`) is used in place, so the
+  folder actually in use is the one to guard. Whoever can write to it can therefore run code as you, as with the
+  plugin's own files: keep it yours alone. A way to make the plugin run anything other than its own files from
+  there is a vulnerability.
 
-Manual agents (Antigravity and similar) are never automated by design: Partitura only writes task files for them.
+Manual agents (Antigravity and similar) are never automated by design: Lanewise only writes task files for them.

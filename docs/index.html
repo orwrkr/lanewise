@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Partitura — a multi-model orchestrator for Claude Code</title>
+<title>Lanewise — a multi-model orchestrator for Claude Code</title>
 <meta name="description" content="A Claude Code plugin that routes subtasks to Claude subagents, Codex CLI, DeepSeek and manual agents by difficulty, limits and spend.">
-<meta property="og:title" content="Partitura — a multi-model orchestrator for Claude Code">
+<meta property="og:title" content="Lanewise — a multi-model orchestrator for Claude Code">
 <meta property="og:description" content="A Claude Code plugin that routes subtasks to Claude subagents, Codex CLI, DeepSeek and manual agents by difficulty, limits and spend.">
-<meta property="og:url" content="https://orwrkr.github.io/partitura/">
+<meta property="og:url" content="https://orwrkr.github.io/lanewise/">
 <meta property="og:type" content="website">
-<meta property="og:image" content="https://raw.githubusercontent.com/orwrkr/partitura/main/plugins/partitura/.claude-plugin/icon.png">
+<meta property="og:image" content="https://raw.githubusercontent.com/orwrkr/lanewise/main/plugins/lanewise/.claude-plugin/icon.png">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Crect%20width='100'%20height='100'%20fill='%231C1E33'/%3E%3Cpath%20d='M62%2040%20L50%2022.8%20M62%2040%20L70.9%2021%20M62%2040%20L82.9%2038.2%20M62%2040%20L74%2057.2'%20fill='none'%20stroke='%23F5F1E8'%20stroke-width='2'%20stroke-opacity='0.45'%20stroke-linecap='round'/%3E%3Cline%20x1='25'%20y1='77'%20x2='62'%20y2='40'%20stroke='%23F5F1E8'%20stroke-width='5.5'%20stroke-linecap='round'/%3E%3Ccircle%20cx='23'%20cy='79'%20r='6.5'%20fill='%23F5F1E8'/%3E%3Ccircle%20cx='50'%20cy='22.8'%20r='6.5'%20fill='%23A79BFF'/%3E%3Ccircle%20cx='70.9'%20cy='21'%20r='6.5'%20fill='%23F4B23E'/%3E%3Ccircle%20cx='82.9'%20cy='38.2'%20r='6.5'%20fill='%232EC4B6'/%3E%3Ccircle%20cx='74'%20cy='57.2'%20r='6.5'%20fill='%23EE6C4D'/%3E%3C/svg%3E">
 <style>
 :root{
@@ -315,13 +315,13 @@ code{
           <circle cx="74" cy="57.2" r="6.5" fill="#EE6C4D"/>
         </svg>
       </span>
-      <span>Partitura</span>
+      <span>Lanewise</span>
     </div>
     <nav class="site-nav" aria-label="Main">
       <ul>
-        <li><a href="https://github.com/orwrkr/partitura/blob/main/plugins/partitura/README.md">Docs</a></li>
-        <li><a href="https://github.com/orwrkr/partitura/blob/main/CHANGELOG.md">Changelog</a></li>
-        <li><a href="https://github.com/orwrkr/partitura">GitHub</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise/blob/main/plugins/lanewise/README.md">Docs</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise/blob/main/CHANGELOG.md">Changelog</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise">GitHub</a></li>
       </ul>
     </nav>
   </div>
@@ -346,14 +346,14 @@ code{
         <h1 id="hero-title">A multi-model orchestrator for Claude Code</h1>
         <p class="lead">Your Claude Code session breaks a task down and decides who does each subtask, and at what effort: Claude subagents, Codex CLI, DeepSeek, or a pool of tasks for manual agents. Routing follows each model's strengths, your subscription limits and balance, and the rules you set per project.</p>
         <div class="cmd">
-          <pre tabindex="0"><code id="install-command">claude plugin install partitura --marketplace orwrkr/partitura</code></pre>
+          <pre tabindex="0"><code id="install-command">claude plugin install lanewise --marketplace orwrkr/lanewise</code></pre>
           <button class="copy" type="button" hidden aria-label="Copy the install command" data-copy-target="install-command">Copy</button>
         </div>
         <div class="actions">
           <a class="btn btn-primary" href="#install">Get started</a>
-          <a class="btn btn-ghost" href="https://github.com/orwrkr/partitura">View on GitHub</a>
+          <a class="btn btn-ghost" href="https://github.com/orwrkr/lanewise">View on GitHub</a>
         </div>
-        <p class="meta">MIT licensed · <a href="https://github.com/orwrkr/partitura/releases/latest">Latest release</a></p>
+        <p class="meta">MIT licensed · <a href="https://github.com/orwrkr/lanewise/releases/latest">Latest release</a></p>
       </div>
     </div>
   </section>
@@ -376,7 +376,7 @@ code{
         </li>
         <li class="card executor">
           <h3>Manual task pool</h3>
-          <p>Tasks for Antigravity, Cursor and similar agents. You pick a task and paste one line. Partitura never drives these apps itself: it only writes task files and reads results.</p>
+          <p>Tasks for Antigravity, Cursor and similar agents. You pick a task and paste one line. Lanewise never drives these apps itself: it only writes task files and reads results.</p>
         </li>
       </ul>
     </div>
@@ -422,7 +422,7 @@ code{
         <div class="step">
           <h3>Option 1 — The plugin only</h3>
           <div class="cmd">
-            <pre tabindex="0"><code id="plugin-command">claude plugin install partitura --marketplace orwrkr/partitura</code></pre>
+            <pre tabindex="0"><code id="plugin-command">claude plugin install lanewise --marketplace orwrkr/lanewise</code></pre>
             <button class="copy" type="button" hidden aria-label="Copy the install command" data-copy-target="plugin-command">Copy</button>
           </div>
         </div>
@@ -430,13 +430,13 @@ code{
           <h3>Option 2 — From a clone</h3>
           <p>Also puts <code>orch</code> in your terminal (needed for <code>orch launch</code>).</p>
           <div class="cmd">
-            <pre tabindex="0"><code id="clone-command">git clone https://github.com/orwrkr/partitura &amp;&amp; cd partitura &amp;&amp; bash install.sh</code></pre>
+            <pre tabindex="0"><code id="clone-command">git clone https://github.com/orwrkr/lanewise &amp;&amp; cd lanewise &amp;&amp; bash install.sh</code></pre>
             <button class="copy" type="button" hidden aria-label="Copy the clone command" data-copy-target="clone-command">Copy</button>
           </div>
         </div>
       </div>
       <div class="notes">
-        <p>Then start <code>claude</code> in your project and run <code>/partitura:status</code>. <code>orch doctor</code> shows what is available.</p>
+        <p>Then start <code>claude</code> in your project and run <code>/lanewise:status</code>. <code>orch doctor</code> shows what is available.</p>
         <p>It works with Claude Code on WSL, Linux and macOS, and natively on Windows.</p>
       </div>
     </div>
@@ -448,7 +448,7 @@ code{
       <div class="data">
         <p>No telemetry. Hooks and the status line work on your machine. <code>orch</code> makes one network request of its own: your DeepSeek account balance (<code>ORCH_BALANCE=off</code> turns it off).</p>
         <p>Each executor sends the task, the project rules and the files it reads to its own provider, on your account.</p>
-        <p><a href="https://github.com/orwrkr/partitura/blob/main/plugins/partitura/README.md#what-it-runs-sends-and-fetches">What it runs, sends and fetches</a></p>
+        <p><a href="https://github.com/orwrkr/lanewise/blob/main/plugins/lanewise/README.md#what-it-runs-sends-and-fetches">What it runs, sends and fetches</a></p>
       </div>
     </div>
   </section>
@@ -458,15 +458,15 @@ code{
   <div class="wrap footer-inner">
     <nav class="footer-nav" aria-label="Footer">
       <ul>
-        <li><a href="https://github.com/orwrkr/partitura/blob/main/LICENSE">License</a></li>
-        <li><a href="https://github.com/orwrkr/partitura/blob/main/SECURITY.md">Security</a></li>
-        <li><a href="https://github.com/orwrkr/partitura/blob/main/PRIVACY.md">Privacy</a></li>
-        <li><a href="https://github.com/orwrkr/partitura/blob/main/TERMS.md">Terms</a></li>
-        <li><a href="https://github.com/orwrkr/partitura/blob/main/CHANGELOG.md">Changelog</a></li>
-        <li><a href="https://github.com/orwrkr/partitura">GitHub</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise/blob/main/LICENSE">License</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise/blob/main/SECURITY.md">Security</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise/blob/main/PRIVACY.md">Privacy</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise/blob/main/TERMS.md">Terms</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise/blob/main/CHANGELOG.md">Changelog</a></li>
+        <li><a href="https://github.com/orwrkr/lanewise">GitHub</a></li>
       </ul>
     </nav>
-    <p class="footer-note">Partitura is an independent project, not affiliated with Anthropic, OpenAI, DeepSeek or Google.</p>
+    <p class="footer-note">Lanewise is an independent project, not affiliated with Anthropic, OpenAI, DeepSeek or Google.</p>
   </div>
 </footer>
 

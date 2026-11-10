@@ -26,7 +26,7 @@ PLACEHOLDER_USERS = {"me", "you", "user", "username", "name", "example", "public
 GENERIC_NAMES = {"root", "user", "admin", "administrator", "runner", "runneradmin", "ubuntu", "home", "github", "test", "ci",
                  "ci@example.invalid"}
 # Profile labels and folders that name nothing private, and the standard key variables.
-GENERIC_LABELS = {"default", "personal", "work", "main", "off", "inherit", "login", "key", "client", "orchestra", "orchestrator", "partitura"}
+GENERIC_LABELS = {"default", "personal", "work", "main", "off", "inherit", "login", "key", "client", "orchestra", "orchestrator", "partitura", "lanewise"}
 STANDARD_KEYS = {"deepseek_api_key", "anthropic_api_key", "anthropic_auth_token", "openai_api_key", "codex_api_key",
                  "gemini_api_key", "google_api_key"}
 # A drive path below these is the same on every machine.
@@ -66,13 +66,16 @@ def generic_key_var(var):
 
 
 def orch_home():
-    """The personal folder, as orch resolves it: ORCH_HOME; else ~/.partitura; else the old ~/.orchestra that an
-    installation made before 0.35.0 still uses; else ~/.partitura."""
+    """The personal folder, as orch resolves it: ORCH_HOME; else the first that exists of ~/.lanewise, ~/.partitura
+    (before 0.36.0) and ~/.orchestra (before 0.35.0); else ~/.lanewise."""
     v = os.environ.get("ORCH_HOME")
     if v:
         return Path(v)
-    new, old = Path.home() / ".partitura", Path.home() / ".orchestra"
-    return new if new.is_dir() or not old.is_dir() else old
+    base = Path.home()
+    for name in (".lanewise", ".partitura", ".orchestra"):
+        if (base / name).is_dir():
+            return base / name
+    return base / ".lanewise"
 
 
 def private_names(root):
@@ -92,7 +95,7 @@ def private_names(root):
     for term in terms:
         term = term.strip()
         if term and not term.startswith("#"):
-            add(term, "private_terms.txt in ~/.partitura")
+            add(term, "private_terms.txt in ~/.lanewise")
     try:
         data = json.loads((home / "profiles.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
@@ -204,7 +207,8 @@ def scan_worktree(root, identities):
             return []
         # git can't read it (a worktree made on Windows, seen from WSL): that must not pass as clean
         paths = [str(p.relative_to(root)) for p in sorted(root.rglob("*"))
-                 if not {".git", ".partitura", ".orchestra", "__pycache__"} & set(p.relative_to(root).parts)]
+                 if not {".git", ".lanewise", ".partitura", ".orchestra", "__pycache__"}
+                 & set(p.relative_to(root).parts)]
     out = []
     for rel in paths:
         path = root / rel

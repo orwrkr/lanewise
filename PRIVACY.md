@@ -1,18 +1,19 @@
 # Privacy policy
 
-Partitura is a Claude Code plugin that runs on your computer. Its author runs no service for it: there is no
+Lanewise is a Claude Code plugin that runs on your computer. Its author runs no service for it: there is no
 account, no server, no telemetry and no analytics, and nothing about you or your work is sent to the author.
 
 ## What stays on your computer
 
-- `~/.partitura/`: your settings, executor profiles, API keys (`secrets.env`), spend limits, balances and the usage
+- `~/.lanewise/`: your settings, executor profiles, API keys (`secrets.env`), spend limits, balances and the usage
   log (which model did what, and how many tokens it spent).
-- `<project>/.partitura/` in projects where you used the plugin: executor runs, task prompts and manual tasks.
+- `<project>/.lanewise/` in projects where you used the plugin: executor runs, task prompts and manual tasks.
 
-Before 0.35.0 both folders were named `.orchestra`.
+Before 0.36.0 both folders were named `.partitura`; before 0.35.0, `.orchestra`. `orch` reads either where it is,
+and `orch migrate` moves it to the new name.
 
 `orch footprint` lists everything the plugin created. `bash uninstall.sh --purge` removes the plugin and
-`~/.partitura`; project folders are yours to delete.
+`~/.lanewise`; project folders are yours to delete.
 
 ## What leaves your computer, and to whom
 
@@ -33,15 +34,15 @@ What those providers do with the data is governed by their own privacy policies:
 - Google (Antigravity, when you use it for a manual task): [policies.google.com/privacy](https://policies.google.com/privacy)
 
 The plugin README lists every case, with what triggers it:
-[What it runs, sends and fetches](plugins/partitura/README.md#what-it-runs-sends-and-fetches).
+[What it runs, sends and fetches](plugins/lanewise/README.md#what-it-runs-sends-and-fetches).
 
 ## The website
 
-[orwrkr.github.io/partitura](https://orwrkr.github.io/partitura/) is a static page. It loads nothing from other
+[orwrkr.github.io/lanewise](https://orwrkr.github.io/lanewise/) is a static page. It loads nothing from other
 sites, sets no cookies and runs no analytics. GitHub hosts it and the repository, and GitHub's own privacy statement
 covers what GitHub itself records.
 
 ## Questions and changes
 
-Ask through [GitHub issues](https://github.com/orwrkr/partitura/issues). Report security problems privately, as
+Ask through [GitHub issues](https://github.com/orwrkr/lanewise/issues). Report security problems privately, as
 [SECURITY.md](SECURITY.md) describes. Changes to this policy are in this file's git history.

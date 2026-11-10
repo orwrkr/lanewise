@@ -1,6 +1,6 @@
-# <img src="assets/icon.svg" alt="" width="40" align="top"> Partitura
+# <img src="assets/icon.svg" alt="" width="40" align="top"> Lanewise
 
-[![tests](https://github.com/orwrkr/partitura/actions/workflows/tests.yml/badge.svg)](https://github.com/orwrkr/partitura/actions/workflows/tests.yml)
+[![tests](https://github.com/orwrkr/lanewise/actions/workflows/tests.yml/badge.svg)](https://github.com/orwrkr/lanewise/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **A multi-model orchestrator plugin for [Claude Code](https://claude.com/claude-code).** The lead session breaks a
@@ -23,12 +23,13 @@ entirely if you want.
 Works with Claude Code in WSL/Linux and natively on Windows. Needs Claude Code itself (installed and logged in),
 Python ≥ 3.8 (standard library only) and git; npm only for the optional Codex line below.
 
-Partitura was called **Orchestra** before 0.34.0: [upgrading](CHANGELOG.md#0340) takes one command.
+Lanewise was called **Partitura** before 0.36.0 and **Orchestra** before 0.34.0: [upgrading](CHANGELOG.md#0360)
+takes one command.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/orwrkr/partitura && cd partitura
+git clone https://github.com/orwrkr/lanewise && cd lanewise
 bash install.sh                 # Git Bash on Windows; inside WSL for a WSL installation
 ```
 
@@ -49,15 +50,15 @@ Or without a clone, from a terminal (the plugin's `orch` is then not in your ter
 tool):
 
 ```bash
-claude plugin install partitura --marketplace orwrkr/partitura
+claude plugin install lanewise --marketplace orwrkr/lanewise
 ```
 
-Then `cd` into your project, start `claude` and run `/partitura:status`; `claude plugin list` shows whether the
+Then `cd` into your project, start `claude` and run `/lanewise:status`; `claude plugin list` shows whether the
 plugin is enabled. Give Claude Code a multi-step task and the `orchestrate` skill takes over. Optional executors:
 
 ```bash
 npm i -g @openai/codex && codex login     # Codex
-# DeepSeek: add the line DEEPSEEK_API_KEY=sk-… to ~/.partitura/secrets.env (never to a repository)
+# DeepSeek: add the line DEEPSEEK_API_KEY=sk-… to ~/.lanewise/secrets.env (never to a repository)
 orch doctor                               # what is available
 ```
 
@@ -65,29 +66,29 @@ In `orch doctor`, `✔` is fine, `·` is optional and not set up, `✘` is a pro
 
 | In a session | |
 |---|---|
-| `/partitura:run <task>` | plan → assign models and effort → execute |
-| `/partitura:status` | limits, profiles, manual tasks |
-| `/partitura:manual` | the manual task pool: "AG-0004 to Antigravity" |
-| `/partitura:profile …` | "no DeepSeek in this project", "Codex on the second account" |
-| `/partitura:usage` | who did what and how many tokens it took |
+| `/lanewise:run <task>` | plan → assign models and effort → execute |
+| `/lanewise:status` | limits, profiles, manual tasks |
+| `/lanewise:manual` | the manual task pool: "AG-0004 to Antigravity" |
+| `/lanewise:profile …` | "no DeepSeek in this project", "Codex on the second account" |
+| `/lanewise:usage` | who did what and how many tokens it took |
 
-All eight commands, including `/partitura:quota`, `/partitura:done` and `/partitura:away`:
-[plugin documentation](plugins/partitura/README.md#usage).
+All eight commands, including `/lanewise:quota`, `/lanewise:done` and `/lanewise:away`:
+[plugin documentation](plugins/lanewise/README.md#usage).
 
 ## Documentation
 
-- [Plugin documentation](plugins/partitura/README.md) — executors and their isolation, profiles, the manual lane,
+- [Plugin documentation](plugins/lanewise/README.md) — executors and their isolation, profiles, the manual lane,
   DeepSeek as the lead, the usage log, the registry, adding executors, storage, uninstalling
-- [Routing rules](plugins/partitura/skills/orchestrate/SKILL.md) the lead follows, and their
-  [reference sections](plugins/partitura/skills/orchestrate/reference/)
-- [Model registry](plugins/partitura/registry/providers.yaml)
+- [Routing rules](plugins/lanewise/skills/orchestrate/SKILL.md) the lead follows, and their
+  [reference sections](plugins/lanewise/skills/orchestrate/reference/)
+- [Model registry](plugins/lanewise/registry/providers.yaml)
 - [Contributing](CONTRIBUTING.md) · [Development rules](AGENTS.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 - [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md)
 
 **Antigravity and other manual agents are never automated** — no `agy`, computer use, text pasting or OAuth (that
-violates Google's ToS). Partitura only writes task files for them and reads their results.
+violates Google's ToS). Lanewise only writes task files for them and reads their results.
 
-Uninstall: `bash uninstall.sh` (standard `claude plugin uninstall`; `--purge` also deletes `~/.partitura/`).
+Uninstall: `bash uninstall.sh` (standard `claude plugin uninstall`; `--purge` also deletes `~/.lanewise/`).
 `orch footprint` lists everything the plugin created outside Claude Code.
 
 ## License

@@ -39,8 +39,8 @@ out=$($ORCH status --brief); contains "$out" "the built-in registry has changed 
 out=$($ORCH doctor); contains "$out" "the built-in registry has changed since this copy was made (an older version)" "an unmarked copy that differs: doctor warns"
 # a project copy takes precedence over the personal one, and over the built-in one
 $ORCH registry init --project >/dev/null
-out=$($ORCH registry path); contains "$out" "\.partitura/providers.yaml" "project registry copy takes precedence"
-rm -f "$REPO/.partitura/providers.yaml"
+out=$($ORCH registry path); contains "$out" "\.lanewise/providers.yaml" "project registry copy takes precedence"
+rm -f "$REPO/.lanewise/providers.yaml"
 rm -f "$ORCH_HOME/providers.yaml"
 out=$($ORCH registry diff); contains "$out" "No personal or project copy: the built-in registry is in effect." "no copy in effect: diff says so"
 

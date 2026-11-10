@@ -1,32 +1,36 @@
 #!/usr/bin/env bash
-# Removes the Partitura plugin (called Orchestra before 0.34.0) from Claude Code in THIS environment (WSL / Linux /
-# macOS or Git Bash on Windows).
+# Removes the Lanewise plugin (called Partitura before 0.36.0 and Orchestra before 0.34.0) from Claude Code in THIS
+# environment (WSL / Linux / macOS or Git Bash on Windows).
 # Claude Code: the standard way, `claude plugin uninstall` + `claude plugin marketplace remove` (Claude Code
 # settings are not edited by hand). Outside Claude Code: the orch launchers in ~/.local/bin. Personal data
-# (~/.partitura, or ~/.orchestra before 0.35.0: limits, profiles, keys, usage log) is kept; --purge deletes it too.
-# Per-project state (<project>/.partitura/, or .orchestra before 0.35.0, with the worktrees of tasks that change
-# files in wt/, the Antigravity rule <project>/.agents/rules/partitura-task.md (orchestra-task.md before 0.34.0),
-# worktrees <project>.wt/ from `orch worktree`) is left alone: the script only lists it. If you delete the state
-# folder by hand, run `git worktree prune` in the project.
+# (~/.lanewise; ~/.partitura before 0.36.0 and ~/.orchestra before 0.35.0: limits, profiles, keys, usage log) is
+# kept; --purge deletes it too.
+# Per-project state (<project>/.lanewise/, or .partitura before 0.36.0 and .orchestra before 0.35.0, with the
+# worktrees of tasks that change files in wt/, the Antigravity rule <project>/.agents/rules/lanewise-task.md, or
+# partitura-task.md before 0.36.0 and orchestra-task.md before 0.34.0, worktrees <project>.wt/ from `orch worktree`)
+# is left alone: the script only lists it. If you delete the state folder by hand, run `git worktree prune` in the
+# project.
 #
 #   bash uninstall.sh            # plugin and launchers
 #   bash uninstall.sh --purge    # plus the personal folder
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ORCH="$ROOT/plugins/partitura/bin/orch"
-MARKET="partitura"
-LEGACY_MARKETS="orchestra orchestra-local"     # marketplace names of earlier versions
-LEGACY_PLUGINS="orchestra"                     # the plugin's name before 0.34.0
+ORCH="$ROOT/plugins/lanewise/bin/orch"
+MARKET="lanewise"
+LEGACY_MARKETS="partitura orchestra orchestra-local"    # partitura before 0.36.0, orchestra before 0.34.0
+LEGACY_PLUGINS="partitura orchestra"                    # the plugin's names before 0.36.0 and 0.34.0
 PURGE=0; [[ "${1:-}" == "--purge" ]] && PURGE=1
 if [[ -n "${ORCH_HOME:-}" ]]; then
   HOME_DIR="$ORCH_HOME"
+elif [[ -d "$HOME/.lanewise" ]]; then
+  HOME_DIR="$HOME/.lanewise"
 elif [[ -d "$HOME/.partitura" ]]; then
   HOME_DIR="$HOME/.partitura"
 elif [[ -d "$HOME/.orchestra" ]]; then
   HOME_DIR="$HOME/.orchestra"
 else
-  HOME_DIR="$HOME/.partitura"
+  HOME_DIR="$HOME/.lanewise"
 fi
 
 say()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
@@ -45,8 +49,8 @@ TMPF="$(mktemp)"
 [[ -n "$PY" && -f "$ORCH" ]] && "$PY" "$ORCH" footprint 2>/dev/null | sed -n '/^Outside Claude Code/,$p' | grep '  project ' > "$TMPF" || true
 
 if command -v claude >/dev/null 2>&1; then
-  say "Removing the plugin partitura@$MARKET and the marketplace $MARKET (the standard way, via claude plugin)"
-  claude plugin uninstall "partitura@$MARKET" >/dev/null 2>&1 && say "plugin removed" || warn "the plugin was not installed"
+  say "Removing the plugin lanewise@$MARKET and the marketplace $MARKET (the standard way, via claude plugin)"
+  claude plugin uninstall "lanewise@$MARKET" >/dev/null 2>&1 && say "plugin removed" || warn "the plugin was not installed"
   claude plugin marketplace remove "$MARKET" >/dev/null 2>&1 && say "marketplace removed" || warn "the marketplace was not registered"
   for m in $LEGACY_MARKETS; do          # an installation of an earlier version, if any
     for p in $LEGACY_PLUGINS; do
@@ -55,11 +59,11 @@ if command -v claude >/dev/null 2>&1; then
     claude plugin marketplace remove "$m" >/dev/null 2>&1 && say "marketplace $m removed" || true
   done
 else
-  warn "claude CLI not found: remove the plugin in Claude Code via /plugin → partitura → Uninstall"
+  warn "claude CLI not found: remove the plugin in Claude Code via /plugin → lanewise → Uninstall"
 fi
 
 for f in "$HOME/.local/bin/orch" "$HOME/.local/bin/orch.cmd"; do
-  if [[ -L "$f" ]] || { [[ -f "$f" ]] && grep -q "orch launcher\|plugins/partitura/bin/orch\|plugins/orchestra/bin/orch" "$f" 2>/dev/null; }; then
+  if [[ -L "$f" ]] || { [[ -f "$f" ]] && grep -q "orch launcher\|plugins/lanewise/bin/orch\|plugins/partitura/bin/orch\|plugins/orchestra/bin/orch" "$f" 2>/dev/null; }; then
     rm -f "$f" && say "removed launcher $(wpath "$f")"
   fi
 done
@@ -71,7 +75,7 @@ elif [[ -d "$HOME_DIR" ]]; then
 fi
 
 if [[ -s "$TMPF" ]]; then
-  warn "Partitura state is left in projects (excluded from git via .git/info/exclude); delete it by hand if you don't need it:"
+  warn "Lanewise state is left in projects (excluded from git via .git/info/exclude); delete it by hand if you don't need it:"
   cat "$TMPF"
 fi
 rm -f "$TMPF"

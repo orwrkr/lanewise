@@ -125,6 +125,11 @@ maintainer is ready to reinstall: pulling it removes the folder the running plug
 
 ## 7. Each installation
 
+**First, reload or restart every open Claude Code session that uses the plugin, in every project.** A session
+started under the old name keeps the old instructions. Its agent can go on writing task prompts to the old state
+folder (`<project>/.<old>/prompts/`) after that folder has moved. The project then has two state folders, and
+`orch migrate` stops there, because it never merges.
+
 From a clone, in every environment where the plugin is installed (Git Bash, WSL):
 
 ```bash
@@ -145,6 +150,20 @@ Then:
 write RESULT.md to the old path. Finish or cancel the task (`orch handoff cancel <id>`), then run it again.
 
 If the old plugin folder is still there after the pull, it holds only Python's cache and can be deleted.
+
+**When a project has two state folders** ("both … exist: nothing was merged"), look at what the newer one holds.
+Usually it is a few prompt files that a session with old instructions wrote after the move.
+1. Check that their names do not clash with files in the folder that holds the history, then move them there.
+2. Delete the emptied folder.
+3. Run `orch migrate <project> --yes`.
+
+If the second folder holds runs or manual tasks of its own, sort them by hand: nothing may be lost.
+
+**Finally, sweep:**
+- `orch migrate --all --home` reports nothing to move;
+- `orch doctor` names no old folder;
+- no folder with an old name is left in the projects directory. `orch migrate --all` only knows projects from the
+  usage log and the profiles, so search the disk too, e.g. `find <projects dir> -maxdepth 7 -type d -name '.<old>'`.
 
 ## 8. Projects and the outside world
 

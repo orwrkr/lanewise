@@ -193,9 +193,10 @@ profile has a `fallback` to that profile.
   each number comes from: `est. $1.47 of $10 (manual, since Nov 03) · account $15.09 (checked 3m ago)`, or `no balance
   API`, or `last fetch failed: ...`. `orch spend` has an `account` column. The warning at 80% (`API spend:` in `orch
   status`) and the 💡 events are unchanged.
-- **When fetched**: `orch balance [SCOPE …] [--json]` always; `orch status` and `orch spend` when the figure is older
-  than 10 minutes; the end of each `orch run` for its scope; SessionStart starts a detached `orch balance --quiet`
-  when it is stale. A budgeted run also fetches before starting. 5-second timeout everywhere; outside session-budget
+- **When fetched**: `orch balance [SCOPE …] [--json]` always; `orch status` (its active scopes) and `orch spend` (every
+  key) when the figure is older than 10 minutes; the end of each `orch run` for its scope; SessionStart and every user
+  prompt start a detached `orch balance --quiet` when any key with a balance API is stale, at most one fetch every two
+  minutes. A budgeted run also fetches before starting. 5-second timeout everywhere; outside session-budget
   preflight a failure never fails the command. The status line only reads the
   file. `ORCH_BALANCE=off` stops every request.
 - **Which providers**: only what an ordinary key can read: DeepSeek. OpenAI (Codex key), Anthropic (Claude key) and

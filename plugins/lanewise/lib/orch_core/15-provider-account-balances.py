@@ -504,27 +504,42 @@ def balance_stale(targets, cache):
     return False
 
 
-def balance_refresh_stale(where):
-    """`orch status` and `orch spend show`: fetch the active scopes whose figure is stale, bounded by the timeout.
-    Never fails, and does nothing in a worker or with ORCH_BALANCE=off."""
+def balance_refresh_stale(where, all_keys=False):
+    """`orch status` (the scopes active in `where`) and `orch spend show` (`all_keys`: every key, as its table shows
+    them): fetch the scopes whose figure is stale, bounded by the timeout. Never fails, and does nothing in a worker or
+    with ORCH_BALANCE=off."""
     if balance_off() or os.environ.get("ORCH_WORKER"):
         return
     try:
         cache = balance_cache()
-        stale = [t for t in balance_active_targets(where) if balance_stale([t], cache)]
+        targets = balance_targets() if all_keys else balance_active_targets(where)
+        stale = [t for t in targets if t["provider"] in BALANCE_PROVIDERS and balance_stale([t], cache)]
     except Exception:
         return
     if stale:
         balance_refresh(stale)
 
 
-def balance_start_refresh(where):
-    """SessionStart: when a balance is stale, start `orch balance --quiet` detached and go on at once. The child has
+def balance_spawn_recent():
+    """True when a hook started a detached fetch within BALANCE_SPAWN_GAP_SECONDS: several sessions and prompts then
+    start one fetch, not many. A missing or unreadable marker is no recent spawn."""
+    try:
+        return time.time() - BALANCE_REFRESH_MARKER.stat().st_mtime < BALANCE_SPAWN_GAP_SECONDS
+    except OSError:
+        return False
+
+
+def balance_start_refresh(targets=None):
+    """SessionStart / UserPromptSubmit: when a balance is stale, start `orch balance --quiet` detached and go on at
+    once. `targets` defaults to every key `orch balance` would fetch (with a balance API), not only the ones the current
+    directory uses; the marker keeps prompts and sessions within BALANCE_SPAWN_GAP_SECONDS to one fetch. The child has
     no console window (Windows) or its own session (POSIX), no inherited stdio, and outlives the hook."""
     if balance_off() or os.environ.get("ORCH_WORKER"):
         return
     try:
-        if not balance_stale(balance_active_targets(where), balance_cache()):
+        if targets is None:
+            targets = [t for t in balance_targets() if t["provider"] in BALANCE_PROVIDERS]
+        if not balance_stale(targets, balance_cache()) or balance_spawn_recent():
             return
         import subprocess
         kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
@@ -532,7 +547,19 @@ def balance_start_refresh(where):
             kw["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000   # DETACHED_PROCESS | NEW_PROCESS_GROUP | NO_WINDOW
         else:
             kw["start_new_session"] = True
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "balance", "--quiet"], **kw)
+        # claim the gap before spawning, so a hook running at the same moment sees it; give it back if the spawn fails
+        try:
+            BALANCE_REFRESH_MARKER.touch()
+        except OSError:
+            pass
+        try:
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "balance", "--quiet"], **kw)
+        except Exception:
+            try:
+                BALANCE_REFRESH_MARKER.unlink()
+            except OSError:
+                pass
+            raise
     except Exception:
         pass
 

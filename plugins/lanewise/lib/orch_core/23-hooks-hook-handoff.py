@@ -65,9 +65,10 @@ def cmd_hook(a):
             codex_event(sid, announce=False)         # record the Codex mode so a change later raises a 💡 event
             spend_event(announce=False)              # record the 80%/100% spend thresholds so a change later raises 💡
             fallback_event(announce=False)           # record a move to a fallback profile so the way back raises 💡
-            balance_start_refresh(project_dir())     # a stale balance is fetched by a detached process, not awaited
+            balance_start_refresh()     # a stale balance is fetched by a detached process, not awaited
             return 0
         if a.event == "user-prompt":
+            balance_start_refresh()     # every key with a balance API, not only this directory's
             events = [e for e in [budget_event(sid), codex_event(sid)] if e] + spend_event() + fallback_event() \
                 + (check_events(mark=True) if has_state else [])
             if events:

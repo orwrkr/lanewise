@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.37.0
+
+- **Account balances stay fresh while you work.** A long session used to show a figure fetched hours ago unless you
+  reran `orch status`. Now SessionStart and every user prompt start a detached `orch balance --quiet` when any stored
+  figure is older than 10 minutes, so the balance keeps up with the work even in a session that runs no `orch status`.
+  This covers **every key** the provider has a balance API for, including the ones the current project does not use.
+  Hooks start at most one fetch every two minutes (a marker in `~/.lanewise/.balance-refresh`), so several sessions and
+  prompts do not multiply requests; a failed fetch counts as asked, so a down provider is retried only after the same
+  10 minutes. `orch spend` now refreshes every stale key (its table shows every key) and `orch status` keeps refreshing
+  the project's active ones. `ORCH_BALANCE=off` still stops every request, and nothing runs inside an executor.
+
 ## 0.36.0
 
 - **Partitura is now Lanewise.** An AI-agent orchestration product named Partitura already exists, so the plugin

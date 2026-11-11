@@ -71,6 +71,14 @@ v = e.get(sys.argv[3])
 print(v.get("message") if isinstance(v, dict) else "" if v is None else v)
 EOF
 }
+bal_marker_age() { $PY - "$BH/.balance-refresh" "$1" <<'EOF'
+import os, sys, time
+path, secs = sys.argv[1], int(sys.argv[2])
+if os.path.exists(path):
+    t = time.time() - secs
+    os.utime(path, (t, t))
+EOF
+}
 bal_age() { $PY - "$BH/balances.json" "$1" "$2" <<'EOF'
 import datetime as dt, json, sys
 path, scope, secs = sys.argv[1], sys.argv[2], int(sys.argv[3])
@@ -244,10 +252,146 @@ out=$(printf '{"session_id":"s-bal"}' | ORCH_WORKER=run-x bal hook session-start
 sleep 2
 [[ $rc -eq 0 && $(bal_count) -eq $before ]] && ok "a worker's hook starts no fetch" || bad "a worker's hook fetched (rc=$rc, $(( $(bal_count) - before )) requests)"
 [[ -z "$out" ]] && ok "a worker's hook is silent" || bad "a worker's hook printed: $out"
+bal_marker_age 3600   # past BALANCE_SPAWN_GAP_SECONDS: the marker from the fetch above must not swallow this one
 out=$(printf '{"session_id":"s-bal"}' | bal hook session-start)
 for _ in $(seq 1 60); do [[ $(bal_count) -gt $before ]] && break; sleep 0.5; done
 [[ $(bal_count) -gt $before ]] && ok "the same hook outside a worker does start the fetch" || bad "no fetch outside a worker"
 sleep 5   # let the detached fetch (it sleeps 4 s on the server) land before the next scenario
+
+# orch spend shows every key, so it refreshes every stale key, not only this directory's
+: > "$T/bal.log"
+for _scope in deepseek@client deepseek@work deepseek@bad deepseek@twin; do bal_age "$_scope" 0; done
+bal_age deepseek@work 7200                      # this directory (bal-a) uses client, not work
+out=$(bal spend)
+contains "$out" "DeepSeek@client .*\$5.75" "spend show: this directory's fresh key is shown"
+[[ "$(bal_cache_get deepseek@work amount)" == "110.0" ]] && ok "spend show refreshes the inactive key's figure" || bad "the inactive key was not refreshed"
+grep -q "/user/balance sk-fake-work" "$T/bal.log" && ok "spend show fetches the stale key this directory does not use" || bad "spend show did not fetch the inactive key"
+[[ $(bal_count) -eq 1 ]] && ok "spend show asks only for the stale key" || bad "spend show made $(bal_count) requests"
+
+# UserPromptSubmit: a prompt refreshes every stale key with a balance API in the background, at most once per gap
+BAL_HOOK_OUT=$($PY - "$(native "$PLUGIN/bin/orch")" "$BH" "$BA" <<'BALANCE_HOOK_TEST'
+import contextlib
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+orch, home, here = sys.argv[1:4]
+home, here = Path(home), Path(here)
+os.environ.update(ORCH_HOME=str(home), ORCH_PROJECT_DIR=str(here), ORCH_BALANCE="on",
+                  NO_PROXY="127.0.0.1", no_proxy="127.0.0.1")
+for key in ("ORCH_WORKER", "CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "ORCH_SESSION_ID"):
+    os.environ.pop(key, None)
+loader = importlib.machinery.SourceFileLoader("balance_hook_orch", orch)
+spec = importlib.util.spec_from_loader(loader.name, loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+marker = m.BALANCE_REFRESH_MARKER
+cache_path = home / "balances.json"
+now = dt.datetime.now().astimezone()
+fresh = (now - dt.timedelta(seconds=30)).isoformat(timespec="seconds")
+old = (now - dt.timedelta(hours=2)).isoformat(timespec="seconds")
+scopes = [t["scope"] for t in m.balance_targets() if t["provider"] in m.BALANCE_PROVIDERS]
+
+
+def cache_set(scope, at):
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    entry = data.get(scope) if isinstance(data.get(scope), dict) else {}
+    entry.update(at=at, amount=1.0, currency="USD")
+    entry.pop("error", None)
+    data[scope] = entry
+    cache_path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def backdate_marker():
+    if marker.exists():
+        t = time.time() - m.BALANCE_SPAWN_GAP_SECONDS - 60
+        os.utime(str(marker), (t, t))
+
+
+def hook(spawns, raising=False):
+    """The UserPromptSubmit hook as Claude Code runs it: the event and a JSON line on stdin."""
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            spawns.append(args)
+    sys.stdin = io.StringIO(json.dumps({"session_id": "s-bal"}))
+    out = io.StringIO()
+    patcher = (mock.patch.object(subprocess, "Popen", side_effect=RuntimeError("no process")) if raising
+               else mock.patch.object(subprocess, "Popen", FakePopen))
+    with patcher, contextlib.redirect_stdout(out):
+        rc = m.cmd_hook(SimpleNamespace(event="user-prompt"))
+    sys.stdin = sys.__stdin__
+    return rc, out.getvalue()
+
+
+def report(cond, name):
+    print(("ok|" if cond else "bad|") + name)
+
+
+if marker.exists():
+    marker.unlink()
+spawns = []
+for scope in scopes:
+    cache_set(scope, fresh)
+rc, out = hook(spawns)
+report(rc == 0 and spawns == [] and out == "", "a user prompt with every key fresh fetches nothing and stays silent")
+
+cache_set("deepseek@work", old)                 # a key this directory does not use
+active = [t["scope"] for t in m.balance_active_targets(here)]
+spawns[:] = []
+rc, out = hook(spawns)
+report("deepseek@work" not in active and len(spawns) == 1 and out == "",
+       "a stale key the directory does not use starts one detached fetch")
+
+hook(spawns)
+report(len(spawns) == 1, "a second prompt within the spawn gap starts no second fetch")
+
+backdate_marker()
+hook(spawns)
+report(len(spawns) == 2, "after the spawn gap one fetch starts again")
+
+backdate_marker()
+spawns[:] = []
+os.environ["ORCH_BALANCE"] = "off"
+rc, out = hook(spawns)
+os.environ["ORCH_BALANCE"] = "on"
+report(rc == 0 and spawns == [], "ORCH_BALANCE=off: a user prompt starts nothing")
+
+backdate_marker()
+os.environ["ORCH_WORKER"] = "run-x"
+rc, out = hook(spawns)
+os.environ.pop("ORCH_WORKER")
+report(rc == 0 and spawns == [] and out == "", "ORCH_WORKER: a user prompt starts nothing and stays silent")
+
+backdate_marker()
+rc, out = hook(spawns, raising=True)
+report(rc == 0 and out == "", "a failing spawn still leaves the user-prompt hook silent with exit 0")
+
+spawns[:] = []
+hook(spawns)
+report(len(spawns) == 1, "a failed spawn gives the gap back: the next prompt starts a fetch")
+BALANCE_HOOK_TEST
+)
+_bal_hook_rc=$?
+_bal_reports=$(grep -c -E '^(ok|bad)\|' <<< "$BAL_HOOK_OUT")
+# a crash before or between the reports must fail here, not pass by printing fewer of them
+[[ $_bal_hook_rc -eq 0 && $_bal_reports -eq 8 ]] && ok "the user-prompt hook checks all ran" \
+  || bad "the user-prompt hook checks: rc=$_bal_hook_rc, $_bal_reports of 8 reports"
+while IFS='|' read -r _kind _name; do
+  [[ -n "$_kind" ]] || continue
+  [[ "$_kind" == ok ]] && ok "$_name" || bad "$_name"
+done <<< "$BAL_HOOK_OUT"
 
 # failures keep the last amount and break nothing: HTTP 500, malformed JSON, a timeout, a refused connection
 bal_answers '{"sk-fake-client": {"total": "4.00"}, "sk-fake-work": {"total": "110.00", "currency": "CNY"}}'

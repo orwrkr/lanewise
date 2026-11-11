@@ -317,7 +317,7 @@ def _scope_entry(data, scope, where, project):
 def cmd_spend(a):
     """The balance fetch of `show` runs before the home lock is taken (a network call never holds it)."""
     if getattr(a, "action", None) in (None, "show"):
-        balance_refresh_stale(project_dir())
+        balance_refresh_stale(project_dir(), all_keys=True)      # the table shows every key, not just this project's
     return _cmd_spend(a)
 
 

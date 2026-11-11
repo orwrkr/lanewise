@@ -11,6 +11,21 @@ At most one process item is in progress at a time. A new one starts only with th
 expected benefit and a limit on what it may cost ([AGENTS.md](AGENTS.md#rules)). Work on the workflow itself can
 quietly crowd out the product, and this rule keeps it in view.
 
+## Next
+
+- **Daily token totals per provider, model and key, kept for two months.** *product* The goal is to check the
+  estimated spend when the provider's console is out of reach, for example when someone else issued the key.
+  - **What is recorded.** For each local day and each provider × model × profile (the key's variable name, never the
+    key itself): the number of runs, the input, cache-read, cache-write and output tokens, and the estimated cost at
+    that day's prices.
+  - **What it covers.** Everything the usage log already sees: `orch run` executors, Claude subagents and the lead
+    session. Manual tasks have no token counts.
+  - **Storage.** The totals live in `~/.lanewise/`, apart from `usage.jsonl`. Days older than 60 are pruned. Writing
+    them never breaks a run.
+  - **Command.** `orch usage --daily`, filtered by provider, model or key, with `--days N` and machine-readable output.
+  - **Balance next to the estimate.** Where the provider reports a balance (DeepSeek), show the day's first and last
+    figure beside the estimate, so the drop can be compared with it. A top-up shows as a rise.
+
 ## Small
 
 - **`orch doctor` checks who can read `secrets.env`.** *product* On Linux, macOS and WSL, warn when

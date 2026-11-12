@@ -468,7 +468,7 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `~/.lanewise/daily_usage.json` | daily token totals per project, provider, model and account, the subscription limit points used and each day's first and last account balance, kept for 60 days (`orch usage --daily`) |
 | `~/.lanewise/claude_usage.json` | the Claude subscription's last known window usage and its recent history, for the budget mode (`orch budget`) |
 | `~/.lanewise/codex_usage.json` | the Codex account's last known limits, per `CODEX_HOME` (the `Codex subscription:` line) |
-| `~/.lanewise/session_tokens/<session>.json` | one session's offsets, token totals, billing and daily buckets; after a day quiet, hooks/reports fold it and remove it only after the daily store update succeeds |
+| `~/.lanewise/session_tokens/<session>.json` | one session's offsets, token totals, `paid_via` (subscription or API) and daily buckets; after a day quiet, hooks/reports fold it and remove it only after the daily store update succeeds |
 | `~/.lanewise/sessions.json` | active Claude Code sessions and Claude executor runs: the budget's consumer count |
 | `~/.lanewise/watch.json` | each session's limit-watch answer (pause until the reset, continue, continue-session) and the limits it answered for; removed at SessionEnd or once the session has been quiet for 7 days |
 | `~/.lanewise/balances.json` | each API key's account balance as its provider reported it, and when (`orch balance`) |

@@ -200,7 +200,7 @@ t = d["totals"]
 assert (t["input"], t["cache_read"], t["cache_write"], t["output"]) == (30, 300, 1000, 12), t
 assert t["sessions"] == 2 and t["runs"] == 0 and t["cost_usd"] > 0, t
 g = d["providers"][0]
-assert g["provider"] == "claude" and g["rows"][0]["account"] == "claude" and g["rows"][0]["billing"] == "subscription", g
+assert g["provider"] == "claude" and g["rows"][0]["account"] == "claude" and g["rows"][0]["paid_via"] == "subscription", g
 assert [x["providers"][0]["input"] for x in d["daily"]] == [10, 20], d["daily"]
 assert [x["providers"][0]["cache_write"] for x in d["daily"]] == [1000, 0], d["daily"]
 EOF
@@ -227,7 +227,7 @@ t = report["totals"]
 assert t["runs"] == 1 and (t["input"], t["cache_read"], t["cache_write"], t["output"]) == (200, 1000, 0, 30), t
 assert abs(t["cost_usd"] - float(rec["cost_usd"])) < 1e-6, (t["cost_usd"], rec["cost_usd"])
 row = report["providers"][0]["rows"][0]
-assert row["account"] == "codex" and row["model"] == "gpt-6.1-terra" and row["billing"] in ("api", "subscription"), row
+assert row["account"] == "codex" and row["model"] == "gpt-6.1-terra" and row["paid_via"] in ("api", "subscription"), row
 assert before["totals"]["runs"] == 0 and not before["providers"], before["totals"]
 EOF
 $PY - "$(native "$DH/session_tokens/sess-mid.json")" "$(native "$DH/session_tokens/sess-crash-1.json")" "$D1" <<'EOF'
@@ -511,14 +511,14 @@ loaded = [json.load(open(p, encoding="utf-8")) for p in sys.argv[1:5]]
 for d in loaded:
     assert (d["totals"]["input"], d["totals"]["runs"]) == (900, 3), d["totals"]
     rows = [r for g in d["providers"] for r in g["rows"]]
-    assert len(rows) == 1 and rows[0]["account"] == "deepseek@work" and rows[0]["billing"] == "api", rows
+    assert len(rows) == 1 and rows[0]["account"] == "deepseek@work" and rows[0]["paid_via"] == "api", rows
 assert loaded[0]["filters"]["accounts"] == [] and loaded[1]["filters"]["accounts"] == [], loaded[0]["filters"]
 assert loaded[2]["filters"]["accounts"] == ["deepseek@work"], loaded[2]["filters"]
 assert "deepseek@work" in loaded[3]["filters"]["accounts"], loaded[3]["filters"]
 assert loaded[3]["filters"]["key"] == ["DEEPSEEK_API_KEY_WORK"], loaded[3]["filters"]
 EOF
 ( cd "$DA" && ORCH_HOME="$DHN" $ORCH usage --daily --since "$T0" --until "$T0" --csv --provider deepseek ) > "$T/daily.csv"
-contains "$(cat "$T/daily.csv")" "day,project,provider,model,account,billing,runs,sessions,input_tokens,cache_read_tokens,cache_write_tokens,output_tokens,cost_usd" "CSV: the documented header"
+contains "$(cat "$T/daily.csv")" "day,project,provider,model,account,paid_via,runs,sessions,input_tokens,cache_read_tokens,cache_write_tokens,output_tokens,cost_usd" "CSV: the documented header"
 contains "$(cat "$T/daily.csv")" ",deepseek,deepseek-flash,deepseek@work,api,3,0,900,100,0,10," "CSV: one row of the totals"
 ( cd "$DA" && ORCH_HOME="$DHN" $ORCH usage --daily --since "$T0" --until "$T0" --provider codex ) > "$T/daily-empty.txt"
 contains "$(cat "$T/daily-empty.txt")" "No daily totals for these days with these filters." "a filter with no totals says so"
@@ -595,7 +595,7 @@ def scene(name):
 
 def counter(sid, stale=True):
     path = m.session_tokens_path(sid)
-    m.write_json(path, {"session": sid, "project": str(base), "billing": "subscription",
+    m.write_json(path, {"session": sid, "project": str(base), "paid_via": "subscription",
                         "accounts": {"claude": "claude"}, "daily": {
                             today: {"claude-sonnet-5-5": {"in": 40, "out": 2, "cost": 0.01}}}})
     if stale:
@@ -617,7 +617,7 @@ def large_store():
                       "claude|claude-opus-5-5|claude|subscription": {"in": 20, "cr": 50, "cw": 5, "out": 5, "cost": .002},
                       "claude|claude-haiku-4-5|claude|subscription": {"in": 60, "cr": 50, "cw": 5, "out": 8, "cost": .003}}
             store["sessions"][sid] = {"project": str(base), "days": {day: leaves}, "source": "end",
-                                      "billing": "subscription", "at": m.iso(m.now())}
+                                      "paid_via": "subscription", "at": m.iso(m.now())}
     m.daily_prune(store)
     m.write_json(m.DAILY_FILE, store, compact=True)
 
@@ -823,9 +823,9 @@ def corrupt_store():
         assert "c-%s" % n in m.daily_read()["sessions"]
 check("invalid JSON and invalid shapes are preserved as unique .corrupt copies before recovery", corrupt_store)
 
-def billing():
-    scene("billing")
-    tp = base / "billing.jsonl"
+def paid_via():
+    scene("paid_via")
+    tp = base / "paid_via.jsonl"
     ev = {"type": "assistant", "timestamp": m.iso(m.now()), "message": {"id": "bill", "model": "claude-sonnet-5-5",
           "usage": {"input_tokens": 100, "output_tokens": 10}}}
     tp.write_text(json.dumps(ev, separators=(",", ":")) + "\n", encoding="utf-8")
@@ -833,11 +833,11 @@ def billing():
         os.environ.update(env)
         m.session_tokens(sid, tp, "claude", base)
         entry = m.read_session_entry(m.session_tokens_path(sid))
-        assert entry["billing"] == ("api" if env else "subscription"), entry
+        assert entry["paid_via"] == ("api" if env else "subscription"), entry
         os.environ.pop("ANTHROPIC_API_KEY", None)  # SessionEnd must use the frozen choice
         m.daily_session_end(sid, str(base), m.parse_transcript(tp)["daily"], base)
     leaves = m.daily_leaves(m.daily_refresh(), [today])
-    assert {r["billing"] for r in leaves} == {"api", "subscription"}
+    assert {r["paid_via"] for r in leaves} == {"api", "subscription"}
     sub = m.daily_subscriptions(m.daily_read(), [today], leaves, str(base), False)[0]
     # Supply samples to make the share's denominator visible.
     store = m.daily_read()
@@ -846,9 +846,9 @@ def billing():
     assert sub["tokens"] == 110, sub
     for key in ("ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
         os.environ[key] = "fixture"
-        assert m.session_billing(base) == "api", key
+        assert m.session_paid_via(base) == "api", key
         os.environ.pop(key)
-check("lead API credentials are frozen through SessionEnd and excluded from subscription shares", billing)
+check("lead API credentials are frozen through SessionEnd and excluded from subscription shares", paid_via)
 
 def log_rotation():
     scene("rotation")
@@ -874,7 +874,7 @@ def coverage():
     yesterday = (m.now().date() - dt.timedelta(days=1)).isoformat()
     def row(day, project, tokens, cost, account="claude"):
         return {"day": day, "project": project, "provider": account, "model": "model", "account": account,
-                "billing": "subscription", "runs": 1, "sessions": 0, "in": tokens, "cw": 0, "cr": 0,
+                "paid_via": "subscription", "runs": 1, "sessions": 0, "in": tokens, "cw": 0, "cr": 0,
                 "out": 0, "cost": cost}
     rows = [row(today, "work", 100, 3), row(today, "other", 50, 1), row(yesterday, "other", 10000, 100)]
     store = m.daily_shape({"limits": {today: {"claude": {"seven_day": 30, "five_hour": 0}}}})
@@ -891,7 +891,7 @@ def coverage():
     assert "0 points of the 5-hour windows" in text
     assert "five_hour" in m.daily_csv(rows, [sub]) and "seven_day" in m.daily_csv(rows, [sub])
     for r in rows:
-        key = "|".join((r["project"], r["provider"], r["model"], r["account"], r["billing"]))
+        key = "|".join((r["project"], r["provider"], r["model"], r["account"], r["paid_via"]))
         store["runs"].setdefault(r["day"], {})[key] = {
             "runs": 1, "in": r["in"], "out": 0, "cost": r["cost"]}
     m.write_json(m.DAILY_FILE, store)

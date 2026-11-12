@@ -32,5 +32,5 @@
   the weekly and 5-hour limits by tokens and cost, with separate coverage for each window (only days with tokens
   and limit samples); zeros and missing samples are explicit, also per day, in JSON and CSV. Say it is measured
   against this machine's sessions only; cache reads are excluded from the token share.
-- Lead billing is API when the environment has an Anthropic key/token or Bedrock/Vertex/Foundry switch, the native
+- A lead session's `paid_via` is `api` when the environment has an Anthropic key/token or Bedrock/Vertex/Foundry switch, the native
   account is a key profile, or the lead is not Claude; otherwise it is subscription, frozen on first observation.

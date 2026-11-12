@@ -385,10 +385,10 @@ def daily_groups(leaves):
     for provider, items in by_provider.items():
         rows = {}
         for r in items:
-            rows.setdefault((r["model"], r["account"], r["billing"]), []).append(r)
+            rows.setdefault((r["model"], r["account"], r["paid_via"]), []).append(r)
         children = []
-        for (model, account, billing), group in rows.items():
-            children.append({"model": model, "account": account, "billing": billing, "totals": daily_totals(group)})
+        for (model, account, paid_via), group in rows.items():
+            children.append({"model": model, "account": account, "paid_via": paid_via, "totals": daily_totals(group)})
         children.sort(key=lambda c: (-(c["totals"]["input"] + c["totals"]["cache_read"] + c["totals"]["output"]),
                                      c["model"], c["account"]))
         out.append({"provider": provider, "name": display_name(provider) or provider,
@@ -417,7 +417,7 @@ def daily_table(groups, totals=None):
 
 def daily_leaves(store, days, projects=None):
     """Rows of the daily store for `days` (a set of YYYY-MM-DD): one per day × project × provider × model × account ×
-    billing, with the tokens, the estimated cost, executor runs and the session-days. A session counts once on the
+    paid_via, with the tokens, the estimated cost, executor runs and the session-days. A session counts once on the
     leaf with the most tokens of its day, so summing leaves never counts a session twice."""
     wanted = set(days)
     out = []
@@ -428,11 +428,11 @@ def daily_leaves(store, days, projects=None):
             parts = str(key).split("|")
             if len(parts) != 5 or not isinstance(leaf, dict):
                 continue
-            project, provider, model, account, billing = parts
+            project, provider, model, account, paid_via = parts
             if projects is not None and project not in projects:
                 continue
             out.append({"day": day, "project": project, "provider": provider, "model": model,
-                        "account": account, "billing": billing, "runs": tok_int(leaf.get("runs")), "sessions": 0,
+                        "account": account, "paid_via": paid_via, "runs": tok_int(leaf.get("runs")), "sessions": 0,
                         "in": tok_int(leaf.get("in")), "cr": tok_int(leaf.get("cr")), "cw": tok_int(leaf.get("cw")),
                         "out": tok_int(leaf.get("out")), "cost": float(leaf.get("cost") or 0.0)})
     for slab in (store.get("sessions") or {}).values():
@@ -449,9 +449,9 @@ def daily_leaves(store, days, projects=None):
                 parts = str(key).split("|")
                 if len(parts) != 4 or not isinstance(leaf, dict):
                     continue
-                provider, model, account, billing = parts
+                provider, model, account, paid_via = parts
                 made.append({"day": day, "project": project, "provider": provider, "model": model,
-                             "account": account, "billing": billing, "runs": 0, "sessions": 0,
+                             "account": account, "paid_via": paid_via, "runs": 0, "sessions": 0,
                              "in": tok_int(leaf.get("in")), "cr": tok_int(leaf.get("cr")),
                              "cw": tok_int(leaf.get("cw")), "out": tok_int(leaf.get("out")),
                              "cost": float(leaf.get("cost") or 0.0)})
@@ -628,7 +628,7 @@ def daily_subscriptions(store, days, leaves, project, all_projects):
     """The subscription estimate of the interval, per subscription account: the points of the weekly limit used in
     all (and of the 5-hour windows), the token and cost share of each project on it, and the points those shares
     stand for. Subscription tokens only: API-key use on the same model is left out, as it costs money of its own."""
-    accounts = {r["account"] for r in leaves if r["billing"] == "subscription"}
+    accounts = {r["account"] for r in leaves if r["paid_via"] == "subscription"}
     for day in days:
         by = (store.get("limits") or {}).get(day)
         if isinstance(by, dict):
@@ -636,7 +636,7 @@ def daily_subscriptions(store, days, leaves, project, all_projects):
     out = []
     for account in sorted(accounts):
         windows = {}
-        rows = [r for r in leaves if r["account"] == account and r["billing"] == "subscription" and r["day"] in days]
+        rows = [r for r in leaves if r["account"] == account and r["paid_via"] == "subscription" and r["day"] in days]
         token_days = {r["day"] for r in rows if r["in"] + r["cr"] + r["cw"] + r["out"] > 0}
         for window in ("seven_day", "five_hour"):
             sampled = {d for d in days if window in (store.get("limits", {}).get(d, {}).get(account, {}))}
@@ -785,7 +785,7 @@ def daily_groups_json(groups):
                     "runs": t["runs"], "sessions": t["sessions"], "input": t["input"],
                     "cache_read": t["cache_read"], "cache_write": t["cache_write"], "output": t["output"],
                     "cost_usd": t["cost_usd"],
-                    "rows": [{"model": c["model"], "account": c["account"], "billing": c["billing"],
+                    "rows": [{"model": c["model"], "account": c["account"], "paid_via": c["paid_via"],
                               "runs": c["totals"]["runs"], "sessions": c["totals"]["sessions"],
                               "input": c["totals"]["input"], "cache_read": c["totals"]["cache_read"],
                               "cache_write": c["totals"]["cache_write"], "output": c["totals"]["output"],
@@ -812,12 +812,12 @@ def daily_csv(leaves, subs=(), day_subs=()):
     def field(v):
         s = str(v)
         return '"' + s.replace('"', '""') + '"' if any(c in s for c in ',"\n') else s
-    lines = ["day,project,provider,model,account,billing,runs,sessions,input_tokens,cache_read_tokens,"
+    lines = ["day,project,provider,model,account,paid_via,runs,sessions,input_tokens,cache_read_tokens,"
              "cache_write_tokens,output_tokens,cost_usd,kind,window,limit_points,token_share,cost_share,"
              "points_by_tokens,points_by_cost,covered_days,missing_days,total_limit_points"]
     for r in sorted(leaves, key=lambda r: (r["day"], r["project"], r["provider"], r["model"], r["account"])):
         lines.append(",".join(field(v) for v in (
-            r["day"], r["project"], r["provider"], r["model"], r["account"], r["billing"], r["runs"], r["sessions"],
+            r["day"], r["project"], r["provider"], r["model"], r["account"], r["paid_via"], r["runs"], r["sessions"],
             r["in"], r["cr"], r["cw"], r["out"], "%.6f" % r["cost"], "tokens", "", "", "", "", "", "", "", "", "")))
     for day, s in [("", s) for s in subs] + list(day_subs):
         for window, w in s["windows"].items():

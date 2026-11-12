@@ -11,8 +11,8 @@ def claude_config_dir():
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
-def session_billing(where=None, account=None):
-    """The lead's billing, using the same credential and profile resolution as the key helper and lead detection."""
+def session_paid_via(where=None, account=None):
+    """How the lead is paid, 'api' or 'subscription' (`paid_via`), using the same credential and profile resolution as the key helper and lead detection."""
     lead = (os.environ.get("ORCH_LEAD") or "claude").partition("@")[0].lower()
     cloud = any(os.environ.get(k) for k in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
                                            "CLAUDE_CODE_USE_FOUNDRY"))

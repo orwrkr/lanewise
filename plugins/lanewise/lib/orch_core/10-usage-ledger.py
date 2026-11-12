@@ -262,7 +262,7 @@ def daily_update(mutator):
 
 
 def daily_run_row(rec):
-    """(day, project, provider, model, account, billing, {runs, in, cr, cw, out, cost}) of a ledger `run` record,
+    """(day, project, provider, model, account, paid_via, {runs, in, cr, cw, out, cost}) of a ledger `run` record,
     or None. A run counts on the day it ended (its record's time), with the cost it reported."""
     if not isinstance(rec, dict) or rec.get("kind") != "run":
         return None
@@ -275,7 +275,7 @@ def daily_run_row(rec):
         return None
     model = str(rec.get("model") or u.get("model") or "(mixed)")
     account = str(rec.get("label") or provider).lower()
-    billing = "api" if _api_billed_record(rec) else "subscription"
+    paid_via = "api" if _api_billed_record(rec) else "subscription"
     counts = ledger_counts(u)
     counts["runs"] = 1
     cost = rec.get("cost_usd")
@@ -285,7 +285,7 @@ def daily_run_row(rec):
         except Exception:
             cost = 0.0
     counts["cost"] = float(cost)
-    return day_str(ts), canon_path(project), provider, model, account, billing, counts
+    return day_str(ts), canon_path(project), provider, model, account, paid_via, counts
 
 
 def daily_fold_runs(store):
@@ -320,7 +320,7 @@ def daily_fold_runs(store):
             row = daily_run_row(rec)
             if row is None:
                 continue
-            day, project, provider, model, account, billing, counts = row
+            day, project, provider, model, account, paid_via, counts = row
             run_id = str(rec.get("id") or "")
             if not run_id:                  # old external fixtures may lack ids: stable fallback, never an offset
                 run_id = hashlib.sha256(line.encode("utf-8")).hexdigest()
@@ -329,7 +329,7 @@ def daily_fold_runs(store):
                 continue
             ids[run_id] = True
             leaf = runs.setdefault(day, {}).setdefault(
-                "|".join((project, provider, model, account, billing)), {})
+                "|".join((project, provider, model, account, paid_via)), {})
             for k in ("runs", "in", "cr", "cw", "out"):
                 leaf[k] = tok_int(leaf.get(k)) + tok_int(counts.get(k))
             leaf["cost"] = round(float(leaf.get("cost") or 0.0) + counts["cost"], 6)
@@ -346,7 +346,7 @@ def daily_fold_runs(store):
     return changed
 
 
-def daily_merge_session(store, sid, project, daily, source, billing=None):
+def daily_merge_session(store, sid, project, daily, source, paid_via=None):
     """Merge one session's per-day counts into its slab: each counter becomes the larger of the stored and the new
     value, so repeated folds never add a token twice (the rule written at the top of this part). → changed.
     `daily` is {day: {account: {model: {in, cr, cw, out, cost}}}}."""
@@ -378,7 +378,7 @@ def daily_merge_session(store, sid, project, daily, source, billing=None):
                 if not isinstance(counts, dict):
                     continue
                 provider = transcript_provider(model)
-                bill = billing if billing in ("api", "subscription") else slab.get("billing")
+                bill = paid_via if paid_via in ("api", "subscription") else slab.get("paid_via")
                 bill = bill or ("subscription" if account == "claude" else "api")
                 if account != "claude":
                     bill = "api"
@@ -396,8 +396,8 @@ def daily_merge_session(store, sid, project, daily, source, billing=None):
     if changed:
         slab["at"] = iso(now())
         slab["source"] = source
-        if billing:
-            slab["billing"] = billing
+        if paid_via:
+            slab["paid_via"] = paid_via
     return changed
 
 
@@ -439,11 +439,11 @@ def daily_session_end(sid, project, daily, where=None):
     if not daily:
         return False
     try:
-        session_billing_note(sid, where or project)
+        session_paid_via_note(sid, where or project)
         entry = read_session_entry(session_tokens_path(sid), strict=True)
         payload = daily_by_account(daily, session_accounts(sid, where or project))
         return daily_update(lambda store: daily_merge_session(store, sid, project, payload, "end",
-                                                               entry.get("billing")))[1]
+                                                               entry.get("paid_via")))[1]
     except Exception:
         return False
 
@@ -519,7 +519,7 @@ def daily_session_items(paths):
         item = daily_session_source(entry, stem)
         if item is not None:
             sid, project, daily = item
-            item = (sid, project or session_project(sid), daily, entry.get("billing"))
+            item = (sid, project or session_project(sid), daily, entry.get("paid_via"))
         items.append((path, item))
     return items
 
@@ -539,8 +539,8 @@ def daily_merge_items(store, items):
     changed = False
     for _path, item in items:
         if item is not None:
-            sid, project, daily, billing = item
-            changed = daily_merge_session(store, sid, project, daily, "live", billing) or changed
+            sid, project, daily, paid_via = item
+            changed = daily_merge_session(store, sid, project, daily, "live", paid_via) or changed
     return changed
 
 

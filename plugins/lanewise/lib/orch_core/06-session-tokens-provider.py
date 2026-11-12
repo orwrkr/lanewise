@@ -312,8 +312,8 @@ def read_session_entry(path, strict=False):
     return entry if isinstance(entry, dict) else None
 
 
-def session_billing_note(sid, where=None):
-    """Freeze the lead's billing on first observation, even before the status line sees a transcript."""
+def session_paid_via_note(sid, where=None):
+    """Freeze how the lead is paid (`paid_via`: api or subscription) on first observation, even before the status line sees a transcript."""
     if not sid:
         return
     with state_lock(ORCH_HOME / ".state.lock"):
@@ -322,8 +322,8 @@ def session_billing_note(sid, where=None):
             entry = read_session_entry(path, strict=True)
         except FileNotFoundError:
             entry = {}
-        if entry.get("billing") not in ("api", "subscription"):
-            entry["billing"] = session_billing(where)
+        if entry.get("paid_via") not in ("api", "subscription"):
+            entry["paid_via"] = session_paid_via(where)
             entry["session"] = sid
             write_json(path, entry, compact=True)
 
@@ -371,8 +371,8 @@ def session_tokens(sid, transcript_path, native="claude", where=None):
             if isinstance(state, dict):
                 trim_ids(state, IDS_PER_FILE)
     changed = False
-    if entry.get("billing") not in ("api", "subscription"):
-        entry["billing"] = session_billing(where, native)
+    if entry.get("paid_via") not in ("api", "subscription"):
+        entry["paid_via"] = session_paid_via(where, native)
         changed = True
     if entry.get("format") != SESSION_TOKENS_FORMAT or not isinstance(entry.get("ledger"), dict) \
             or not isinstance(entry.get("ledger_offset"), int):
@@ -547,7 +547,7 @@ def cmd_statusline(a):
             if isinstance(w, dict) and w.get("used_percentage") is not None and epoch_iso(w.get("resets_at")):
                 windows[name] = {"used": round(float(w["used_percentage"]), 1), "resets_at": epoch_iso(w["resets_at"])}
         cwd = (data.get("workspace") or {}).get("current_dir") if isinstance(data.get("workspace"), dict) else None
-        api_billed = session_billing(Path(cwd) if cwd else None) == "api"
+        api_billed = session_paid_via(Path(cwd) if cwd else None) == "api"
         if windows and not api_billed:
             quietly(save_usage, windows, "statusline")
         model = (data.get("model") or {}).get("display_name") if isinstance(data.get("model"), dict) else None

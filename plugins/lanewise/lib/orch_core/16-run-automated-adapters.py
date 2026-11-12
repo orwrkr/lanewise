@@ -338,6 +338,8 @@ def cmd_run(a):
             heartbeat(consumer, cwd, kind="executor")
         except Exception:
             consumer = None
+    # the session that launched the run waits for it without hooks: keep it an active Claude consumer until it ends
+    heartbeat_session(meta["session"])
     t0 = time.time()
     state = {"interrupted": None}       # SIGTERM/SIGHUP signum, or "keyboard"
     with log_file.open("w", encoding="utf-8") as log:
@@ -358,6 +360,7 @@ def cmd_run(a):
         spend_killed = False
         try:
             while True:
+                heartbeat_session(meta["session"])     # at most one write a minute; a busy lock skips this beat
                 wait = SPEND_POLL_SECONDS
                 if deadline:
                     remaining = deadline - time.time()

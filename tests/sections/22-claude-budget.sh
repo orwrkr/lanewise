@@ -103,6 +103,106 @@ grep -q '"executor"' "$ORCH_HOME/sessions.json" && bad "finished run still liste
 rm -f "$ORCH_HOME/sessions.json"
 $ORCH budget clear >/dev/null
 
+# a session waiting on its own orch run: the run refreshes a session orch already knows, whatever the provider,
+# and never creates one; the refreshes stop with the run, so the session ages out as usual afterwards
+wait_home="$T/home-wait"; mkdir -p "$wait_home"
+saved_home="$ORCH_HOME"; export ORCH_HOME="$wait_home"
+# stale_session KEY MINUTES_AGO — a known Claude session last seen that long ago
+stale_session() { $PY - "$(native "$ORCH_HOME/sessions.json")" "$1" "$2" <<'EOF'
+import datetime as dt, json, sys
+t = dt.datetime.now().astimezone() - dt.timedelta(minutes=int(sys.argv[3]))
+json.dump({sys.argv[2]: {"seen": t.isoformat(timespec="seconds"), "since": t.isoformat(timespec="seconds"),
+                         "kind": "session", "lead": None, "project": "/nowhere"}},
+          open(sys.argv[1], "w", encoding="utf-8"))
+EOF
+}
+# fresh_session KEY — the session was refreshed within the last minute
+fresh_session() { $PY - "$(native "$ORCH_HOME/sessions.json")" "$1" <<'EOF'
+import datetime as dt, json, sys
+e = json.load(open(sys.argv[1], encoding="utf-8")).get(sys.argv[2]) or {}
+try:
+    seen = dt.datetime.fromisoformat(e.get("seen") or "")
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if (dt.datetime.now().astimezone() - seen).total_seconds() < 60 else 1)
+EOF
+}
+stale_session s-wait 20
+snap 10
+out=$($ORCH budget)
+lacks "$out" "s-wait" "a session last seen 20 minutes ago is not active"
+# the fake executor runs a few seconds: by the time it started, the launching session is already refreshed
+FAKE_CODEX=slow CLAUDE_CODE_SESSION_ID=s-wait $ORCH run codex "wait for me" >"$T/wait-run.out" 2>&1 &
+wait_pid=$!
+for _ in $(seq 1 100); do fresh_session s-wait && break; sleep 0.1; done
+out=$($ORCH budget)
+contains "$out" "active: 1 session" "a session waiting on its run is counted as active"
+contains "$out" "s-wait .*session" "orch budget lists the waiting session"
+wait "$wait_pid"; expect_rc 0 $? "the waiting run finishes normally"
+# the beat repeats through the run (in process: the poll interval and the write throttle are patched, so it takes
+# seconds rather than a minute); a long run keeps writing, not just the reading at its start
+stale_session s-wait 20
+out=$(FAKE_CODEX=slow $PY -B - "$PLUGIN/bin/orch" 2>&1 <<'EOF'
+import importlib.machinery, importlib.util, os, sys, time
+loader = importlib.machinery.SourceFileLoader("orch", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("orch", loader)); loader.exec_module(m)
+m.SPEND_POLL_SECONDS = 0.2      # polls 75 times as often as a real run
+m.HEARTBEAT_MIN_SECONDS = 0     # every poll writes, instead of at most once a minute
+beats, orig = [], m.heartbeat
+def beat(key, where=None, kind="session"):
+    out = orig(key, where, kind)
+    beats.append((key, time.time(), (m.read_json(m.SESSIONS_FILE, {}).get(key) or {}).get("seen")))
+    return out
+m.heartbeat = beat
+os.environ["CLAUDE_CODE_SESSION_ID"] = "s-wait"
+assert m.main(["run", "codex", "x"]) == 0
+assert len(beats) >= 3 and all(k == "s-wait" for k, _, _ in beats), beats
+assert max(t for _, t, _ in beats) - min(t for _, t, _ in beats) > 0.5, beats
+assert len({seen for _, _, seen in beats}) >= 2, beats
+print("periodic")
+EOF
+); rc=$?
+[[ $rc -eq 0 && "$out" == *periodic* ]] && ok "the run refreshes its session periodically, not once" || { bad "no periodic refresh"; echo "$out"; }
+# a session orch has never seen: no entry is invented
+rm -f "$ORCH_HOME/sessions.json"
+FAKE_CODEX=ok CLAUDE_CODE_SESSION_ID=s-unknown $ORCH run codex "x" >/dev/null 2>&1
+expect_rc 0 $? "a run from an unknown session succeeds"
+[[ ! -e "$ORCH_HOME/sessions.json" ]] && ok "a run from an unknown session creates no consumer" || { bad "the run invented a session"; cat "$ORCH_HOME/sessions.json"; }
+# no session id at all: nothing written
+stale_session s-other 20
+cp "$ORCH_HOME/sessions.json" "$T/sessions-before.json"
+CLAUDE_CODE_SESSION_ID= ORCH_SESSION_ID= FAKE_CODEX=ok $ORCH run codex "x" >/dev/null 2>&1
+expect_rc 0 $? "a run with no session id succeeds"
+cmp -s "$ORCH_HOME/sessions.json" "$T/sessions-before.json" && ok "a run with no session id writes nothing" || bad "sessions.json changed without a session id"
+# a broken sessions.json: the run is unaffected (the refresh skips it, the file is preserved by read_json)
+printf '{broken' > "$ORCH_HOME/sessions.json"
+out=$(FAKE_CODEX=ok CLAUDE_CODE_SESSION_ID=s-broken $ORCH run codex "x" 2>&1); rc=$?
+expect_rc 0 $rc "a broken sessions.json does not fail the run"
+contains "$out" "\[OK\] cod-" "the run's report is unchanged"
+# a busy home lock: the beat skips that poll and the run goes on (the lock is busy only at the beat's wait=0)
+out=$($PY -B - "$PLUGIN/bin/orch" 2>&1 <<'EOF'
+import contextlib, importlib.machinery, importlib.util, io, os, sys
+loader = importlib.machinery.SourceFileLoader("orch", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("orch", loader)); loader.exec_module(m)
+real_lock = m.state_lock
+def lock(path, wait=None):
+    if wait == 0.0:                 # the beat's own non-blocking attempt: another process holds the home lock
+        raise m.StateError("shared state busy")
+    return real_lock(path, wait)
+m.state_lock = lock
+os.environ["CLAUDE_CODE_SESSION_ID"] = "s-locked"
+report = io.StringIO()
+with contextlib.redirect_stdout(report):
+    rc = m.main(["run", "codex", "x"])
+assert rc == 0, rc
+assert "[OK] cod-" in report.getvalue(), report.getvalue()
+print("ran")
+EOF
+); rc=$?
+[[ $rc -eq 0 && "$out" == *ran* ]] && ok "a busy home lock does not fail or change the run" || { bad "a busy lock broke the run"; echo "$out"; }
+rm -f "$ORCH_HOME/sessions.json" "$ORCH_HOME/claude_usage.json"
+export ORCH_HOME="$saved_home"
+
 # a single active session still shows "1 session" (never hidden); a headless sdk-* entrypoint does not register
 rm -f "$ORCH_HOME/sessions.json" "$ORCH_HOME/claude_usage.json"
 echo '{"session_id": "s-one"}' | $ORCH hook user-prompt >/dev/null

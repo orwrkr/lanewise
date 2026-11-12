@@ -199,7 +199,9 @@ To keep your own status line, use `orch statusline --then "<your command>"`. Wit
 numbers in plain words ("Claude: 40% of the session used, resets at 18:00") → `orch budget set --used 40 --resets 18:00`.
 `orch budget` shows the current state and the active consumers Lanewise knows of. Those are the Claude Code
 sessions with this plugin active in the last 15 minutes and running `orch run claude` executors; a session led by
-DeepSeek doesn't count. The thresholds live in the `claude` profile: `--opt reserve=25` (keep more for other
+DeepSeek doesn't count. A Claude-led session waiting for an `orch run` it started (any provider) stays in that
+count while the run lasts; a run from a session Lanewise has not seen creates no entry. The thresholds live in the
+`claude` profile: `--opt reserve=25` (keep more for other
 sessions), `week_reserve=15`, `surplus=50`, or `surplus=off` to switch the mode off.
 Lanewise also watches the orchestrator's own limits: before a five-hour window would run out at its reset, or a
 week, spend limit or balance would run out within two hours or with under 5% left, the hooks ask one question in

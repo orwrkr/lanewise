@@ -19,6 +19,7 @@ PACE_MIN_ELAPSED = 30      # minutes into a week before its average pace is trus
 PROJECTION_MIN_ELAPSED = 60    # minutes of a five-hour window that must have passed before a projection counts
 RECENT_PACE = (30, 60)     # the recent pace: the oldest sample 30–60 minutes back
 ACTIVE_MIN = 15            # a session seen within this many minutes is active
+HEARTBEAT_MIN_SECONDS = 60  # heartbeat writes a session's "seen" at most this often
 HISTORY_KEEP_H = 6
 WEEK_HISTORY_KEEP_H = 80   # hours a weekly sample is kept (a pace base about 72 h old must still be there)
 WEEK_HISTORY_CAP = 400     # most weekly samples kept (one per 15 min over 80 h is 320)
@@ -295,7 +296,7 @@ def heartbeat(key, where=None, kind="session"):
     t = now()
     e = data.get(key) if isinstance(data.get(key), dict) else {}
     seen, lead = parse_iso(e.get("seen") or ""), os.environ.get("ORCH_LEAD") or None
-    if seen and (t - seen).total_seconds() < 60 and e.get("lead") == lead:
+    if seen and (t - seen).total_seconds() < HEARTBEAT_MIN_SECONDS and e.get("lead") == lead:
         return
     data = {k: v for k, v in data.items() if isinstance(v, dict) and parse_iso(v.get("seen") or "")
             and (t - parse_iso(v["seen"])).total_seconds() < 86400}
@@ -311,6 +312,22 @@ def forget(key):
     data = read_json(SESSIONS_FILE, {}, recover_corrupt=True)
     if isinstance(data, dict) and data.pop(key, None) is not None:
         write_json(SESSIONS_FILE, data)
+
+
+def heartbeat_session(key, where=None):
+    """Keep a session orch already knows as a Claude consumer active while its `orch run` lasts (any provider).
+    Never creates an entry: a run from an unknown or headless session must not invent a consumer. A busy home lock
+    skips this beat (the next poll retries) and any error is swallowed — a run must never slow down or fail for it."""
+    if not key:
+        return
+    try:
+        with state_lock(ORCH_HOME / ".state.lock", wait=0.0):
+            data = read_json(SESSIONS_FILE, {}, recover_corrupt=True)
+            entry = data.get(key) if isinstance(data, dict) else None
+            if isinstance(entry, dict) and entry.get("kind") == "session":
+                heartbeat(key, where)      # the home lock is held here: heartbeat's own lock is reentrant
+    except Exception:
+        pass
 
 
 def claude_consumers():

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.38.1
+
+- **A session waiting on its executor stays active.** The Claude budget splits the five-hour window's surplus and
+  reserve between the active sessions, counting a Claude-led session seen within 15 minutes and every running Claude
+  executor. A session that handed a long task to `orch run` (Codex, DeepSeek or Claude) sends no hook events while it
+  waits, so after 15 minutes it dropped out of the count — the status line showed fewer sessions than there were, and
+  each share came out too large. Now the run refreshes the session that launched it at the start and about once a
+  minute until the executor exits (any provider; a Claude executor still counts as its own `run:` consumer), and the
+  refreshes stop with the run, so the session ages out as usual. This never creates a session: only an id orch has
+  already recorded as a session is refreshed, so a run from a plain terminal, a headless session or a script adds no
+  consumer. A busy lock skips a beat and any error is swallowed — a run is never slowed or failed for it.
+
 ## 0.38.0
 
 - **The orchestrator's own limits are watched.** The budget mode decides where work goes; this watcher decides

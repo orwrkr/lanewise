@@ -49,7 +49,8 @@ a key): what stays unused at a reset is lost, and a balance is money. The modes 
 
 `orch budget` shows the numbers, the active consumers orch knows of (Claude Code sessions with this plugin active in
 the last 15 minutes, running `orch run claude` executors; sessions led by another model don't count) and the
-thresholds.
+thresholds. A Claude-led session that is waiting for an `orch run` it started (any provider) stays in that count while
+the run lasts, although it sends no hook events meanwhile; a run from a session orch has not seen creates no entry.
 
 ## The orchestrator's own limits
 

@@ -5,8 +5,9 @@ account, no server, no telemetry and no analytics, and nothing about you or your
 
 ## What stays on your computer
 
-- `~/.lanewise/`: your settings, executor profiles, API keys (`secrets.env`), spend limits, balances and the usage
-  log (which model did what, and how many tokens it spent).
+- `~/.lanewise/`: your settings, executor profiles, API keys (`secrets.env`), spend limits, balances, each
+  session's answer to the limit-watch question (`watch.json`) and the usage log (which model did what, and how many
+  tokens it spent).
 - `<project>/.lanewise/` in projects where you used the plugin: executor runs, task prompts and manual tasks.
 
 Before 0.36.0 both folders were named `.partitura`; before 0.35.0, `.orchestra`. `orch` reads either where it is,

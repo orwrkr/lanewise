@@ -62,7 +62,8 @@ It is installed and removed **the standard way**: `install.sh` calls `claude plu
 
 Outside Claude Code the plugin creates only:
 - the launchers `~/.local/bin/orch` (plus `orch.cmd` on Windows);
-- personal data in `~/.lanewise/` (limits, profiles, keys, usage log, the isolated config of the DeepSeek executor);
+- personal data in `~/.lanewise/` (limits, profiles, keys, usage log, the limit-watch answers, the isolated config of
+  the DeepSeek executor);
 - in projects where you have used it: a `<project>/.lanewise/` folder (with the worktrees of manual tasks that change files in `.lanewise/wt/`: if you delete it by hand, run `git worktree prune`), `<project>.wt/` worktrees (`orch worktree`), for Antigravity the rule `<project>/.agents/rules/lanewise-task.md` (it stays after a task closes), and their lines in `.git/info/exclude`. `.gitignore` is left alone; projects where the plugin was never used get nothing;
 - Codex account directories, if you created such profiles (`--home`).
 
@@ -207,14 +208,16 @@ growth), or continue without questions in this session (`orch watch answer …`)
 projection; for the week and a monthly spend limit it also warns early, when both pace estimates exhaust the limit
 well before the reset. `orch watch` shows every limit projected, and the status line marks a paused session.
 Thresholds are `--opt` settings of the `claude` profile (`watch_horizon_h=2`, `watch_low=5`, `watch_early_share=15`,
-`watch_ask_again_min=60`, `watch_ask_again_step=10`), and `watch=off` silences the watcher — `orch guide budget`.
+`watch_early_min_data_h=24`, `watch_ask_again_min=60`, `watch_ask_again_step=10`), `watch_early=off` turns off only
+the early warning, and `watch=off` silences the watcher — `orch guide budget`.
 A project whose Claude or Codex profile has an API `key` is API-billed instead: no subscription line, no mode, and the
 session doesn't write its numbers into the shared snapshot.
 
 Codex's limits are read the same way from its own session logs (`$CODEX_HOME/sessions/…`, an undocumented format
 parsed defensively) and shown as a `Codex subscription: …` line next to the Claude one, with `TIGHT: treat Codex
 as low` when a window or its projection reaches the reserve — see the `codex` profile's `reserve`/`week_reserve`.
-The status line gets two more blocks: the Codex limits, and the current session's tokens per account, one account per
+The status line gets up to three more blocks: `⏸ paused until 16:50` while the session is paused, the Codex limits,
+and the current session's tokens per account, one account per
 line — the first on the heading line, each further one indented by two spaces — with cache reads as a third figure and
 left out when an account had none, which agrees with `orch usage`:
 
@@ -461,6 +464,7 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `~/.lanewise/codex_usage.json` | the Codex account's last known limits, per `CODEX_HOME` (the `Codex subscription:` line) |
 | `~/.lanewise/session_tokens/<session>.json` | one session's byte offsets and running token totals per account, for the status line's session part; removed a day after its last save |
 | `~/.lanewise/sessions.json` | active Claude Code sessions and Claude executor runs: the budget's consumer count |
+| `~/.lanewise/watch.json` | each session's limit-watch answer (pause until the reset, continue, continue-session) and the limits it answered for; removed at SessionEnd or once the session has been quiet for 7 days |
 | `~/.lanewise/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
 | `<project>/.lanewise/runs/` | executor runs: prompt, role, project rules, response, log, tokens |
 | `<project>/.lanewise/handoffs/AG-…/` | manual tasks: meta, BODY.md, TASK.md, RESULT.md |

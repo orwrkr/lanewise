@@ -459,6 +459,7 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 |---|---|
 | `~/.lanewise/availability.json` | limits and availability, shared by all projects |
 | `~/.lanewise/providers.yaml` | your registry |
+| `~/.lanewise/adapters/` | your own adapters; one here overrides the built-in adapter of the same name |
 | `~/.lanewise/secrets.env` | API keys (`DEEPSEEK_API_KEY=…`, `DEEPSEEK_API_KEY_WORK=…`), only for the adapters that declare them |
 | `~/.lanewise/profiles.json` | executor profiles, defaults and project bindings (`orch profile …`) |
 | `~/.lanewise/usage.jsonl` | usage log: runs, manual tasks, session snapshots (`orch usage`) |
@@ -467,6 +468,11 @@ Model names and effort levels change. Check against `/model` in Claude Code, `/m
 | `~/.lanewise/session_tokens/<session>.json` | one session's byte offsets and running token totals per account, for the status line's session part; removed a day after its last save |
 | `~/.lanewise/sessions.json` | active Claude Code sessions and Claude executor runs: the budget's consumer count |
 | `~/.lanewise/watch.json` | each session's limit-watch answer (pause until the reset, continue, continue-session) and the limits it answered for; removed at SessionEnd or once the session has been quiet for 7 days |
+| `~/.lanewise/balances.json` | each API key's account balance as its provider reported it, and when (`orch balance`) |
+| `~/.lanewise/spend_limits.json` | spend limits, their mode and reset, per scope (`orch spend`) |
+| `~/.lanewise/session_budget.json` | each session's starting account balance, for the per-session budgets (`session_soft`, `session_hard`, `balance_floor`) |
+| `~/.lanewise/prices.json` | your price overrides and the dated entries `orch prices apply` writes |
+| `~/.lanewise/prices/` | one folder per `orch prices check` run: the task written for an agent, then its report |
 | `~/.lanewise/workers/deepseek-<platform>/` | isolated Claude Code config for the DeepSeek executor |
 | `<project>/.lanewise/runs/` | executor runs: prompt, role, project rules, response, log, tokens |
 | `<project>/.lanewise/handoffs/AG-…/` | manual tasks: meta, BODY.md, TASK.md, RESULT.md |

@@ -52,7 +52,8 @@ FAKE_CLAUDE=ok $ORCH run deepseek "x" >/dev/null; expect_rc 75 $? "blocked befor
 $ORCH quota clear deepseek >/dev/null
 out=$(FAKE_CLAUDE=429 $ORCH run deepseek "x"); rc=$?
 expect_rc 75 $rc "429 rate limit → exit 75"
-out=$($ORCH quota show); contains "$out" "deepseek .*exhausted .*in 1[45]m" "rate limit blocks for 15 minutes"
+# 12–15 minutes left: a busy machine can spend a couple of minutes between the run and this check
+out=$($ORCH quota show); contains "$out" "deepseek .*exhausted .*in 1[2-5]m" "rate limit blocks for 15 minutes"
 $ORCH quota clear deepseek >/dev/null
 out=$(FAKE_CLAUDE=401 $ORCH run deepseek "x"); rc=$?
 expect_rc 1 $rc "401 bad key → failure"

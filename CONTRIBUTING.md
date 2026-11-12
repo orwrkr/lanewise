@@ -70,4 +70,10 @@ The maintainer works with coding agents, orchestrated by the plugin itself. The 
    - Remove the worktree and the branch.
    - Delete the item from ROADMAP.md.
 
+Section 46 (`docs-facts`) keeps the public documents' facts tied to the code: a new network import or URL, a new
+file in `~/.lanewise/`, or a version bumped in only one place fails it. Before a release, compare the CHANGELOG entry
+with `PRIVACY.md`, `TERMS.md`, `SECURITY.md`, the plugin README and `docs/index.html`. An executor's analysis run is
+enough: ask for statements the new version made false, disclosures it needs, and contradictions between the
+documents.
+
 Renaming the plugin is a change of its own, with a checklist from the two renames so far: [RENAMING.md](RENAMING.md).

@@ -480,7 +480,8 @@ def cmd_statusline(a):
         quietly(refresh_codex, where)
         spend = (quietly(spend_status_items, where) or []) if where else []   # always shown, beside the tokens
         session_line = session_status_part(str(sid) if sid else None, data.get("transcript_path"), where, spend)
-        extra = [p for p in (quietly(codex_status_part, where), session_line) if p]
+        pause_line = quietly(watch_pause_line, str(sid) if sid else None)     # read-only: the status line only reads
+        extra = [p for p in (pause_line, quietly(codex_status_part, where), session_line) if p]
         quietly(sweep_orch_home)
     except Exception:
         extra = []

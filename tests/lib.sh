@@ -31,7 +31,7 @@ T="$(mktemp -d)" || die "cannot create temporary directory"
 if command -v cygpath >/dev/null 2>&1; then T="$(cygpath -u "$(cygpath -w -l "$T")")"; fi
 export ORCH_HOME; ORCH_HOME="$(native "$T/home")"
 export PATH="$T/fakebin:$PATH"
-unset CLAUDE_PROJECT_DIR ORCH_PROJECT_DIR ORCH_WORKER ORCH_CODEX_BIN ORCH_CLAUDE_BIN DEEPSEEK_API_KEY ORCH_NOTIFY_CMD ORCH_DEEPSEEK_BALANCE_URL
+unset CLAUDE_PROJECT_DIR ORCH_PROJECT_DIR ORCH_WORKER ORCH_CODEX_BIN ORCH_CLAUDE_BIN DEEPSEEK_API_KEY ORCH_NOTIFY_CMD ORCH_DEEPSEEK_BALANCE_URL CLAUDE_CODE_ENTRYPOINT
 # the suite's own ANTHROPIC_* would make every orch process a detected lead (a test runs inside a lead session too)
 unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL ORCH_LEAD ORCH_LEAD_ENV ORCH_LEAD_VIA ORCH_LEAD_KEY
 export ORCH_BALANCE=off     # no check reaches a real provider for a balance; the balance section turns it on against a local server

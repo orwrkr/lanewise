@@ -24,7 +24,10 @@ Detailed sections of this skill: `orch guide <section>` (`manual`, `quota`, `pro
    `Claude subscription: … SURPLUS` (or a `💡` event) — the 5-hour window would expire with a lot unused beyond the
    reserve: Claude goes first (except the task types an API key with budget has `prefer for` — the line names them),
    also ahead of Codex on a tie, within your session's share; `TIGHT` — treat Claude as
-   `low`. A `Codex subscription: … TIGHT` line (or its `💡` event) — treat Codex as `low`. `orch guide budget`.
+   `low`. `Codex subscription: … TIGHT` (or its `💡` event) — Codex is `low`. On a `⚠ Lanewise` limit-watch event,
+   stop at a safe point; ask its one question with three options; record via `orch watch answer
+   pause|continue|continue-session`. On pause, finish the step, say where work stopped and what comes next; start
+   nothing new until the pause ends or the user says continue. Details: `orch guide budget`.
 2. Registry — once per session (and whenever the operator changed it): `orch registry show` (brief: slots —
    provider × model × effort, cost, `max_difficulty`, `good_for` — operator parameters, routes). Before first using a
    provider in a session, read its notes: `orch registry show <provider>`.

@@ -389,7 +389,7 @@ def profile_fields(provider):
         return ["models", "use_for", "prefer_for", "rules", "max_open", "fallback"]
     directives = adapter_directives(adapter_head(adapter))
     if provider.lower() == "claude":
-        extra = list(BUDGET_DEFAULTS)             # budget mode: surplus, reserve, week_reserve
+        extra = list(BUDGET_DEFAULTS) + list(WATCH_DEFAULTS)    # budget mode + the limit watch's settings
     elif provider.lower() == "codex":
         extra = ["reserve", "week_reserve"]       # Codex budget mode: reserve thresholds only, no surplus
     else:
@@ -508,6 +508,19 @@ def parse_profile_value(field, raw):
         if not raw.isdigit() or not 0 <= int(raw) <= 90:
             raise SystemExit("orch: %s=N — percent kept for other sessions and safety, 0–90" % field)
         return int(raw)
+    if field in ("watch", "watch_early"):
+        if raw.lower() not in ("on", "off"):
+            raise SystemExit("orch: --%s on|off" % field.replace("_", "-"))
+        return raw.lower()
+    if field in WATCH_RANGES:
+        lo, hi = WATCH_RANGES[field]
+        try:
+            value = float(raw)
+        except ValueError:
+            value = None
+        if value is None or value != value or not lo <= value <= hi:
+            raise SystemExit("orch: --%s must be a number %g–%g" % (field.replace("_", "-"), lo, hi))
+        return int(value) if value == int(value) else value
     if field == "key" and not VAR_RE.fullmatch(raw):
         raise SystemExit("orch: --key takes a variable name (e.g. DEEPSEEK_API_KEY_WORK), not the key itself: "
                          "put the key as a NAME=sk-… line in %s" % SECRETS_FILE)

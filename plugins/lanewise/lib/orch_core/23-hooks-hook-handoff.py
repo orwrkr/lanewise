@@ -41,6 +41,10 @@ def cmd_hook(a):
                 fallback_forget(sid)  # its fallback entry (and any expired one) must not outlive the session
             except Exception:         # a busy lock costs only this cleanup, never the hook
                 pass
+            try:
+                watch_forget(sid)     # neither must this session's watch answer
+            except Exception:
+                pass
             return 0
         has_state = (project_dir() / state_dir_name()).exists()
         entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT") or ""
@@ -65,17 +69,33 @@ def cmd_hook(a):
             codex_event(sid, announce=False)         # record the Codex mode so a change later raises a 💡 event
             spend_event(announce=False)              # record the 80%/100% spend thresholds so a change later raises 💡
             fallback_event(announce=False)           # record a move to a fallback profile so the way back raises 💡
+            try:
+                watch = watch_event(sid, "session-start")     # a limit may already be about to run out
+                if watch:
+                    print(watch)
+            except Exception:         # a watch problem must not cost the session's status
+                pass
             balance_start_refresh()     # a stale balance is fetched by a detached process, not awaited
             return 0
         if a.event == "user-prompt":
             balance_start_refresh()     # every key with a balance API, not only this directory's
-            events = [e for e in [budget_event(sid), codex_event(sid)] if e] + spend_event() + fallback_event() \
+            spending = spend_event()    # refresh the existing spend cache before the watcher's read-only projection
+            try:
+                watch = watch_event(sid, "user-prompt")       # the pause reminder, its end, or the question
+            except Exception:
+                watch = None
+            events = [e for e in [budget_event(sid), codex_event(sid), watch] if e] + spending + fallback_event() \
                 + (check_events(mark=True) if has_state else [])
             if events:
                 print("Lanewise — events since the last message:\n" + "\n".join(events))
             return 0
         if a.event == "post-tool":
-            events = [e for e in [budget_event(sid), codex_event(sid)] if e] + spend_event() + fallback_event()   # on a change only
+            spending = spend_event()
+            try:
+                watch = watch_event(sid, "post-tool")         # a question, or the pause's end; at most once per 2 min
+            except Exception:
+                watch = None
+            events = [e for e in [budget_event(sid), codex_event(sid), watch] if e] + spending + fallback_event()   # on a change only
             if has_state:
                 stamp = state_dir() / ".last_hook_check"
                 last = stamp.stat().st_mtime if stamp.exists() else 0

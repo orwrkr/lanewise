@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.38.0
+
+- **The orchestrator's own limits are watched.** The budget mode decides where work goes; this watcher decides
+  whether the orchestrator is about to lose its own capacity. It uses the same snapshot and the same pace and
+  projection as the budget — no second model of usage. **A five-hour window** (shorter than a day) is at risk when
+  its projection at the reset reaches 100%. **A window of a day or more** (the week, a monthly spend limit, a prepaid
+  balance, a manual spend counter) is at risk when it runs out before the reset *and* either in under
+  `watch_horizon_h` (2 h) or with under `watch_low` (5%) left; without a pace only non-Claude spend/balance limits
+  use the low test. A balance has no scheduled reset. For the week and a monthly spend limit there is also an
+  **early** rule: both pace estimates (recent pace and window average)
+  run out before the reset, the lower one at least `watch_early_share` (15%) of the window length before it, on at
+  least `watch_early_min_data_h` (24 h) of samples behind each estimate — the question names both exhaustion times
+  and the reset. A session led by another model watches that model's spend limit and account balance at its spend pace
+  instead. **It asks per session:** SessionStart and UserPromptSubmit print the question, PostToolUse adds it as
+  context (at most once per 2 minutes per session), and an unanswered question is repeated after 15 minutes. The three
+  answers:
+  **pause** this session until the reset (a reminder on every prompt, and the next hook says once when the pause is
+  over; a balance pause lasts until the user answers continue), **continue** (ask again after `watch_ask_again_min`,
+  60 min, or `watch_ask_again_step`, 10 points, of
+  growth; for the rest of a five-hour window a risk counts only while the lower pace estimate agrees, and the
+  window's reset ends that bar), or **continue-session** (never ask again there) — `orch watch answer …`. `orch
+  watch` shows every limit with its projection, time to exhaustion and reset (`--json`), this session's answer and
+  the settings. Settings live in the `claude` profile next to the budget's (`orch profile set claude <name> --opt
+  watch_horizon_h=2 --opt watch_low=5 …`; `watch=off`, `watch_early=off`). The answers live in
+  `~/.lanewise/watch.json`, are read-only for the status line (a paused session shows `⏸ paused until 16:50`), and
+  die with the session.
+
 ## 0.37.0
 
 - **Account balances stay fresh while you work.** A long session used to show a figure fetched hours ago unless you

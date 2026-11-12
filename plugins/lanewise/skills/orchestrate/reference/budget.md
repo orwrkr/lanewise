@@ -51,6 +51,49 @@ a key): what stays unused at a reset is lost, and a balance is money. The modes 
 the last 15 minutes, running `orch run claude` executors; sessions led by another model don't count) and the
 thresholds.
 
+## The orchestrator's own limits
+
+The budget mode decides where work goes; this watcher decides whether the orchestrator is about to lose its own
+capacity before a limit resets. It reads the same snapshot and the same pace and projection (`window_pace`,
+`week_rate`, `projected_at_reset`) — no second model of usage. A session led by another model (`ORCH_LEAD`) watches
+that model's spend limit and account balance at its spend pace instead of Claude's windows.
+
+- **A five-hour window** (shorter than a day) is at risk when its projection at the reset reaches 100%. The
+  projection minimum applies: less than 60 minutes into the window is no risk.
+- **A window of a day or more** (the week, a monthly spend limit, a prepaid balance, a manual spend counter) is at
+  risk when it runs out before the reset *and* either in under `watch_horizon_h` hours or with under `watch_low` %
+  left. Claude needs a projection; only a non-Claude spend limit or balance uses the low test without a pace.
+  A balance has no scheduled reset: its exhaustion must be within the horizon or its remaining share low.
+  A manual counter with no baseline watches its balance.
+- **Early** (a window of a day or more with a reset: the week and a monthly spend limit — not a balance or a manual
+  counter): both pace estimates (the recent pace and the window average) run out before the reset, the lower one at
+  least `watch_early_share` % of the window length before it, and each estimate rests on at least
+  `watch_early_min_data_h` hours of samples. The question says it is early and names both projected exhaustion times
+  and the reset.
+
+Hooks ask per session. SessionStart and UserPromptSubmit print the question; PostToolUse adds it as context (at most
+once per 2 minutes per session, a marker file); an unanswered question repeats after 15 minutes, not before. The operator
+answers in that session with `orch watch answer …`:
+
+- `pause` — record "paused until <reset>"; the session's UserPromptSubmit reminds to finish nothing new and answer
+  briefly. The pause ends by itself at the reset, and the next hook says once "▶ … the pause is over"; other
+  sessions are unaffected. A balance pause has no end time: it says "until the balance is topped up" and ends when
+  the user answers `continue`, including when a spend limit is also at risk.
+- `continue` — record the time and the used % of every limit at risk; ask again after `watch_ask_again_min` minutes
+  or when one of those limits grew by `watch_ask_again_step` points, whichever first, while the risk persists. For
+  the five-hour window, after `continue`, a risk counts only while the lower of its two pace estimates also projects
+  100% before the reset; the window's reset ends the answer and that raised bar. Windows of a day or more keep their
+  rule.
+- `continue-session` — never ask again in that session.
+
+`orch watch` shows every current limit with its used %, reset, projection at the reset, time to exhaustion and risk,
+this session's standing answer and the settings in effect (`--json` for tools). The thresholds are the `claude`
+profile's, next to the budget's: `orch profile set claude <name> --opt watch_horizon_h=2 --opt watch_low=5
+--opt watch_early_share=15 --opt watch_early_min_data_h=24 --opt watch_ask_again_min=60 --opt watch_ask_again_step=10`,
+then `orch profile use claude <name>` for a project or `--default`. `--opt watch=off` silences the watcher
+(`watch_early=off` only the early rule). The answers live in `~/.lanewise/watch.json`, are removed at SessionEnd and
+after 7 quiet days, and the status line only reads them: a paused session shows `⏸ paused until HH:MM`.
+
 ## Where the numbers come from
 
 Claude Code gives its status line command the subscription usage (`rate_limits`). Use `orch statusline` as the

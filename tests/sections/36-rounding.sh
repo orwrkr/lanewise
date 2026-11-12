@@ -18,4 +18,6 @@ json.dump(d, open(p, "w", encoding="utf-8"))
 EOF
 out=$(cx_status); contains "$out" "Codex · 5h 83%" "codex status line rounds 82.6 → 83"
 CODEX_HOME="$(native "$T/no-codex")"
+# 82.6% used with 2 h left is a watched risk; leave no risky snapshot for the session-start size budget (section 38)
+$ORCH budget clear >/dev/null
 

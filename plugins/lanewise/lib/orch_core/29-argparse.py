@@ -105,6 +105,12 @@ def build_parser():
     x.add_argument("--week-resets", help="set: when the weekly limit resets")
     x.set_defaults(fn=cmd_budget)
 
+    w = sub.add_parser("watch", help="the orchestrator's own limits: risk, this session's answer, the question")
+    w.add_argument("action", nargs="?", choices=("show", "answer"), default="show")
+    w.add_argument("answer", nargs="?", choices=("pause", "continue", "continue-session"))
+    w.add_argument("--json", action="store_true", help="show: machine-readable")
+    w.set_defaults(fn=cmd_watch)
+
     x = sub.add_parser("statusline", help="Claude Code statusLine command: records rate_limits, prints a short line")
     x.add_argument("--then", metavar="CMD", help="your own status line command; its output comes first")
     x.set_defaults(fn=cmd_statusline)

@@ -200,6 +200,14 @@ numbers in plain words ("Claude: 40% of the session used, resets at 18:00") → 
 sessions with this plugin active in the last 15 minutes and running `orch run claude` executors; a session led by
 DeepSeek doesn't count. The thresholds live in the `claude` profile: `--opt reserve=25` (keep more for other
 sessions), `week_reserve=15`, `surplus=50`, or `surplus=off` to switch the mode off.
+Lanewise also watches the orchestrator's own limits: before a five-hour window would run out at its reset, or a
+week, spend limit or balance would run out within two hours or with under 5% left, the hooks ask one question in
+each session — pause this session until the reset, continue and ask again later (after an hour or ten points of
+growth), or continue without questions in this session (`orch watch answer …`). It uses the budget's own pace and
+projection; for the week and a monthly spend limit it also warns early, when both pace estimates exhaust the limit
+well before the reset. `orch watch` shows every limit projected, and the status line marks a paused session.
+Thresholds are `--opt` settings of the `claude` profile (`watch_horizon_h=2`, `watch_low=5`, `watch_early_share=15`,
+`watch_ask_again_min=60`, `watch_ask_again_step=10`), and `watch=off` silences the watcher — `orch guide budget`.
 A project whose Claude or Codex profile has an API `key` is API-billed instead: no subscription line, no mode, and the
 session doesn't write its numbers into the shared snapshot.
 

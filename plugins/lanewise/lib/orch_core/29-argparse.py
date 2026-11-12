@@ -353,7 +353,23 @@ def build_parser():
                                      "`none` shows records made outside a session")
     u.add_argument("--list", action="store_true", help="recent sessions of this project (and its records outside one)")
     u.add_argument("--limit", type=int, default=10)
-    u.add_argument("--json", action="store_true")
+    u.add_argument("--daily", action="store_true",
+                   help="daily totals per project × provider × model × account (kept 60 days), with the estimated "
+                        "cost, subscription limit points and each account's balances")
+    u.add_argument("--since", metavar="YYYY-MM-DD", help="--daily: first local day, included")
+    u.add_argument("--until", metavar="YYYY-MM-DD", help="--daily: last local day, included (default: today)")
+    u.add_argument("--days", type=int, metavar="N",
+                   help="--daily: the last N days including today (default %d)" % DAILY_DEFAULT_DAYS)
+    u.add_argument("--project", metavar="PATH", help="--daily: another project (default: this one)")
+    u.add_argument("--all-projects", action="store_true", help="--daily: every project, with the per-project split")
+    u.add_argument("--by", choices=("day",), help="--daily: also print the table day by day")
+    u.add_argument("--provider", action="append", metavar="PROVIDER", help="--daily: only this provider (repeatable)")
+    u.add_argument("--model", action="append", metavar="MODEL",
+                   help="--daily: only this model or model prefix (repeatable)")
+    u.add_argument("--key", action="append", metavar="KEY",
+                   help="--daily: only this account — a profile label (deepseek@work) or a key variable name")
+    u.add_argument("--csv", action="store_true", help="--daily: CSV instead of the table")
+    u.add_argument("--json", action="store_true", help="machine-readable output (with --daily: the daily totals)")
     u.set_defaults(fn=cmd_usage)
 
     x = sub.add_parser("guide", help="reference parts of the orchestrate skill (manual, profiles, quota, …)")

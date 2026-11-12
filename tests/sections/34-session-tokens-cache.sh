@@ -100,7 +100,7 @@ lacks "$out" "7.0k/900" "the previous format's cache-less totals are gone"
 $PY - "$AH" <<'EOF' && ok "the rebuilt entry is saved in the new format, with cache in its files" || bad "the rebuilt entry keeps the old format"
 import json, os, sys
 e = json.load(open(os.path.join(sys.argv[1], "session_tokens", "sess-cache-again.json"), encoding="utf-8"))
-assert e.get("format") == 3, e
+assert e.get("format") == 4, e
 assert e["files"] and all("cache" in s for s in e["files"].values() if isinstance(s, dict)), e
 EOF
 out2=$(acct_sl sess-cache-again); [[ "$out2" == "$out" ]] && ok "a rebuilt entry is not parsed twice" || bad "rebuilt entry drifted: $out2"

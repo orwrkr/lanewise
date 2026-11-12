@@ -86,12 +86,12 @@ m = importlib.util.module_from_spec(importlib.util.spec_from_loader("orch", load
 m.native_account = lambda where: "claude"
 m.scope_name = lambda s: "Same@work"
 m.fmt_tok = str
-m.session_tokens = lambda sid, path, native: {"a@work": {"input": 1, "output": 10}, "B@Work": {"input": 2, "output": 20}}
+m.session_tokens = lambda sid, path, native, where: {"a@work": {"input": 1, "output": 10}, "B@Work": {"input": 2, "output": 20}}
 spend = [("a@work", "Same@work", "est. $1"), ("b@work", "Same@work", "est. $9"), ("c@work", "Same@work", "est. $2")]
 out = m.session_status_part("s", None, None, spend)
 # "B@Work" sorts before "a@work" (the account key as given), then the spend-only scope c@work
 assert out == "Session in/out: Same@work 2/20 (est. $9)\n  Same@work 1/10 (est. $1)\n  Same@work (est. $2)", out
-m.session_tokens = lambda sid, path, native: {}
+m.session_tokens = lambda sid, path, native, where: {}
 assert m.session_status_part("s", None, None, spend) == "Same@work (est. $1)\n  Same@work (est. $9)\n  Same@work (est. $2)", "no tokens: no heading, one line each"
 assert m.session_status_part("s", None, None, []) is None, "nothing to show"
 EOF

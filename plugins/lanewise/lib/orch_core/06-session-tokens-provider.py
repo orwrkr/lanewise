@@ -9,6 +9,9 @@
 # The status line runs on every update and the next update may kill it, so a refresh rewrites only this session's small
 # file, and at most once per SESSION_SAVE_SECONDS. In between it parses from the saved offset and shows the result
 # without saving it: the parse is idempotent, the same bytes give the same totals on the next refresh.
+#
+# The same parse keeps the session's tokens per local day and model (the `daily` part of the entry), out of which the
+# daily totals are folded: the status line never writes the shared store, it only carries the buckets in its own file.
 
 SESSION_TOKENS_FILE = ORCH_HOME / "session_tokens.json"     # the old cache of all sessions: read only to migrate one
 SESSION_TOKENS_DIR = ORCH_HOME / "session_tokens"
@@ -23,6 +26,41 @@ PARSE_BYTES_PER_RUN = 8 * 1024 * 1024
 def transcript_provider(model):
     m = str(model or "").lower()
     return "deepseek" if m.startswith("deepseek") else "claude"
+
+
+def message_day(stamp):
+    """The local day (YYYY-MM-DD) of a transcript timestamp, or None."""
+    t = parse_iso(str(stamp).replace("Z", "+00:00")) if isinstance(stamp, str) and stamp else None
+    return day_str(t) if t is not None else None
+
+
+def daily_bucket(state, day, model, counts, cost):
+    """Add a message's raw counts ({in, cr, cw, out}) and its own cost under one day and model of a parse state's
+    per-day buckets (the buckets the daily totals are folded from)."""
+    if not day:
+        return
+    buckets = state.get("daily")
+    if not isinstance(buckets, dict):
+        buckets = state["daily"] = {}
+    by = buckets.setdefault(day, {}).setdefault(str(model), {"in": 0, "cr": 0, "cw": 0, "out": 0, "cost": 0.0})
+    for k in ("in", "cr", "cw", "out"):
+        by[k] = tok_int(by.get(k)) + tok_int(counts.get(k))
+    by["cost"] = round(float(by.get("cost") or 0.0) + float(cost or 0.0), 6)
+
+
+def daily_uncount(state, old):
+    """Take an earlier copy of a message out of a parse state's per-day buckets: the id's raw counts, cost, day and
+    model are saved with it, so a re-sent message replaces its first copy, in the buckets as in the totals."""
+    raw, day, model = old.get("r"), old.get("d"), old.get("m")
+    if not (isinstance(raw, list) and len(raw) == 4 and day and model):
+        return
+    buckets = state.get("daily") if isinstance(state.get("daily"), dict) else {}
+    by = (buckets.get(day) or {}).get(str(model)) if isinstance(buckets.get(day), dict) else None
+    if not isinstance(by, dict):
+        return
+    for k, v in zip(("in", "cr", "cw", "out"), raw):
+        by[k] = max(tok_int(by.get(k)) - tok_int(v), 0)
+    by["cost"] = max(round(float(by.get("cost") or 0.0) - float(old.get("x") or 0.0), 6), 0.0)
 
 
 def read_new_lines(path, offset, size, limit=None):
@@ -85,6 +123,7 @@ def parse_append(path, state, limit=None):
         state["in"] = 0
         state["out"] = 0
         state["cache"] = 0
+        state["daily"] = {}
         changed = True
     if offset and "start" not in state:
         # Old state: inspect at most 64 KiB of complete head lines, once, without moving the saved offset.
@@ -138,19 +177,24 @@ def parse_append(path, state, limit=None):
             if ev.get("type") != "assistant" or not model or str(model).startswith("<"):
                 continue
             mid = msg.get("id") or ev.get("requestId") or ev.get("uuid")
-            u = claude_tokens(msg.get("usage") or {})
-            inp, out, cache = int(u["input_tokens"]), int(u["output_tokens"]), int(u["cached_input_tokens"])
+            raw = transcript_counts(msg.get("usage") or {})
+            cost = daily_message_cost(model, raw, stamp)
+            inp, out, cache = raw["in"] + raw["cw"], raw["out"], raw["cr"]
+            day = message_day(stamp)
             if mid:
                 old = ids.pop(mid, None)   # put back below as the newest
                 if isinstance(old, dict):
                     inp -= tok_int(old.get("i"))
                     out -= tok_int(old.get("o"))
                     cache -= tok_int(old.get("c"))
+                    daily_uncount(state, old)
                 elif floor_t and stamp and (stamp < floor_t or (stamp == floor_t and mid == floor.get("id"))):
                     continue
-                ids[mid] = {"i": u["input_tokens"], "o": u["output_tokens"], "c": u["cached_input_tokens"]}
+                ids[mid] = {"i": raw["in"] + raw["cw"], "o": raw["out"], "c": raw["cr"], "x": round(cost, 6),
+                            "r": [raw["in"], raw["cr"], raw["cw"], raw["out"]], "d": day, "m": str(model)}
                 if stamp:
                     ids[mid]["t"] = stamp
+            daily_bucket(state, day, model, raw, cost)
             state["in"] = tok_int(state.get("in")) + inp
             state["out"] = tok_int(state.get("out")) + out
             state["cache"] = tok_int(state.get("cache")) + cache
@@ -216,9 +260,9 @@ def parse_ledger_append(offset, sid, limit=None):
 
 
 # Version of the cached entry. 2 = keyed by the run record's profile label (an entry without it was keyed by provider);
-# 3 = cache reads counted too, in the ledger and in each transcript file. An older entry's totals have no cache, so
-# both its ledger part and its transcript files restart from offset 0.
-SESSION_TOKENS_FORMAT = 3
+# 3 = cache reads counted too, in the ledger and in each transcript file; 4 = the per-day and per-model buckets of the
+# daily totals. An older entry lacks a part of what is counted, so its ledger part and transcript files restart from 0.
+SESSION_TOKENS_FORMAT = 4
 
 
 def account_sort_key(label):
@@ -255,13 +299,33 @@ def session_tokens_path(sid):
     return SESSION_TOKENS_DIR / ("x-" + hashlib.sha256(sid.encode("utf-8", "replace")).hexdigest() + ".json")
 
 
-def read_session_entry(path):
-    """A saved entry, or None when there is none. The data can be derived again, so damage means starting over."""
+def read_session_entry(path, strict=False):
+    """A saved entry, or None; strict readers distinguish missing/broken files from successfully read empty entries."""
     try:
         entry = json.loads(_read_text_retry(path))
     except (OSError, ValueError):
+        if strict:
+            raise
         return None
+    if strict and not isinstance(entry, dict):
+        raise ValueError("expected a session counter object")
     return entry if isinstance(entry, dict) else None
+
+
+def session_billing_note(sid, where=None):
+    """Freeze the lead's billing on first observation, even before the status line sees a transcript."""
+    if not sid:
+        return
+    with state_lock(ORCH_HOME / ".state.lock"):
+        path = session_tokens_path(sid)
+        try:
+            entry = read_session_entry(path, strict=True)
+        except FileNotFoundError:
+            entry = {}
+        if entry.get("billing") not in ("api", "subscription"):
+            entry["billing"] = session_billing(where)
+            entry["session"] = sid
+            write_json(path, entry, compact=True)
 
 
 def session_entry_saved_recently(entry, t):
@@ -282,11 +346,13 @@ def save_session_entry(sid, entry, t, always):
         write_json(path, dict(entry, updated=iso(t)), compact=True)
 
 
-def session_tokens(sid, transcript_path, native="claude"):
+def session_tokens(sid, transcript_path, native="claude", where=None):
     """Refresh this session's token counters and return {account: {input, output, cache}}: account is a profile label
     (deepseek@work, codex), so one provider's separate accounts stay separate. The session's own Claude thread counts
-    under `native`. See above for when the counters are saved; a backlog over PARSE_BYTES_PER_RUN (a long transcript
-    seen for the first time) is the exception, its progress is saved at once, so runs that get killed still get through it."""
+    under `native`. The entry also carries the session's own id, its project and its tokens per local day and model
+    (with the account each provider froze at), which the daily totals are folded from. See above for when the counters
+    are saved; a backlog over PARSE_BYTES_PER_RUN (a long transcript seen for the first time) is the exception, its
+    progress is saved at once, so runs that get killed still get through it."""
     t = now()
     path = session_tokens_path(sid)
     entry = read_session_entry(path)
@@ -305,6 +371,9 @@ def session_tokens(sid, transcript_path, native="claude"):
             if isinstance(state, dict):
                 trim_ids(state, IDS_PER_FILE)
     changed = False
+    if entry.get("billing") not in ("api", "subscription"):
+        entry["billing"] = session_billing(where, native)
+        changed = True
     if entry.get("format") != SESSION_TOKENS_FORMAT or not isinstance(entry.get("ledger"), dict) \
             or not isinstance(entry.get("ledger_offset"), int):
         changed = True                      # an old-format (or damaged) entry: rebuild ledger and transcripts
@@ -347,6 +416,40 @@ def session_tokens(sid, transcript_path, native="claude"):
         tt["input"] = tok_int(tt.get("input")) + d["input"]
         tt["output"] = tok_int(tt.get("output")) + d["output"]
         tt["cache"] = tok_int(tt.get("cache")) + d["cache"]
+    if entry.get("session") != sid:
+        entry["session"] = sid
+        changed = True
+    if where:
+        project = canon_path(project_root(where))
+        if entry.get("project") != project:
+            entry["project"] = project
+            changed = True
+    accounts = entry.get("accounts")
+    if not isinstance(accounts, dict):
+        accounts = entry["accounts"] = {}
+    for state in entry["files"].values():
+        prov = str(state.get("provider") or "claude") if isinstance(state, dict) else ""
+        if prov and prov not in accounts:       # frozen: a profile switch later cannot move earlier tokens
+            accounts[prov] = native if prov == "claude" else lead_provider_label(prov) or prov
+            changed = True
+    daily = {}
+    for state in entry["files"].values():
+        if not (isinstance(state, dict) and isinstance(state.get("daily"), dict)):
+            continue
+        for day, models in state["daily"].items():
+            if not isinstance(models, dict):
+                continue
+            target = daily.setdefault(day, {})
+            for model, counts in models.items():
+                if not isinstance(counts, dict):
+                    continue
+                total = target.setdefault(str(model), {"in": 0, "cr": 0, "cw": 0, "out": 0, "cost": 0.0})
+                for k in ("in", "cr", "cw", "out"):
+                    total[k] += tok_int(counts.get(k))
+                total["cost"] = round(float(total.get("cost") or 0.0) + float(counts.get("cost") or 0.0), 6)
+    if daily != entry.get("daily"):
+        entry["daily"] = daily
+        changed = True
     if first or behind or (changed and not session_entry_saved_recently(entry, t)):
         try:
             save_session_entry(sid, entry, t, first or behind)
@@ -373,15 +476,14 @@ def session_tokens(sid, transcript_path, native="claude"):
 
 
 def sweep_orch_home():
-    """Remove what no process will come back for, once it is over a day old: the *.tmp a killed write left, the file of
-    a session gone quiet, the old cache of all sessions. Only a directory listing unless there is something to remove."""
+    """Remove day-old *.tmp leftovers and the old all-session cache. Only directory metadata is read;
+    session counters belong to hook/report maintenance, never the status line."""
     cutoff = time.time() - SESSION_KEEP_SECONDS
     for base in (ORCH_HOME, SESSION_TOKENS_DIR):
         try:
             with os.scandir(str(base)) as it:
                 for e in it:
-                    if e.name.endswith(".tmp") or e.name == SESSION_TOKENS_FILE.name \
-                            or (base == SESSION_TOKENS_DIR and e.name.endswith(".json")):
+                    if e.name.endswith(".tmp") or e.name == SESSION_TOKENS_FILE.name:
                         if e.stat().st_mtime < cutoff:
                             os.unlink(e.path)
         except OSError:
@@ -408,7 +510,7 @@ def session_status_part(sid, transcript_path, where=None, spend=None):
     counters = []
     if sid:
         try:
-            totals = session_tokens(sid, transcript_path, native_account(where))
+            totals = session_tokens(sid, transcript_path, native_account(where), where)
             counters = [(str(acct).lower(), scope_name(acct),
                          "%s/%s%s" % (fmt_tok(d["input"]), fmt_tok(d["output"]),
                                       (" +%s cache" % fmt_tok(d["cache"])) if d.get("cache") else ""))
@@ -445,7 +547,7 @@ def cmd_statusline(a):
             if isinstance(w, dict) and w.get("used_percentage") is not None and epoch_iso(w.get("resets_at")):
                 windows[name] = {"used": round(float(w["used_percentage"]), 1), "resets_at": epoch_iso(w["resets_at"])}
         cwd = (data.get("workspace") or {}).get("current_dir") if isinstance(data.get("workspace"), dict) else None
-        api_billed = bool(cwd) and profile_key("claude", Path(cwd), follow=False) is not None
+        api_billed = session_billing(Path(cwd) if cwd else None) == "api"
         if windows and not api_billed:
             quietly(save_usage, windows, "statusline")
         model = (data.get("model") or {}).get("display_name") if isinstance(data.get("model"), dict) else None

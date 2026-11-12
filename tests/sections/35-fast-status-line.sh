@@ -1,7 +1,7 @@
 echo "── a fast status line (no process, small writes, bounded ids, kills)"
 SLH="$(native "$T/sl-home")"; SLN="$(native "$T/sl-no-codex")"; SLCFG="$(native "$T/sl-cfg")"; SLR="$T/sl-repo"
 SLP="$T/sl-cfg/projects/p"; SLD="$T/sl-home/session_tokens"; SLT="$(native "$T/sl_tool.py")"
-mkdir -p "$SLH" "$SLN" "$SLP" "$SLR/sub" && git -C "$SLR" init -q || die "cannot create the status line fixture"
+mkdir -p "$T/sl-home" "$T/sl-no-codex" "$SLP" "$SLR/sub" && git -C "$SLR" init -q || die "cannot create the status line fixture"
 SLRESET=$(( $(date +%s) + 7200 ))
 sl_in() {
   printf '{"session_id":"%s","transcript_path":"%s","workspace":{"current_dir":"%s"},"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":%s}}}' \
@@ -78,7 +78,7 @@ elif cmd == "kill":              # mode, orch: die in the middle of writing the 
         dump = json.dump
         def die_dumping(data, f, **kw):
             if "session_tokens" in str(getattr(f, "name", "")):
-                f.write('{"format": 3, "fil'); f.flush(); os._exit(9)
+                f.write('{"format": 4, "fil'); f.flush(); os._exit(9)
             return dump(data, f, **kw)
         m.json.dump = die_dumping
     sys.exit(m.main(["statusline"]))
@@ -184,7 +184,7 @@ for f in "$T/sl-home/usage.json.old.tmp" "$SLD/x.json.old.tmp" "$SLD/gone-sessio
 sl_run speed-one >/dev/null
 [[ ! -e "$T/sl-home/usage.json.old.tmp" && ! -e "$SLD/x.json.old.tmp" ]] && ok "*.tmp files older than a day are removed" || bad "old *.tmp files stayed"
 [[ -e "$T/sl-home/usage.json.new.tmp" ]] && ok "a recent *.tmp stays: it may be a write in progress" || bad "a recent *.tmp was removed"
-[[ ! -e "$SLD/gone-session.json" && -e "$SLD/speed-one.json" ]] && ok "a session's file goes a day after its last save" || bad "session files not pruned by age"
+[[ -e "$SLD/gone-session.json" && -e "$SLD/speed-one.json" ]] && ok "the status line keeps quiet session counters for hook/report folding" || bad "the status line deleted a counter"
 # a busy lock: print what is cached, including tokens parsed in this run, and save nothing
 $PY "$SLT" gen "$(native "$SLP/speed-one.jsonl")" 200 1
 $PY "$SLT" age "$(sl_file speed-one)"; cp "$SLD/speed-one.json" "$T/sl-a.snap"

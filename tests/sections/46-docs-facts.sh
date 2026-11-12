@@ -99,6 +99,7 @@ HOOK_CACHE = re.compile(r"HOME_DIR/(\.hook-python-)[^\s\"'/]*")
 PY_CACHE = re.compile(r"_os\.path\.join\(home,\s*[\"']([^\"']+)[\"']")
 
 INTERNAL_HOME_FILES = {
+    ".daily-fold": "mtime throttles machine-wide daily limit scans and stale counter batches, without reading the store",
     ".balance-refresh": "when a hook last started a detached balance fetch, so hooks start at most one every two minutes",
     ".watch-post-tool": "the limit-watch marker per session after a tool call",
     ".watch-spend.json": "the spend figures the watcher compares between checks",

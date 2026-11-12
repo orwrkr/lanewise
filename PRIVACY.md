@@ -6,8 +6,10 @@ account, no server, no telemetry and no analytics, and nothing about you or your
 ## What stays on your computer
 
 - `~/.lanewise/`: your settings, executor profiles, API keys (`secrets.env`), spend limits, balances, each
-  session's answer to the limit-watch question (`watch.json`) and the usage log (which model did what, and how many
-  tokens it spent).
+  session's answer to the limit-watch question (`watch.json`), the usage log (which model did what, and how many
+  tokens it spent) and the daily totals: per day, project, provider, model and account the tokens and the estimated
+  cost, with the subscription limit points used and each day's first and last account balance, kept for two months.
+  `ORCH_USAGE_LOG=0` turns off both the usage log and the daily totals.
 - `<project>/.lanewise/` in projects where you used the plugin: executor runs, task prompts and manual tasks.
 
 Before 0.36.0 both folders were named `.partitura`; before 0.35.0, `.orchestra`. `orch` reads either where it is,

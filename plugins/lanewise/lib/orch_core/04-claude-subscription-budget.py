@@ -389,7 +389,7 @@ def _claude_budget(where=None):
                    % (projection, pct(week[0]), week_reserve_txt, instruction)) if week_tight else ""
     if not five or five[1] is None:
         if week_tight:
-            return "tight", "Claude subscription:" + weekly_line
+            return "tight", "Claude subscription: 5-hour window: none open now;" + weekly_line
         return "unknown", None
     used, reset = five
     measured = measured_at(snap, "five_hour")
@@ -773,6 +773,14 @@ def watch_limits(where=None, settings=None, cached=False):
                 out.append(watch_week(snap, week, cfg))
         except (TypeError, ValueError):
             pass
+        # Carry the already-read sibling into the question; hooks must not read the snapshot twice.
+        for item in out:
+            other_key = "week" if item["key"] == "five_hour" else "five_hour"
+            other = next((w for w in out if w["key"] == other_key), None)
+            item["other_window"] = {"key": other_key,
+                                    "name": "the weekly limit" if other_key == "week" else "the 5-hour window",
+                                    "used_text": other["used_text"] if other and other.get("reset") else None,
+                                    "reset": other.get("reset") if other else None}
         return out
     try:
         config, err = load_spend_limits()
@@ -847,6 +855,17 @@ def watch_question(risks):
     others = [r["name"] for r in risks[1:]]
     if others:
         first += ". Also at risk: " + ", ".join(others)
+    risk_keys = {r["key"] for r in risks}
+    shown = set()
+    for risk in risks:
+        other = risk.get("other_window")
+        if not other or other["key"] in risk_keys or other["key"] in shown:
+            continue
+        shown.add(other["key"])
+        first += ". %s: %s" % (other["name"],
+                                 "%s, resets at %s" % (other["used_text"], watch_clock(other["reset"]))
+                                 if other.get("reset") else
+                                 "none open now" if other["key"] == "five_hour" else "no current data")
     target = watch_pause_target(risks)
     options = []
     if target is not None and target.get("reset"):

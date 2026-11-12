@@ -11,6 +11,15 @@ def claude_config_dir():
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+def session_billing(where=None, account=None):
+    """The lead's billing, using the same credential and profile resolution as the key helper and lead detection."""
+    lead = (os.environ.get("ORCH_LEAD") or "claude").partition("@")[0].lower()
+    cloud = any(os.environ.get(k) for k in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                                           "CLAUDE_CODE_USE_FOUNDRY"))
+    return "api" if (lead != "claude" or lead_token() or cloud or
+                     (account or native_account(where)) != "claude") else "subscription"
+
+
 def settings_target(default=False, where=None):
     """The settings file apiKeyHelper is written to: user settings (--default) or the project's settings.local.json."""
     if default:

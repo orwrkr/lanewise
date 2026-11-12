@@ -1,6 +1,6 @@
 # needs: 32-session-tokens
 echo "── session tokens per account (a profile label, never a sum over a provider)"
-AH="$(native "$T/acct-home")"; mkdir -p "$AH"
+AH="$(native "$T/acct-home")"; mkdir -p "$T/acct-home"
 acct() { ORCH_HOME="$AH" $ORCH "$@"; }
 acct_sl() {      # acct_sl <session> [extra env…]: the status line of that session, run in the test repository
   local sid=$1; shift
@@ -74,7 +74,7 @@ out2=$(acct_sl sess-old); [[ "$out2" == "$out" ]] && ok "a rebuilt entry is not 
 $PY - "$AH" <<'EOF' && ok "the rebuilt entry carries the format mark" || bad "the rebuilt entry has no format mark"
 import json, os, sys
 e = json.load(open(os.path.join(sys.argv[1], "session_tokens", "sess-old.json"), encoding="utf-8"))
-assert e.get("format") == 3 and "deepseek" not in e["ledger"] and set(e["ledger"]) == {"deepseek@client", "deepseek@personal"}, e
+assert e.get("format") == 4 and "deepseek" not in e["ledger"] and set(e["ledger"]) == {"deepseek@client", "deepseek@personal"}, e
 EOF
 # a malformed cache entry and malformed ledger lines never break the status line
 $PY - "$AH" <<'EOF'
@@ -91,7 +91,7 @@ with open(os.path.join(home, "usage.jsonl"), "a", encoding="utf-8") as f:
                             "usage": {"input_tokens": i, "output_tokens": 1}}) + "\n")
 cache = os.path.join(home, "session_tokens.json")
 data = json.load(open(cache, encoding="utf-8"))
-data["sess-bad"] = {"format": 3, "files": {"x": "junk", "y": {"in": "a", "out": None, "cache": None, "provider": 5}},
+data["sess-bad"] = {"format": 4, "files": {"x": "junk", "y": {"in": "a", "out": None, "cache": None, "provider": 5}},
                     "ledger": {"deepseek": "junk", "codex": {"input": "x", "output": None}, "claude": [1]},
                     "ledger_offset": 0, "updated": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}
 json.dump(data, open(cache, "w", encoding="utf-8"))

@@ -60,7 +60,8 @@ class Scene:
         self.resets = {}
 
     def run(self, *args, stdin="", sid=None, extra=None, code=None):
-        env = dict(BASE_ENV, ORCH_HOME=str(self.home), ORCH_PROJECT_DIR=str(self.project), ORCH_BALANCE="off")
+        env = dict(BASE_ENV, ORCH_HOME=str(self.home), ORCH_PROJECT_DIR=str(self.project), ORCH_BALANCE="off",
+                   CODEX_HOME=str(self.root / "codex"), CLAUDE_CONFIG_DIR=str(self.root / "claude"))
         if self.lead:
             env["ORCH_LEAD"] = self.lead
         if extra:
@@ -671,6 +672,42 @@ entry = next(iter(cached.values()), None)
 check(isinstance(entry, dict) and isinstance(entry.get("spent"), (int, float))
       and isinstance(entry.get("rates"), list),
       "lead cache: a malformed aggregate entry is recomputed", cached)
+
+# ── the other subscription window accompanies the warning, from the same read ──────────────────────────────────
+sibling_week = Scene("sibling-week")
+write_snapshot(sibling_week, five=4, week=97, week_history=[(6000, 20)])
+p = sibling_week.hook("user-prompt", "sw1")
+has("weekly warning includes the current 5-hour usage and reset", p.stdout, "the 5-hour window: 4% used, resets at ")
+sibling_five = Scene("sibling-five")
+write_snapshot(sibling_five, five=82, history=[(45, 70)], week=37)
+p = sibling_five.hook("user-prompt", "sf1")
+has("5-hour warning includes the current weekly usage and reset", p.stdout, "the weekly limit: 37% used, resets at ")
+sibling_both = Scene("sibling-both")
+write_snapshot(sibling_both, five=82, history=[(45, 70)], week=97, week_history=[(6000, 20)])
+p = sibling_both.hook("user-prompt", "sb1")
+has("two risky windows are named under Also at risk", p.stdout, "Also at risk:")
+lacks("a weekly window already at risk is not repeated as a sibling", p.stdout, "the weekly limit: 97% used")
+lacks("a 5-hour window already at risk is not repeated as a sibling", p.stdout, "the 5-hour window: 82% used")
+sibling_closed = Scene("sibling-closed")
+write_snapshot(sibling_closed, five=4, reset_min=-1, week=97, week_history=[(6000, 20)])
+p = sibling_closed.hook("user-prompt", "sc1")
+has("a weekly warning says no 5-hour window is open", p.stdout, "the 5-hour window: none open now")
+p = sibling_closed.run("budget")
+has("the tight weekly budget line says no 5-hour window is open", p.stdout, "5-hour window: none open now")
+p = sibling_week.run(code=LOAD_ORCH + """
+reads = []
+read = m.read_json
+def counted(path, *args, **kwargs):
+    if path == m.USAGE_SNAPSHOT:
+        reads.append(True)
+    return read(path, *args, **kwargs)
+m.read_json = counted
+risks = m.watch_risks(cached=True)
+assert risks and 'the 5-hour window: 4% used' in m.watch_question(risks)
+assert len(reads) == 1, reads
+print('OK')
+""")
+check(p.returncode == 0 and "OK" in p.stdout, "the sibling window requires no extra snapshot reads", p.stdout + p.stderr)
 
 # ── the settings live in the claude profile and are validated ────────────────────────────────────────────────────
 settings = Scene("settings")

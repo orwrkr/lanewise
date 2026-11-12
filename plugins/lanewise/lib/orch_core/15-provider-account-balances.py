@@ -482,6 +482,10 @@ def balance_store(results):
             entry["error"] = {"message": error, "at": stamp}
             cache[scope] = entry
     write_json(BALANCE_FILE, cache)
+    try:
+        daily_balance_note(results, stamp)     # each day's first and last figure, for `orch usage --daily`
+    except Exception:
+        pass                                   # the balance write is what matters: never fail it for the totals
 
 
 def balance_refresh(targets):

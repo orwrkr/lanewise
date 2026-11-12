@@ -239,7 +239,8 @@ def warn_state(path, detail):
 def read_json(path, default, recover_corrupt=False, object_required=False):
     if recover_corrupt:
         home_state = Path(path) in (USAGE_SNAPSHOT, SESSIONS_FILE, CODEX_USAGE_FILE,
-                                    SPEND_FILE, SPEND_CACHE_FILE, SPEND_EVENTS_FILE, BALANCE_FILE, WATCH_FILE)
+                                    SPEND_FILE, SPEND_CACHE_FILE, SPEND_EVENTS_FILE, BALANCE_FILE, WATCH_FILE,
+                                    DAILY_FILE)
         if home_state:
             try:                     # write_json replaces a file atomically: only preserving a corrupt one takes the lock
                 return _read_json(path, default, False, object_required)

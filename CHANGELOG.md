@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.39.0
+
+- **Daily token totals, kept for two months.** For every local day and each project × provider × model × account,
+  Lanewise keeps the runs, the input, cache-read, cache-write and output tokens and the estimated cost at that day's
+  prices, plus the subscription limit points used and each day's first and last account balance. `orch usage --daily`
+  shows them (`--days N`, `--since`/`--until`, `--provider`, `--model`, `--key`, `--project`, `--all-projects`,
+  `--by day`, `--json`; `--csv` for the token and subscription rows); `ORCH_USAGE_LOG=0` turns them off along with
+  the usage log. For a subscription account it estimates the project's share of the limit from its
+  token share and cost share among this machine's projects, separately for the weekly and 5-hour windows and only
+  over days with both tokens and samples; missing coverage is named. Both windows' totals and estimates appear in
+  text, per-day output, JSON and CSV, including zero use or missing samples. The account is the profile label
+  (`deepseek@work`, `codex`, `claude`),
+  never the key. A lead session and its subagents count by each message's day, so a session crossing midnight splits;
+  an executor run counts on the day it ended. The totals live in `~/.lanewise/daily_usage.json` (60 days, pruned),
+  apart from the transcript, so they survive its deletion; a session's counts are folded by reports, at its end,
+  and for a crashed session once its counter file has been quiet for a day — each token counted once. Writing them
+  never breaks a run or a hook.
+- **Limit warnings include both windows.** A subscription warning also names the other window's usage and reset,
+  unless it is already at risk; an inactive 5-hour window is explicitly shown as "none open now", also in the
+  Claude subscription budget line.
+
 ## 0.38.1
 
 - **A session waiting on its executor stays active.** The Claude budget splits the five-hour window's surplus and

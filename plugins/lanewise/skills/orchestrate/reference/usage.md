@@ -23,3 +23,14 @@
   `--task "<short>"` (otherwise the prompt's first line is used).
 - The operator asks "how much did we spend / who did what" → `orch usage`; answer with a compact table and 1–2
   takeaways (what cost the most, what could have gone to a cheaper slot).
+- The operator asks "how much did each provider spend on this project last week / this month", or wants a spend
+  figure when the provider's console is out of reach → `orch usage --daily --days 7` (`--since YYYY-MM-DD` /
+  `--until YYYY-MM-DD`, `--by day`, `--provider` / `--model` / `--key`, `--project PATH`, `--all-projects` for every
+  project with its split, `--json` / `--csv`); the account is the profile label (the key's variable name also
+  matches `--key`). Totals are kept for 60 days; an executor run counts on the day it ended, a session by each
+  message's day. For a subscription (Claude login, Codex account) the report adds the project's estimated share of
+  the weekly and 5-hour limits by tokens and cost, with separate coverage for each window (only days with tokens
+  and limit samples); zeros and missing samples are explicit, also per day, in JSON and CSV. Say it is measured
+  against this machine's sessions only; cache reads are excluded from the token share.
+- Lead billing is API when the environment has an Anthropic key/token or Bedrock/Vertex/Foundry switch, the native
+  account is a key profile, or the lead is not Claude; otherwise it is subscription, frozen on first observation.

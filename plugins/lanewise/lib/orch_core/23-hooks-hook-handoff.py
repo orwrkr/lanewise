@@ -37,6 +37,7 @@ def cmd_hook(a):
         if a.event == "session-end":
             forget(sid)               # no longer a Claude consumer
             log_session(data)         # usage snapshot of the main thread + subagents; silent
+            daily_maintenance(sid, ended=True)   # SessionEnd folds its own counter even inside the maintenance gap
             try:
                 fallback_forget(sid)  # its fallback entry (and any expired one) must not outlive the session
             except Exception:         # a busy lock costs only this cleanup, never the hook
@@ -76,9 +77,13 @@ def cmd_hook(a):
             except Exception:         # a watch problem must not cost the session's status
                 pass
             balance_start_refresh()     # a stale balance is fetched by a detached process, not awaited
+            quietly(session_billing_note, sid, project_dir())
+            daily_maintenance(sid)      # the daily totals: the limit samples and a crashed session's counters
             return 0
         if a.event == "user-prompt":
+            quietly(session_billing_note, sid, project_dir())
             balance_start_refresh()     # every key with a balance API, not only this directory's
+            daily_maintenance(sid)
             spending = spend_event()    # refresh the existing spend cache before the watcher's read-only projection
             try:
                 watch = watch_event(sid, "user-prompt")       # the pause reminder, its end, or the question

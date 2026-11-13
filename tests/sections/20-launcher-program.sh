@@ -1,7 +1,7 @@
 echo "── launcher run as a program: finds its own Python"
 # The plugin's bin/ is on the Bash tool's PATH; there `python3` may be missing or broken (Windows: only `python`, or
 # the Store alias). Started as a program, bin/orch searches like hooks/run.sh and caches the interpreter that passed.
-$PY -W error -c "import sys; compile(open(sys.argv[1], encoding='utf-8').read(), 'orch', 'exec')" "$(native "$PLUGIN/bin/orch")" \
+$PY -W error -c "import sys, pathlib; compile(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'), 'orch', 'exec')" "$(native "$PLUGIN/bin/orch")" \
   && ok "bin/orch compiles without warnings (no backslash escapes in its shell part)" || bad "bin/orch compiles with warnings"
 [[ "$(head -n 1 "$PLUGIN/bin/orch")" == "#!/bin/sh" ]] && ok "bin/orch starts as a shell script" || bad "bin/orch has another first line"
 lp_real=$($PY -c 'import sys; print(sys.executable.replace(chr(92), "/"))')

@@ -153,6 +153,28 @@ def projected_at_reset(used, reset, rate, measured):
     return used + rate * (reset - measured).total_seconds() / 60
 
 
+def window_projection(snap, name, hours):
+    """The share a window reaches at its reset at the current pace — the budget's own estimate (window_pace for the
+    5-hour window, week_rate for the week) through projected_at_reset, never below the used share. None when there
+    is no current window, no measurement or rate, or the measurement is stale."""
+    w = usage_window(snap, name)
+    if w is None:
+        return None
+    used, reset = w
+    measured = measured_at(snap, name)
+    if reset is None or measured is None or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS:
+        return None
+    if hours == 5:
+        rate, _ = window_pace(snap, used, reset, hours)
+    elif hours == 7:
+        rate, _ = week_rate(snap.get("week_history"), used, reset, measured)
+    else:
+        return None
+    if rate is None:
+        return None
+    return max(used, projected_at_reset(used, reset, rate, measured))
+
+
 def week_base_sample(history, reset, measured, used=None):
     """The earliest week_history sample from the last 72 hours (three days) with the same reset (within 10 minutes)
     and at least 6 hours before the measurement — the longest recent baseline: one heavy or light day does not swing
@@ -369,6 +391,8 @@ def _claude_budget(where=None):
                        "(SURPLUS/TIGHT off)" % kvar)
     snap = read_json(USAGE_SNAPSHOT, {}, recover_corrupt=True)
     five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
+    five_projection = window_projection(snap, "five_hour", 5)
+    week_projection = window_projection(snap, "seven_day", 7)
     cfg = budget_settings(where)
     weekly = None
     week_tight = False
@@ -402,8 +426,11 @@ def _claude_budget(where=None):
     active = ("; active: %d session%s%s" % (sessions, "" if sessions == 1 else "s",
                                                         ", %d Claude executor run%s" % (runs, "" if runs == 1 else "s")
                                                         if runs else "")) if users else ""
-    line = "Claude subscription: 5-hour window %d%% used, resets %s (%s)%s%s; reserve %d%%%s" % (
-        pct(used), at, human_delta(reset), ", week %d%%" % pct(week[0]) if week else "",
+    five_note = (" (≈%d%% by the reset)" % pct(five_projection)) if five_projection is not None else ""
+    week_note = (" (≈%d%% by the reset)" % pct(week_projection)) if week_projection is not None else ""
+    line = "Claude subscription: 5-hour window %d%% used%s, resets %s (%s)%s%s; reserve %d%%%s" % (
+        pct(used), five_note, at, human_delta(reset),
+        (", week %d%%%s" % (pct(week[0]), week_note)) if week else "",
         " — reported by the operator" if snap.get("source") == "operator" else "", cfg["reserve"], active)
     if stale:
         line += "; measured %s (stale)" % (human_delta(measured) if measured else "at an unknown time")

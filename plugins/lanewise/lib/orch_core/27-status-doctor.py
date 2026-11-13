@@ -138,6 +138,19 @@ def cmd_doctor(a):
     src = key_origin("DEEPSEEK_API_KEY")
     row("DEEPSEEK_API_KEY", bool(src), ("set: " + src) if src else "missing — add a line DEEPSEEK_API_KEY=sk-… to %s"
         % SECRETS_FILE, optional=True)
+    if not IS_WINDOWS:                 # Windows has no mode bits; WSL is Linux and is checked
+        try:
+            mode = SECRETS_FILE.stat().st_mode & 0o777
+        except FileNotFoundError:
+            pass                       # no secrets.env: nothing to check
+        except OSError as ex:
+            print("⚠ %-22s cannot read its permissions: %s" % ("secrets.env", ex))
+        else:
+            if mode & 0o077:
+                print("⚠ %-22s %s can be read or written by group or others (%04o): run chmod 600 %s"
+                      % ("secrets.env", SECRETS_FILE, mode, SECRETS_FILE))
+            else:
+                row("secrets.env mode", True, "%04o" % mode)
     data, err = load_profiles()
     if err:
         row("profiles", False, err)

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.39.1
+
+- **`orch doctor` checks who can read `secrets.env`.** On Linux, macOS and WSL it warns when
+  `~/.lanewise/secrets.env` is readable or writable by group or others, naming the file's mode and the fix
+  (`chmod 600`); at `0600` or stricter it reports the file as fine. A missing file is not a problem, and native
+  Windows has no such mode bits, so the check is skipped there.
+- **The status line shows where each Claude window is heading.** Beside each window's used share it now shows the
+  share that window reaches at its reset at the current pace — `5h 16% (≈38%) → 01:30 · week 41% (≈170%)` — from the
+  budget's own projection, and the same figure follows the windows in the `Claude subscription:` line. The figure is
+  left out when it cannot be computed (too little data, a stale measurement) and never falls below the used share;
+  the mode text says `tight: week` instead of repeating the number, and keeps the number only when it cannot stand
+  beside the window. The Codex windows show it the same way.
+
 ## 0.39.0
 
 - **Daily token totals, kept for two months.** For every local day and each project × provider × model × account,

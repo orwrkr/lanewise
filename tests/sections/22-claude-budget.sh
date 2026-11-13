@@ -9,7 +9,7 @@ out=$(echo '{}' | $ORCH statusline); rc=$?; [[ $rc -eq 0 && -n "$out" ]] && ok "
 out=$(echo 'garbage' | $ORCH statusline); expect_rc 0 $? "statusline survives garbage input"
 out=$($ORCH budget); contains "$out" "No current Claude subscription numbers" "budget: no numbers yet"
 out=$(sl 10 $((now + 7200)) "$(week 40)")
-contains "$out" "Claude Opus 5.5 · 5h 10% → .* · week 40% .*surplus: Claude first" "statusline shows the usage and the surplus mode"
+contains "$out" "Claude Opus 5.5 · 5h 10% (≈1[5-7]%) → .* · week 40% (≈7[0-9]%) .*surplus: Claude first" "statusline shows the usage, where each window is heading and the surplus mode"
 [[ -f "$ORCH_HOME/claude_usage.json" ]] && ok "statusline keeps the snapshot in ORCH_HOME" || bad "no snapshot"
 out=$($ORCH status); contains "$out" "SURPLUS: at the current pace (window average) about 7[0-9]% of the window would expire unused beyond the reserve" "status: surplus beyond the reserve, projected from the pace"
 out=$(echo '{}' | $ORCH hook session-start); contains "$out" "Claude subscription: 5-hour window 10% used" "session-start shows the budget"
@@ -207,7 +207,7 @@ export ORCH_HOME="$saved_home"
 rm -f "$ORCH_HOME/sessions.json" "$ORCH_HOME/claude_usage.json"
 echo '{"session_id": "s-one"}' | $ORCH hook user-prompt >/dev/null
 out=$(sl 10 $((now + 7200)))
-contains "$out" "Claude Opus 5.5 · 5h 10% → .* · 1 session" "the Claude line shows a single session as 1 session"
+contains "$out" "Claude Opus 5.5 · 5h 10% (≈1[5-7]%) → .* · 1 session" "the Claude line shows a single session as 1 session"
 rm -f "$ORCH_HOME/sessions.json"
 snap 10
 echo '{"session_id": "s-sdk"}' | CLAUDE_CODE_ENTRYPOINT=sdk-cli $ORCH hook user-prompt >/dev/null
@@ -220,3 +220,33 @@ $ORCH budget clear >/dev/null
 # a status line reading lower than the stored one of the same window is a stale session's: dropped, never saved;
 # usage_assert EXPR MESSAGE evaluates EXPR against the snapshot `s`; usage_age backdates the snapshot's measurement
 # times (and its samples to an hour ago) so that an unwanted write would show
+
+# Where each window is heading: (≈N%) after its used share is the budget's own projection at the reset, left out
+# when it cannot be computed (too little data, a stale measurement) and never below the used share.
+now=$($PY -c "import time; print(int(time.time()))")   # this block's readings start now
+rm -f "$ORCH_HOME/sessions.json" "$ORCH_HOME/claude_usage.json"
+out=$(sl 16 $((now + 7800)) "$(week 41)")
+contains "$out" "5h 16% (≈2[0-9]%) → " "status line: the 5-hour projection beside its used share"
+contains "$out" "week 41% (≈7[0-9]%)" "status line: the weekly projection beside its used share"
+out=$($ORCH budget)
+contains "$out" "5-hour window 16% used (≈2[0-9]% by the reset), resets " "budget line: the 5-hour projection"
+contains "$out" "week 41% (≈7[0-9]% by the reset)" "budget line: the weekly projection"
+$ORCH budget clear >/dev/null
+out=$(sl 16 $((now + 17400)))
+lacks "$out" "5h 16% (≈" "status line: no 5-hour projection in a window's first hour"
+$ORCH budget clear >/dev/null
+$PY - "$(native "$ORCH_HOME/claude_usage.json")" <<'EOF'   # a measurement 30 minutes old: no projection
+import datetime as dt, json, sys
+t = dt.datetime.now().astimezone() - dt.timedelta(minutes=30)
+json.dump({"updated": t.isoformat(timespec="seconds"), "source": "operator",
+           "five_hour": {"used": 40.0, "resets_at": (t + dt.timedelta(hours=3)).isoformat(timespec="seconds"),
+                         "updated": t.isoformat(timespec="seconds")}},
+          open(sys.argv[1], "w", encoding="utf-8"))
+EOF
+out=$(echo '{}' | $ORCH statusline)
+contains "$out" "5h 40% → " "status line: a stale measurement keeps the used share"
+lacks "$out" "≈" "status line: a stale measurement shows no projection"
+out=$($ORCH budget)
+contains "$out" "5-hour window 40% used, resets " "budget line: a stale measurement keeps the used share"
+lacks "$out" "by the reset)" "budget line: a stale measurement shows no projection"
+$ORCH budget clear >/dev/null

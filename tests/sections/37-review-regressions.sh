@@ -266,7 +266,7 @@ def weekly_budget():
         snapshot(five, window(82, 24 * 1.7))
         mode, line = m.claude_budget()
         assert mode == "tight" and "weekly limit" in line and "108% projected" in line, line
-    assert "tight: week 108% projected" in good(["statusline"], '{}')
+    assert "tight: week" in good(["statusline"], '{}')
     snapshot(None, {"used":95})
     assert m.claude_budget()[0] == "tight"
     snapshot(window(10, 2), window(15, 167))
@@ -378,6 +378,20 @@ def weekly_pace():
         mode, line = m.claude_budget()
         assert mode == "surplus", (mode, line)
 
+def projection_display():
+    # The projection sits beside its window and never below the used share; the mode text no longer repeats it.
+    reset = fixed + dt.timedelta(hours=2)
+    text = m.provider_line("Claude", (40.0, reset), None, five_projection=10.0)
+    assert "5h 40% (≈40%)" in text and "(≈10%)" not in text, text
+    plain = m.provider_line("Claude", (40.0, reset), None)
+    assert "5h 40% → " in plain and "≈" not in plain, plain
+    projected_week = " TIGHT: weekly limit is tight (108% projected from the week's average, 82% used, reserve 10%) — x"
+    assert m.short_mode("tight", projected_week, week_shown=True) == "tight: week", projected_week
+    assert m.short_mode("tight", projected_week) == "tight: week 108% projected", projected_week
+    used_week = " TIGHT: weekly limit is tight (projection unavailable, 95% used, reserve 5%) — x"
+    assert m.short_mode("tight", used_week) == "tight: week over reserve", used_week
+    assert m.short_mode("tight", "Claude subscription: 5-hour window 95% used, resets 18:00.") == "tight: 5h"
+
 def codex_weekly():
     cx = root / "cx-week"
     d = cx / "sessions" / "2026" / "11" / "02"
@@ -409,6 +423,7 @@ def codex_weekly():
                                   ce(84, 31, [[m.iso(fixed - dt.timedelta(hours=8)), 82.0,
                                                m.iso(fixed + dt.timedelta(hours=31))]])) is None
         assert m.codex_short_mode({"reserve": 10, "week_reserve": 10}, ce(84, 31)) == "tight: week 103% projected"
+        assert m.codex_short_mode({"reserve": 10, "week_reserve": 10}, ce(84, 31), week_shown=True) == "tight: week"
         assert m.codex_short_mode({"reserve": 10, "week_reserve": 10},
                                   ce(30, 60, [[m.iso(fixed - dt.timedelta(hours=8)), 20.0,
                                                m.iso(fixed + dt.timedelta(hours=60))]])) == "tight: week 105% projected"
@@ -1182,6 +1197,7 @@ for name, test in [("1 parallel offers, take/reclaim, sessions and capacity", pa
                    ("3 central worker guard for every handoff command", worker_guard),
                    ("4 stale measurement pace and independent window timestamps", stale_budget),
                    ("5 weekly TIGHT without current five-hour numbers", weekly_budget),
+                   ("5a the projection beside its window and the mode text", projection_display),
                    ("5b weekly recent pace and shrinking reserve", weekly_pace),
                    ("5c Codex weekly recent pace and reserve", codex_weekly),
                    ("6 force cannot bypass manual profile capacity", hard_cap),

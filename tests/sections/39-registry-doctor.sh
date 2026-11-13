@@ -129,6 +129,28 @@ out=$($ORCH doctor); ok "doctor runs (rc=$?)"
 contains "$out" "DEEPSEEK_API_KEY *set" "doctor sees the DeepSeek key"
 contains "$out" "Codex login *Logged in" "doctor checks the codex login"
 contains "$out" "✔ Codex CLI" "doctor prints the Codex CLI row the way install.sh greps for it"
+# doctor: who can read secrets.env (POSIX only: native Windows has no mode bits)
+if "$PY" -c 'import os, sys; sys.exit(0 if os.name == "nt" else 1)'; then
+  ok "secrets.env mode: skipped on native Windows"
+else
+  SM="$T/doctor-secrets"; mkdir -p "$SM"
+  printf 'DEEPSEEK_API_KEY=sk-test\n' > "$SM/secrets.env"
+  chmod 644 "$SM/secrets.env"
+  mode_out=$(ORCH_HOME="$(native "$SM")" $ORCH doctor 2>&1); rc=$?
+  expect_rc 0 $rc "doctor: a secrets.env readable by group or others still exits 0"
+  contains "$mode_out" "secrets.env .*0644" "doctor: a secrets.env at 0644 names its mode"
+  contains "$mode_out" "chmod 600" "doctor: a secrets.env at 0644 gives the fix"
+  chmod 600 "$SM/secrets.env"
+  mode_out=$(ORCH_HOME="$(native "$SM")" $ORCH doctor 2>&1); rc=$?
+  expect_rc 0 $rc "doctor: a secrets.env at 0600 passes"
+  lacks "$mode_out" "can be read or written by group or others" "doctor: no warning for a secrets.env at 0600"
+  contains "$mode_out" "✔ secrets.env mode *0600" "doctor: a secrets.env at 0600 is reported as fine"
+  rm -f "$SM/secrets.env"
+  mode_out=$(ORCH_HOME="$(native "$SM")" $ORCH doctor 2>&1); rc=$?
+  expect_rc 0 $rc "doctor: no secrets.env does not fail the check"
+  lacks "$mode_out" "can be read or written by group or others" "doctor: no secrets.env: no mode warning"
+  lacks "$mode_out" "secrets.env mode" "doctor: no secrets.env: no mode row"
+fi
 # install.sh greps doctor's output: each pattern it greps for must occur in a real doctor table (no drift in the wording)
 INSTALL_SH="$PLUGIN/../../install.sh"
 cx_pat=$(sed -n "s/^grep -q '\([^']*\)' <<<\"\$DOCTOR\" || warn \"Codex CLI not found.*/\1/p" "$INSTALL_SH")

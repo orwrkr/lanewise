@@ -558,13 +558,17 @@ def cmd_statusline(a):
             five, week = usage_window(snap, "five_hour"), usage_window(snap, "seven_day")
             mode, budget_line = claude_budget(Path(cwd) if cwd else None)
             n = sum(1 for v in claude_consumers().values() if v.get("kind") != "executor")
+            five_projection = window_projection(snap, "five_hour", 5) if five and five[1] else None
+            week_projection = window_projection(snap, "seven_day", 7) if week else None
             claude_line = provider_line(
                 claude_status_name(model),
                 (five[0], five[1]) if five and five[1] else None,
                 (week[0], week[1]) if week else None,
-                short_mode(mode, budget_line, Path(cwd) if cwd else None),
+                short_mode(mode, budget_line, Path(cwd) if cwd else None, week_shown=week_projection is not None),
                 measured_at(snap, "five_hour") if (five and five[1]) else None,
                 sessions=n,
+                five_projection=five_projection,
+                week_projection=week_projection,
             )
             if claude_line:
                 parts.append(claude_line)

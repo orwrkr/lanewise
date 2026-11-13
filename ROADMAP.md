@@ -13,12 +13,6 @@ quietly crowd out the product, and this rule keeps it in view.
 
 ## Next
 
-## Small
-
-- **`orch doctor` checks who can read `secrets.env`.** *product* On Linux, macOS and WSL, warn when
-  `~/.lanewise/secrets.env` can be read by group or others, and give the fix (`chmod 600`). Native Windows has no
-  such mode bits, so skip the check there. Why keys stay in that file: SECURITY.md, "Secrets".
-
 ## Parked
 
 - **A Gemini executor.** *product* Gemini CLI fits the adapter contract technically:

@@ -264,7 +264,7 @@ contains "$out" "tight: week over reserve" "codex: over-reserve mode text"
 CODEX_HOME="$(native "$T/cxmo2")"; out=$(cx_status)
 contains "$out" "tight: 5h" "codex: five-hour-tight mode text"
 CODEX_HOME="$(native "$T/cxmo3")"; out=$(cx_status)
-contains "$out" "tight: week 101% projected" "codex: projected week mode text"
+contains "$out" "(≈101%) · tight: week" "codex: the week's projection beside the window, not repeated in the mode text"
 
 # a few minutes into a window its average is no projection: it needs 60 minutes of the window behind it, while a used
 # share at the reserve is TIGHT at once

@@ -268,6 +268,28 @@ def codex_projected(used, reset, measured, window_minutes):
     return used * window_minutes / elapsed
 
 
+def codex_projections(entry):
+    """{window: share at its reset} from the Codex budget's own estimates (codex_projected for the 5-hour window,
+    week_rate for the week), never below the used share. A window without one is absent: too little data, no rate,
+    or a stale measurement."""
+    out, t = {}, now()
+    for name, hours in (("five_hour", 5), ("seven_day", 7)):
+        w = codex_window(entry, name)
+        if not w:
+            continue
+        used, reset, m = w
+        if m is None or (t - m).total_seconds() > USAGE_FRESH_SECONDS:
+            continue
+        if hours == 5:
+            proj = codex_projected(used, reset, m, 300)
+        else:
+            rate, _ = week_rate(entry.get("week_history"), used, reset, m)
+            proj = projected_at_reset(used, reset, rate, m) if rate is not None else None
+        if proj is not None:
+            out[name] = max(used, proj)
+    return out
+
+
 def codex_state(where=None):
     """(cfg, home, entry) of the Codex budget for a directory; (None, None, None) when Codex is off."""
     cfg = codex_reserve(where)
@@ -326,9 +348,10 @@ def codex_budget(where=None):
     return ("tight" if tight else "normal"), line
 
 
-def codex_short_mode(cfg, entry):
-    """The compact Codex mode text: 'tight: week N% projected', 'tight: week over reserve', 'tight: 5h', or None.
-    Mirrors codex_budget: a weekly cap is checked first, then the five-hour window."""
+def codex_short_mode(cfg, entry, week_shown=False):
+    """The compact Codex mode text: 'tight: week' while the week's projection stands beside the window (week_shown),
+    else 'tight: week N% projected'; 'tight: week over reserve', 'tight: 5h', or None. Mirrors codex_budget: a
+    weekly cap is checked first, then the five-hour window."""
     five = codex_window(entry, "five_hour")
     week = codex_window(entry, "seven_day")
     if week:
@@ -340,7 +363,7 @@ def codex_short_mode(cfg, entry):
         weekly = max(used, projected_at_reset(used, reset, rate, m)) if rate is not None else used
         elapsed = (m - (reset - dt.timedelta(minutes=10080))).total_seconds() if m and reset else 0
         if elapsed >= 86400 and rate is not None and weekly >= cap:
-            return "tight: week %d%% projected" % pct(weekly)
+            return "tight: week" if week_shown else "tight: week %d%% projected" % pct(weekly)
     if five:
         used, reset, m = five
         cap = 100 - cfg["reserve"]
@@ -351,7 +374,7 @@ def codex_short_mode(cfg, entry):
 
 
 def codex_status_part(where=None):
-    """Compact Codex limits part of the second status line ('GPT-6.1 Terra · 5h 81% → 18:28 · week 95%'),
+    """Compact Codex limits part of the second status line ('GPT-6.1 Terra · 5h 81% (≈90%) → 18:28 · week 95%'),
     built by the same provider_line helper as Claude; or None with no data."""
     cfg, _, entry = codex_state(where)
     if cfg is None or not entry:
@@ -359,14 +382,17 @@ def codex_status_part(where=None):
     five = codex_window(entry, "five_hour")
     week = codex_window(entry, "seven_day")
     measured = five[2] if five else (week[2] if week else None)
+    projections = codex_projections(entry)
     m = codex_work_model(entry.get("model"))
     name = (display_name(m) if m else None) or m or "Codex"   # a known id → display name, an unknown id as-is, no model → Codex
     return provider_line(
         name,
         (five[0], five[1]) if five else None,
         (week[0], week[1]) if week else None,
-        codex_short_mode(cfg, entry),
+        codex_short_mode(cfg, entry, week_shown="seven_day" in projections),
         measured,
+        five_projection=projections.get("five_hour"),
+        week_projection=projections.get("seven_day"),
     )
 
 

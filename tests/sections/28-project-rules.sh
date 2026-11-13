@@ -212,7 +212,7 @@ fb_sl() { printf '{"session_id":"s-sx","model":{"display_name":"Opus 5.5"},"work
 SX_ON="except the task types preferred for DeepSeek@sx (tests, docs)"
 SX_TODAY="executors (DeepSeek, API-key profiles); orch guide budget."
 out=$(fb_sl "$SXA")
-contains "$out" "Claude Opus 5.5 · 5h 20% → .* · week 50% .*surplus" "prefer for with budget: the status line says surplus"
+contains "$out" "Claude Opus 5.5 · 5h 20% (≈[0-9]*[0-9]%) → .* · week 50% .*surplus" "prefer for with budget: the status line says surplus"
 lacks "$out" "Claude first" "prefer for with budget: no 'Claude first' on the status line"
 out=$(fb "$SXA" status)
 contains "$out" "SURPLUS: at the current pace" "prefer for with budget: orch status keeps the SURPLUS word"

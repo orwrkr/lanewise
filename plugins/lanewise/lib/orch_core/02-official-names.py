@@ -61,15 +61,25 @@ def stale_part(measured):
     return None
 
 
-def provider_line(name, five, week, mode_text=None, measured=None, sessions=None):
+def projection_part(projection, used):
+    """' (≈N%)' for a window's share at its reset, never below the used share; '' when it cannot be computed."""
+    if projection is None:
+        return ""
+    return " (≈%d%%)" % pct(max(float(projection), float(used)))
+
+
+def provider_line(name, five, week, mode_text=None, measured=None, sessions=None,
+                  five_projection=None, week_projection=None):
     """One provider's status line part, built the same way for Claude and Codex:
-    name · 5h used% → reset · week used% · [N session(s)] · mode text · stale: age.
-    five/week are (used %, reset time) or None; any part without data is left out."""
+    name · 5h used% (≈projected%) → reset · week used% (≈projected%) · [N session(s)] · mode text · stale: age.
+    five/week are (used %, reset time) or None; any part without data is left out. The projections are the budget
+    code's own numbers at the reset, left out when they cannot be computed."""
     parts = [name] if name else []
     if five and five[0] is not None and five[1]:
-        parts.append("5h %d%% → %s" % (pct(five[0]), five[1].astimezone().strftime("%H:%M")))
+        parts.append("5h %d%%%s → %s" % (pct(five[0]), projection_part(five_projection, five[0]),
+                                         five[1].astimezone().strftime("%H:%M")))
     if week and week[0] is not None:
-        parts.append("week %d%%" % pct(week[0]))
+        parts.append("week %d%%%s" % (pct(week[0]), projection_part(week_projection, week[0])))
     if sessions:
         parts.append("%d session%s" % (sessions, "" if sessions == 1 else "s"))
     if mode_text:
@@ -93,18 +103,20 @@ def claude_status_name(model):
     return "Claude " + m
 
 
-def short_mode(mode, budget_line, where=None):
-    """The compact mode text for the Claude status line: 'tight: week N% projected', 'tight: week over reserve',
-    'tight: 5h', or 'surplus: Claude first' ('surplus' alone where an API-key profile has `prefer for`)."""
+def short_mode(mode, budget_line, where=None, week_shown=False):
+    """The compact mode text for the Claude status line: 'tight: week' while the week's projection stands beside
+    the window (week_shown), else 'tight: week N% projected' so the number is never lost; 'tight: week over
+    reserve' (a used share already at the reserve), 'tight: 5h', or 'surplus: Claude first' ('surplus' alone where
+    an API-key profile has `prefer for`)."""
     if mode == "surplus":
         return "surplus" if preferred_api_profiles(where) else "surplus: Claude first"
     if mode != "tight":
         return None
-    m = re.search(r"weekly limit is tight \((\d+)% projected", budget_line or "")
-    if m:
-        return "tight: week %s%% projected" % m.group(1)
     if "weekly limit is tight" in (budget_line or ""):
-        return "tight: week over reserve"
+        if "projection unavailable" in (budget_line or ""):
+            return "tight: week over reserve"
+        m = re.search(r"weekly limit is tight \((\d+)% projected", budget_line or "")
+        return "tight: week %s%% projected" % m.group(1) if m and not week_shown else "tight: week"
     return "tight: 5h"
 
 

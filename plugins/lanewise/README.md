@@ -103,7 +103,7 @@ Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex logi
    ```
    Only the `deepseek` adapter receives the key, because it declares `# orch-secrets: DEEPSEEK_API_KEY` in its header. Keys from this file are not passed to other executors.
 2. The `claude` CLI must be available in the same environment: the DeepSeek executor is headless Claude Code, see below.
-3. `orch doctor` should show `✔ DEEPSEEK_API_KEY`.
+3. `orch doctor` should show `✔ DEEPSEEK_API_KEY`; on Linux, macOS and WSL it also warns when `secrets.env` can be read or written by group or others.
 
 Multiple keys (personal, work) and per-project key selection are handled by [profiles](#executor-profiles-keys-accounts-rules-projects). A second Codex account is a profile too.
 
@@ -171,6 +171,9 @@ You can also report limits without commands, in plain words: "Sol is out until 9
 
 A Claude subscription's 5-hour window expires at its reset, and whatever was not used is gone, while DeepSeek and
 other API-key executors cost money per token. Lanewise projects the window to its reset at the current pace. The
+status line and the `Claude subscription:` line show it beside the used share: `5h 40% (≈70%) → 18:00 · week 60%
+(≈80%)`, the same number the mode is decided on, left out only while it cannot be computed (too early in the window,
+a stale measurement) and never below the used share. The
 usage numbers are account-wide, so every session on the account is included. The pace is the higher of the window
 average and the last 30–60 minutes, which tracks every instance that is consuming right now (neither is projected
 during the first hour of the window; a used share already at the reserve counts at once). A reserve (10% of the

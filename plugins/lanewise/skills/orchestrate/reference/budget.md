@@ -19,7 +19,10 @@ measurement time; projections are anchored to it and do not improve merely as th
 the week a reserve that shrinks with the time left to the reset — `reserve × (time left / 7 days)`, floored at
 1 point and never below a reserve of 0. So a 10% weekly reserve is 10 at the start of the week, 5 at mid-week,
 about 1.85 with 31 hours left, and 1 (the floor) in the last hour. The mode is in `orch status` / SessionStart (the
-line `Claude subscription: …`) and arrives as a `💡` event when it changes.
+line `Claude subscription: 5-hour window 40% used (≈70% by the reset), resets 18:00 (in 2h 10m), week 60% (≈80% by
+the reset); …`) and arrives as a `💡` event when it changes. The parenthesized figure is the share each window
+reaches at its reset at that pace — the same number the mode is decided on — left out while no projection can be
+computed (too early in the window, a stale measurement) and never below the used share.
 
 By default, among the slots that suit a task, subscriptions go before API-billed executors (DeepSeek, any profile with
 a key): what stays unused at a reset is lost, and a balance is money. The modes adjust that order:
@@ -40,8 +43,9 @@ a key): what stays unused at a reset is lost, and a balance is money. The modes 
   Weekly TIGHT works even without current five-hour numbers; without a weekly reset only the used share counts. The
   line names the weekly limit, the basis the projection used (`N% projected from the week's average` or `N% projected
   from the last 8 h`) and the effective reserve, shown with what it comes from when it has shrunk (`reserve 2% (10%
-  at the start of the week)`). The status line's mode part says `tight: week N% projected` (or `tight: week over
-  reserve` for the used share, `tight: 5h` for a five-hour-only squeeze). Treat Claude as `low`: it goes after the
+  at the start of the week)`). The status line's mode part says `tight: week` (or `tight: week over reserve` for the
+  used share, `tight: 5h` for a five-hour-only squeeze); the projection itself is shown beside the window, and only
+  when it cannot be shown there does the mode text keep it (`tight: week N% projected`). Treat Claude as `low`: it goes after the
   API-billed executors, so work moves to another subscription with room, then to them. A weekly projection from the first
   24 hours is too thin to count: it neither raises TIGHT nor blocks SURPLUS.
 - **no mode in the line / no line** — the default order (too early in the window to tell — the first 60 minutes of a
@@ -160,13 +164,18 @@ model.
 ## The status line format
 
 Every provider's part of the status line is built the same way, as
-`name · 5h N% → HH:MM · week N% · [N session(s)] · mode · stale: age`, with any part that has no data left out:
+`name · 5h N% (≈projected%) → HH:MM · week N% (≈projected%) · [N session(s)] · mode · stale: age`, with any part
+that has no data left out. The `(≈N%)` after a window is the share it reaches at its reset at the current pace —
+the budget's own projection, never below the used share — and is left out when it cannot be computed (too early in
+the window, no rate, a stale measurement):
 
-- the Claude part is `Claude <model> · 5h 40% → 18:00 · week 60% · 3 sessions · surplus: Claude first` (a session
-  led by another model shows the model's display name with no `Claude ` prefix);
+- the Claude part is `Claude <model> · 5h 40% (≈70%) → 18:00 · week 60% (≈80%) · 3 sessions · surplus: Claude
+  first` (a session led by another model shows the model's display name with no `Claude ` prefix);
 - the Codex part is the model of the last `turn_context` event in the same rollout file that gave the limits, except
-  the internal `codex-auto-review` step, which is skipped (`Codex GPT-6.1 Terra · 5h 81% → 18:28 · week 95% · tight:
-  week over reserve`; just `Codex` when no model is logged, an unknown model id as-is). It has no session count.
-- the mode text is the same on both (`tight: 5h`, `tight: week N% projected`, `tight: week over reserve`; Claude
-  also `surplus: Claude first`, or just `surplus` where a key profile's `prefer for` holds), and both append
+  the internal `codex-auto-review` step, which is skipped (`Codex GPT-6.1 Terra · 5h 81% (≈90%) → 18:28 · week 95%
+  · tight: week over reserve`; just `Codex` when no model is logged, an unknown model id as-is). It has no session
+  count.
+- the mode text is the same on both (`tight: 5h`, `tight: week`, or `tight: week N% projected` when the week's
+  projection is not shown beside the window, `tight: week over reserve`; Claude also
+  `surplus: Claude first`, or just `surplus` where a key profile's `prefer for` holds), and both append
   `stale: <age>` once the measurement is older than 20 minutes.

@@ -46,6 +46,8 @@ While working, run just the sections you touched (`run_tests.sh <slug>`); the fu
 Git Bash on Windows is left to CI (`.github/workflows/tests.yml`): five minutes there, half an hour or more locally,
 slowing every session on the machine; run it locally only to debug a Windows-specific failure.
 Changed `orch` behaviour — add a check to its section in `tests/sections/`. Changed the registry format — update SKILL.md and README.
+A new network call or URL, a new file under `~/.lanewise` or a version bump — section 46 (`docs-facts`) fails until
+PRIVACY.md, the README's storage table or network section, or the CHANGELOG says so.
 
 ## Rules
 

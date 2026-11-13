@@ -12,10 +12,11 @@ native Windows) and the steps to reproduce. You should get a first answer within
 Lanewise runs other AI agents on your machine and handles API keys, so these areas matter most:
 
 - **Secrets.** API keys live only in `~/.lanewise/secrets.env` and reach only the adapters that declare them
-  (`# orch-secrets: …`). Profiles store variable names, never key values. A key showing up in a repository, a log,
-  `orch` output or another adapter's environment is a vulnerability. Keys are not plugin options (`userConfig`):
-  Claude Code never passes those to commands run through the Bash tool, which is how `orch` starts executors (plugin
-  README, "What it runs, sends and fetches").
+  (`# orch-secrets: …`). Profiles store variable names, never key values. `orch doctor` checks the file's mode and
+  warns when group or others can read or write it (`chmod 600 ~/.lanewise/secrets.env`). A key showing up in a
+  repository, a log, `orch` output or another adapter's environment is a vulnerability. Keys are not plugin options
+  (`userConfig`): Claude Code never passes those to commands run through the Bash tool, which is how `orch` starts
+  executors (plugin README, "What it runs, sends and fetches").
 - **Worker isolation.** Workers must not inherit the orchestrating session's variables (`CLAUDECODE`, `CLAUDE_*`,
   a non-Claude lead's endpoint and token), must not be able to delegate further (`ORCH_WORKER`), and must stay within
   the permissions of their mode (`analysis` / `write`, `--allow` rules).

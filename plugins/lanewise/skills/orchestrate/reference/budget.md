@@ -113,8 +113,26 @@ that is what the current pace and the session count are made of. To keep your ow
 --then "<your command>"`. Without it the operator can tell you the numbers: "Claude: 40% of the session used,
 resets at 18:00, week 60%" → `orch budget set --used 40 --resets 18:00 --week 60`.
 Omitting `--week` preserves the weekly measurement time. Older snapshots fall back to their top-level `updated`.
-Five-hour numbers older than 20 minutes show their age and cannot enable SURPLUS; TIGHT remains possible.
+Five-hour numbers older than 20 minutes cannot enable SURPLUS; TIGHT remains possible.
 A reserve time already in the past is replaced by a warning instead of an obsolete clock time.
+
+**How current the numbers are.** Nothing fetches fresh numbers on its own: any request spends tokens and may open a
+new 5-hour window, and a session that has just started should start nothing until you write. So the numbers are those
+of the last measurement, which after a break can be hours old. Once a measurement is older than 20 minutes, every
+place that shows its numbers says how old it is:
+
+- the status line appends `stale: 14h ago` to the Claude or Codex part, whichever windows it shows (the week alone
+  too, once the 5-hour window has reset);
+- the `Claude subscription:` line (`orch status`, the session start, `orch budget`) ends in `measured 14h ago
+  (stale: the next Claude reply refreshes it)`, or `orch budget set replaces it` for a number you reported; with
+  the 5-hour window reset since, it still shows the week: `5-hour window: none open at the last measurement, week
+  45%; measured 14h ago (…)`;
+- the `Codex subscription:` line gives the date and age: `(measured Nov 12 23:57, 1d 14h ago; stale: the next Codex
+  run refreshes it)`;
+- the pause question and `orch watch` say it after the used share: `44% used (measured 14h ago)`.
+
+Account balances show their age the same way (`checked 5m ago`, `, 3h ago`); an old one is refreshed in the background
+at the session start, which spends no tokens (`orch guide spend`).
 
 ## Settings (profile `claude`)
 
@@ -178,4 +196,4 @@ the window, no rate, a stale measurement):
 - the mode text is the same on both (`tight: 5h`, `tight: week`, or `tight: week N% projected` when the week's
   projection is not shown beside the window, `tight: week over reserve`; Claude also
   `surplus: Claude first`, or just `surplus` where a key profile's `prefer for` holds), and both append
-  `stale: <age>` once the measurement is older than 20 minutes.
+  `stale: <age>` once the older measurement of the windows shown is older than 20 minutes.

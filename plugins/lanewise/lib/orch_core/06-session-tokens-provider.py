@@ -560,12 +560,14 @@ def cmd_statusline(a):
             n = sum(1 for v in claude_consumers().values() if v.get("kind") != "executor")
             five_projection = window_projection(snap, "five_hour", 5) if five and five[1] else None
             week_projection = window_projection(snap, "seven_day", 7) if week else None
+            shown = [n for n, w in (("five_hour", five and five[1]), ("seven_day", week)) if w]
+            stamps = [m for m in (measured_at(snap, n) for n in shown) if m]   # the older of the windows shown
             claude_line = provider_line(
                 claude_status_name(model),
                 (five[0], five[1]) if five and five[1] else None,
                 (week[0], week[1]) if week else None,
                 short_mode(mode, budget_line, Path(cwd) if cwd else None, week_shown=week_projection is not None),
-                measured_at(snap, "five_hour") if (five and five[1]) else None,
+                min(stamps) if stamps else None,
                 sessions=n,
                 five_projection=five_projection,
                 week_projection=week_projection,

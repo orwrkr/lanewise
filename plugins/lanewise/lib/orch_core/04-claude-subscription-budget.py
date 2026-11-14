@@ -108,6 +108,29 @@ def measured_at(snap, name):
     return parse_iso(w.get("updated") or snap.get("updated") or "")
 
 
+# Nothing fetches fresh numbers: any request spends tokens and may open a new 5-hour window, and a session that has
+# just started should start nothing. A measurement older than USAGE_FRESH_SECONDS shows its age instead, wherever its
+# numbers appear, with what refreshes them.
+
+def is_stale(measured):
+    """True for a measurement older than USAGE_FRESH_SECONDS, or one of an unknown time."""
+    return measured is None or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS
+
+
+def claude_stale_note(snap, measured):
+    """'; measured 3h ago (stale: the next Claude reply refreshes it)' for a budget line: how old the numbers are and
+    what refreshes them (the status line, after a reply; an operator's report is replaced by the next report)."""
+    how = "orch budget set replaces it" if snap.get("source") == "operator" else "the next Claude reply refreshes it"
+    return "; measured %s (stale: %s)" % (human_delta(measured) if measured else "at an unknown time", how)
+
+
+def watch_age(measured):
+    """' (measured 3h ago)' after a watched window's used share once its measurement is stale, else ''."""
+    if measured is None or not is_stale(measured):
+        return ""
+    return " (measured %s)" % human_delta(measured)
+
+
 def window_rates(snap, used, reset, hours):
     """[(%/min, basis, minutes of samples)]: the window average and, in a five-hour window, the recent pace of all
     sessions. Empty while no estimate is computable; in a five-hour window both are unknown until
@@ -411,14 +434,21 @@ def _claude_budget(where=None):
     instruction = "treat Claude as low (conserve it; offload to Codex / DeepSeek)."
     weekly_line = (" TIGHT: weekly limit is tight (%s, %d%% used, reserve %s) — %s"
                    % (projection, pct(week[0]), week_reserve_txt, instruction)) if week_tight else ""
+    week_note = (" (≈%d%% by the reset)" % pct(week_projection)) if week_projection is not None else ""
     if not five or five[1] is None:
+        if not week:
+            return "unknown", None
+        wm = measured_at(snap, "seven_day")
+        aged = claude_stale_note(snap, wm) if is_stale(wm) else ""
+        opened = "none open at the last measurement" if aged else "none open now"
         if week_tight:
-            return "tight", "Claude subscription: 5-hour window: none open now;" + weekly_line
-        return "unknown", None
+            return "tight", "Claude subscription: 5-hour window: %s%s;" % (opened, aged) + weekly_line
+        # no mode without a 5-hour window, but the week's numbers and their age are still worth showing
+        return "unknown", "Claude subscription: 5-hour window: %s, week %d%%%s%s." % (
+            opened, pct(week[0]), week_note, aged)
     used, reset = five
     measured = measured_at(snap, "five_hour")
-    age = max((now() - measured).total_seconds(), 0) if measured else None
-    stale = age is None or age > USAGE_FRESH_SECONDS
+    stale = is_stale(measured)
     users = claude_consumers()
     sessions = sum(1 for v in users.values() if v.get("kind") != "executor")
     runs = len(users) - sessions
@@ -427,13 +457,12 @@ def _claude_budget(where=None):
                                                         ", %d Claude executor run%s" % (runs, "" if runs == 1 else "s")
                                                         if runs else "")) if users else ""
     five_note = (" (≈%d%% by the reset)" % pct(five_projection)) if five_projection is not None else ""
-    week_note = (" (≈%d%% by the reset)" % pct(week_projection)) if week_projection is not None else ""
-    line = "Claude subscription: 5-hour window %d%% used%s, resets %s (%s)%s%s; reserve %d%%%s" % (
+    line ="Claude subscription: 5-hour window %d%% used%s, resets %s (%s)%s%s; reserve %d%%%s" % (
         pct(used), five_note, at, human_delta(reset),
         (", week %d%%%s" % (pct(week[0]), week_note)) if week else "",
         " — reported by the operator" if snap.get("source") == "operator" else "", cfg["reserve"], active)
     if stale:
-        line += "; measured %s (stale)" % (human_delta(measured) if measured else "at an unknown time")
+        line += claude_stale_note(snap, measured)
     if week_tight:
         return "tight", line + "." + weekly_line
     rate, basis = window_pace(snap, used, reset, 5)
@@ -494,8 +523,8 @@ def cmd_budget(a):
         return 0
     mode, line = claude_budget()
     if mode == "unknown":
-        print("No current Claude subscription numbers. Add `orch statusline` as the Claude Code status line "
-              "(orch guide budget), or report them: orch budget set --used 40 --resets 18:00")
+        print(line or "No current Claude subscription numbers. Add `orch statusline` as the Claude Code status line "
+                      "(orch guide budget), or report them: orch budget set --used 40 --resets 18:00")
         return 0
     if mode == "api":
         print(line)
@@ -602,7 +631,7 @@ def watch_five(snap, five, cfg):
     cons_risk = used >= 100 or (cons_projected is not None and cons_projected >= 100)
     exhaust = watch_exhaust(used, 100.0, rate, measured)
     return {"key": "five_hour", "kind": "five_hour", "name": "Claude 5-hour window", "daily": False,
-            "used": used, "used_text": "%d%% used" % pct(used), "projected": projected,
+            "used": used, "used_text": "%d%% used%s" % (pct(used), watch_age(measured)), "projected": projected,
             "rate": rate, "basis": basis, "exhaust_at": exhaust, "reset": reset, "tie": iso(reset),
             "conservative_rate": cons[0] if cons else None, "conservative_projected": cons_projected,
             "conservative_risk": cons_risk, "risk": risk, "early": False, "levels": []}
@@ -643,7 +672,7 @@ def watch_week(snap, week, cfg):
     before_reset = projected is not None and projected >= 100
     risk = before_reset and (low or horizon)
     item = {"key": "week", "kind": "week", "name": "Claude weekly limit", "daily": True,
-            "used": used, "used_text": "%d%% used" % pct(used), "projected": projected,
+            "used": used, "used_text": "%d%% used%s" % (pct(used), watch_age(measured)), "projected": projected,
             "rate": rate, "basis": basis, "exhaust_at": exhaust, "reset": reset, "tie": iso(reset),
             "conservative_rate": rate, "conservative_projected": projected,
             "conservative_risk": risk, "risk": risk, "early": False, "levels": []}

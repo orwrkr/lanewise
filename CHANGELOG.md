@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.39.2
+
+- **Old limit numbers say how old they are, wherever they appear.** Nothing fetches fresh numbers on its own, since
+  any request spends tokens and may open a new 5-hour window, so after a break a new session starts with the last
+  measurement, which can be hours old. Once a measurement is older than 20 minutes:
+  - the status line marks the Claude part `stale: 14h ago` also when it shows only the week (the 5-hour window has
+    reset since), where it used to show no age; both the Claude and the Codex part take the older measurement of the
+    windows they show;
+  - the `Claude subscription:` line ends in `measured 14h ago (stale: the next Claude reply refreshes it)`, or
+    `orch budget set replaces it` for a reported number. With the 5-hour window reset since, it no longer disappears:
+    it shows the week and its age (`5-hour window: none open at the last measurement, week 45%; measured 14h ago …`),
+    as does `orch budget`;
+  - the `Codex subscription:` line gives the date and the age instead of a bare clock time that could be days old:
+    `(measured Nov 12 23:57, 1d 14h ago; stale: the next Codex run refreshes it)`;
+  - the pause question and `orch watch` add it after the used share: `44% used (measured 14h ago)`.
+
 ## 0.39.1
 
 - **`orch doctor` checks who can read `secrets.env`.** On Linux, macOS and WSL it warns when

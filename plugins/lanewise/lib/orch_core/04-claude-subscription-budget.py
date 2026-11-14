@@ -113,22 +113,38 @@ def measured_at(snap, name):
 # numbers appear, with what refreshes them.
 
 def is_stale(measured):
-    """True for a measurement older than USAGE_FRESH_SECONDS, or one of an unknown time."""
-    return measured is None or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS
+    """True for a measurement older than USAGE_FRESH_SECONDS, or one of an unknown time (None, UNKNOWN_AGE)."""
+    return not isinstance(measured, dt.datetime) or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS
+
+
+def measured_text(measured):
+    """'3h ago', or 'at an unknown time' for a missing measurement time."""
+    return human_delta(measured) if isinstance(measured, dt.datetime) else "at an unknown time"
 
 
 def claude_stale_note(snap, measured):
     """'; measured 3h ago (stale: the next Claude reply refreshes it)' for a budget line: how old the numbers are and
-    what refreshes them (the status line, after a reply; an operator's report is replaced by the next report)."""
-    how = "orch budget set replaces it" if snap.get("source") == "operator" else "the next Claude reply refreshes it"
-    return "; measured %s (stale: %s)" % (human_delta(measured) if measured else "at an unknown time", how)
+    what refreshes them. A status line reading replaces an operator's report too, so a report names both."""
+    how = ("the next Claude reply or orch budget set refreshes it" if snap.get("source") == "operator"
+           else "the next Claude reply refreshes it")
+    return "; measured %s (stale: %s)" % (measured_text(measured), how)
 
 
 def watch_age(measured):
-    """' (measured 3h ago)' after a watched window's used share once its measurement is stale, else ''."""
-    if measured is None or not is_stale(measured):
-        return ""
-    return " (measured %s)" % human_delta(measured)
+    """' (measured 3h ago)' after a watched window's used share once its measurement is stale or of an unknown
+    time, else ''."""
+    return " (measured %s)" % measured_text(measured) if is_stale(measured) else ""
+
+
+def five_absent_text(snap, stale):
+    """What the Claude line says about a 5-hour window with no current numbers: 'none open now' after a fresh
+    measurement; after a stale one, when the recorded window reset ('the last one reset at 09:10'), since a new one
+    may have opened unseen; 'no data' when none was ever recorded."""
+    if not stale:
+        return "none open now"
+    w = snap.get("five_hour") if isinstance(snap.get("five_hour"), dict) else {}
+    reset = parse_iso(str(w.get("resets_at") or "")) if w.get("used") is not None else None
+    return "the last one reset at %s" % watch_clock(reset) if reset is not None else "no data"
 
 
 def window_rates(snap, used, reset, hours):
@@ -438,9 +454,10 @@ def _claude_budget(where=None):
     if not five or five[1] is None:
         if not week:
             return "unknown", None
-        wm = measured_at(snap, "seven_day")
-        aged = claude_stale_note(snap, wm) if is_stale(wm) else ""
-        opened = "none open at the last measurement" if aged else "none open now"
+        shown = oldest_measured([measured_at(snap, "seven_day")] + ([measured_at(snap, "five_hour")] if five else []))
+        aged = claude_stale_note(snap, shown) if is_stale(shown) else ""
+        opened = (("%d%% used, reset time unknown" % pct(five[0])) if five
+                  else five_absent_text(snap, is_stale(measured_at(snap, "seven_day"))))
         if week_tight:
             return "tight", "Claude subscription: 5-hour window: %s%s;" % (opened, aged) + weekly_line
         # no mode without a 5-hour window, but the week's numbers and their age are still worth showing
@@ -448,7 +465,8 @@ def _claude_budget(where=None):
             opened, pct(week[0]), week_note, aged)
     used, reset = five
     measured = measured_at(snap, "five_hour")
-    stale = is_stale(measured)
+    stale = is_stale(measured)          # the 5-hour measurement: SURPLUS needs it fresh
+    shown = oldest_measured([measured] + ([measured_at(snap, "seven_day")] if week else []))
     users = claude_consumers()
     sessions = sum(1 for v in users.values() if v.get("kind") != "executor")
     runs = len(users) - sessions
@@ -457,12 +475,12 @@ def _claude_budget(where=None):
                                                         ", %d Claude executor run%s" % (runs, "" if runs == 1 else "s")
                                                         if runs else "")) if users else ""
     five_note = (" (≈%d%% by the reset)" % pct(five_projection)) if five_projection is not None else ""
-    line ="Claude subscription: 5-hour window %d%% used%s, resets %s (%s)%s%s; reserve %d%%%s" % (
+    line = "Claude subscription: 5-hour window %d%% used%s, resets %s (%s)%s%s; reserve %d%%%s" % (
         pct(used), five_note, at, human_delta(reset),
         (", week %d%%%s" % (pct(week[0]), week_note)) if week else "",
         " — reported by the operator" if snap.get("source") == "operator" else "", cfg["reserve"], active)
-    if stale:
-        line += claude_stale_note(snap, measured)
+    if is_stale(shown):                 # the age of the older window shown, which may be the week's
+        line += claude_stale_note(snap, shown)
     if week_tight:
         return "tight", line + "." + weekly_line
     rate, basis = window_pace(snap, used, reset, 5)

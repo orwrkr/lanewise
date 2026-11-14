@@ -249,40 +249,62 @@ lacks "$out" "≈" "status line: a stale measurement shows no projection"
 out=$($ORCH budget)
 contains "$out" "5-hour window 40% used, resets " "budget line: a stale measurement keeps the used share"
 lacks "$out" "by the reset)" "budget line: a stale measurement shows no projection"
-contains "$out" "measured 30m ago (stale: orch budget set replaces it)" "budget line: an operator's old report says how old and what replaces it"
+contains "$out" "measured 3[0-9]m ago (stale: the next Claude reply or orch budget set refreshes it)" "budget line: an operator's old report says how old and both ways it is refreshed"
 $ORCH budget clear >/dev/null
 
 # Nothing is fetched to refresh old numbers (a request spends tokens and may open a 5-hour window): wherever they
-# appear they carry their age. claude_snap HOURS_AGO WEEK_USED — a status line snapshot that old, whose 5-hour window
-# has reset since and whose week is still current.
-claude_snap() { $PY - "$(native "$ORCH_HOME/claude_usage.json")" "$1" "$2" <<'EOF'
+# appear they carry their age. The age patterns allow for minutes passing on a slow machine.
+# claude_snap HOURS_AGO WEEK_USED [WEEK_HOURS_AGO] — a status line snapshot measured that long ago (the week
+# WEEK_HOURS_AGO, default the same), whose 5-hour window ended two hours after the measurement or a minute ago,
+# whichever is earlier, and whose week is still current; claude_snap_open is the same with the 5-hour window open.
+claude_snap() { $PY - "$(native "$ORCH_HOME/claude_usage.json")" "$1" "$2" "${3:-$1}" "${OPEN:-0}" <<'EOF'
 import datetime as dt, json, sys
 n = dt.datetime.now().astimezone()
 t = n - dt.timedelta(hours=float(sys.argv[2]))
+tw = n - dt.timedelta(hours=float(sys.argv[4]))
+reset = n + dt.timedelta(hours=3) if sys.argv[5] == "1" else min(t + dt.timedelta(hours=2), n - dt.timedelta(minutes=1))
 f = lambda x: x.isoformat(timespec="seconds")
 json.dump({"updated": f(t), "source": "statusline",
-           "five_hour": {"used": 30.0, "resets_at": f(n - dt.timedelta(minutes=1)), "updated": f(t)},
-           "seven_day": {"used": float(sys.argv[3]), "resets_at": f(t + dt.timedelta(days=4)), "updated": f(t)}},
+           "five_hour": {"used": 30.0, "resets_at": f(reset), "updated": f(t)},
+           "seven_day": {"used": float(sys.argv[3]), "resets_at": f(tw + dt.timedelta(days=4)), "updated": f(tw)}},
           open(sys.argv[1], "w", encoding="utf-8"))
 EOF
 }
 claude_snap 14 10
 out=$(echo '{}' | $ORCH statusline | head -n 1)
-contains "$out" "week 10% · .*stale: 14h ago" "status line: the week alone still shows the age of its measurement"
+contains "$out" "week 10% · .*stale: 14h" "status line: the week alone still shows the age of its measurement"
 out=$($ORCH budget)
-contains "$out" "5-hour window: none open at the last measurement, week 10%; measured 14h ago (stale: the next Claude reply refreshes it)" "budget line: the week and its age with no 5-hour window"
+contains "$out" "5-hour window: the last one reset at [^,]*, week 10%; measured 14h[ 0-9m]* ago (stale: the next Claude reply refreshes it)" "budget line: the week and its age, and when the recorded 5-hour window reset"
 lacks "$out" "No current Claude subscription numbers" "budget line: a current week counts as numbers"
 out=$(echo '{}' | $ORCH hook session-start)
-contains "$out" "Claude subscription: 5-hour window: none open at the last measurement, week 10%; measured 14h ago" "session start: the week and its age"
+contains "$out" "Claude subscription: 5-hour window: the last one reset at [^,]*, week 10%; measured 14h" "session start: the week and its age"
 out=$($ORCH watch)
-contains "$out" "Claude weekly limit: 10% used (measured 14h ago)" "orch watch: an old weekly measurement says how old"
+contains "$out" "Claude weekly limit: 10% used (measured 14h[ 0-9m]* ago)" "orch watch: an old weekly measurement says how old"
 claude_snap 14 95
 out=$($ORCH budget)
-contains "$out" "5-hour window: none open at the last measurement; measured 14h ago (stale: the next Claude reply refreshes it); TIGHT: weekly" "budget line: a tight week with an old measurement says how old"
+contains "$out" "5-hour window: the last one reset at [^;]*; measured 14h[ 0-9m]* ago (stale: the next Claude reply refreshes it); TIGHT: weekly" "budget line: a tight week with an old measurement says how old"
 claude_snap 0 10
 out=$(echo '{}' | $ORCH statusline | head -n 1)
 lacks "$out" "stale" "status line: a fresh week has no age"
 out=$($ORCH budget)
 contains "$out" "5-hour window: none open now, week 10%." "budget line: a fresh week with no 5-hour window"
 lacks "$out" "measured" "budget line: a fresh measurement has no age"
+OPEN=1 claude_snap 0 10 3      # a fresh 5-hour window beside a week measured three hours ago
+out=$(echo '{}' | $ORCH statusline | head -n 1)
+contains "$out" "5h 30% .*week 10% .*stale: 3h" "status line: the older window shown gives the age"
+out=$($ORCH budget)
+contains "$out" "5-hour window 30% used.*week 10%.*measured 3h[ 0-9m]* ago (stale: the next Claude reply refreshes it)" "budget line: an old week beside a fresh 5-hour window gives its age"
+$PY - "$(native "$ORCH_HOME/claude_usage.json")" <<'EOF'      # no measurement time anywhere: stale, age unknown
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+d.pop("updated", None)
+for w in ("five_hour", "seven_day"):
+    d[w].pop("updated", None)
+json.dump(d, open(p, "w", encoding="utf-8"))
+EOF
+out=$(echo '{}' | $ORCH statusline | head -n 1)
+contains "$out" "stale: age unknown" "status line: a window with no measurement time is stale with its age unknown"
+out=$($ORCH budget)
+contains "$out" "measured at an unknown time (stale: the next Claude reply refreshes it)" "budget line: no measurement time, said so"
 $ORCH budget clear >/dev/null

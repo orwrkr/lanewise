@@ -118,21 +118,24 @@ A reserve time already in the past is replaced by a warning instead of an obsole
 
 **How current the numbers are.** Nothing fetches fresh numbers on its own: any request spends tokens and may open a
 new 5-hour window, and a session that has just started should start nothing until you write. So the numbers are those
-of the last measurement, which after a break can be hours old. Once a measurement is older than 20 minutes, every
-place that shows its numbers says how old it is:
+of the last measurement, which after a break can be hours old. Once a measurement is older than 20 minutes (or its
+time is missing), the status line, the subscription lines and the pause question say how old it is; where windows
+of different ages are shown together, the age is the older one's:
 
-- the status line appends `stale: 14h ago` to the Claude or Codex part, whichever windows it shows (the week alone
-  too, once the 5-hour window has reset);
+- the status line appends `stale: 14h ago` (`stale: age unknown` without a time) to the Claude or Codex part,
+  whichever windows it shows (the week alone too, once the 5-hour window has reset);
 - the `Claude subscription:` line (`orch status`, the session start, `orch budget`) ends in `measured 14h ago
-  (stale: the next Claude reply refreshes it)`, or `orch budget set replaces it` for a number you reported; with
-  the 5-hour window reset since, it still shows the week: `5-hour window: none open at the last measurement, week
-  45%; measured 14h ago (…)`;
+  (stale: the next Claude reply refreshes it)`, or `the next Claude reply or orch budget set refreshes it` for
+  numbers you reported. With the 5-hour window reset since, it still shows the week and says when that window reset,
+  since a new one may have opened unseen: `5-hour window: the last one reset at 09:10, week 45%; measured 14h ago
+  (…)`;
 - the `Codex subscription:` line gives the date and age: `(measured Nov 12 23:57, 1d 14h ago; stale: the next Codex
   run refreshes it)`;
 - the pause question and `orch watch` say it after the used share: `44% used (measured 14h ago)`.
 
-Account balances show their age the same way (`checked 5m ago`, `, 3h ago`); an old one is refreshed in the background
-at the session start, which spends no tokens (`orch guide spend`).
+Account balances show their age as well (`checked 5m ago`, `, 3h ago`). The session start tries to refresh an old
+one in the background, a request to the provider's balance API that spends no tokens; `orch guide spend` says when
+it doesn't.
 
 ## Settings (profile `claude`)
 

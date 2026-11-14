@@ -319,10 +319,9 @@ def codex_budget(where=None):
         return "unknown", None
     parts = []
     tight = False
-    measured = None
+    measured = oldest_measured([w[2] for w in (five, week) if w])   # the older of the windows shown
     if five:
         used, reset, m = five
-        measured = m or measured
         cap = 100 - cfg["reserve"]
         proj = codex_projected(used, reset, m, 300)
         if used >= cap or (proj is not None and proj >= cap):
@@ -330,7 +329,6 @@ def codex_budget(where=None):
         parts.append("5-hour window %d%% used, resets %s" % (pct(used), reset.astimezone().strftime("%H:%M")))
     if week:
         used, reset, m = week
-        measured = min(measured, m) if measured and m else (m or measured)    # the older of the two windows
         cap = 100 - week_reserve(cfg["week_reserve"], reset, m)
         rate, _ = week_rate(entry.get("week_history"), used, reset, m)
         weekly = max(used, projected_at_reset(used, reset, rate, m)) if rate is not None else used
@@ -340,10 +338,11 @@ def codex_budget(where=None):
         parts.append("week %d%%" % pct(used) + (", resets %s" % reset.astimezone().strftime("%b %d %H:%M")
                                                if reset else ""))
     line = "Codex subscription: " + ", ".join(parts)
-    if measured and is_stale(measured):   # an old measurement says how old and what refreshes it (nothing is fetched)
-        line += " (measured %s, %s; stale: the next Codex run refreshes it)" % (watch_clock(measured),
-                                                                               human_delta(measured))
-    elif measured:
+    if is_stale(measured):     # an old measurement says how old and what refreshes it (nothing is fetched)
+        line += " (measured %s; stale: the next Codex run refreshes it)" % (
+            "%s, %s" % (watch_clock(measured), human_delta(measured)) if isinstance(measured, dt.datetime)
+            else "at an unknown time")
+    else:
         line += " (measured %s)" % measured.astimezone().strftime("%H:%M")
     line += "."
     if tight:
@@ -384,8 +383,7 @@ def codex_status_part(where=None):
         return None
     five = codex_window(entry, "five_hour")
     week = codex_window(entry, "seven_day")
-    stamps = [w[2] for w in (five, week) if w and w[2]]
-    measured = min(stamps) if stamps else None     # the older of the windows shown
+    measured = oldest_measured([w[2] for w in (five, week) if w])     # the older of the windows shown
     projections = codex_projections(entry)
     m = codex_work_model(entry.get("model"))
     name = (display_name(m) if m else None) or m or "Codex"   # a known id → display name, an unknown id as-is, no model → Codex

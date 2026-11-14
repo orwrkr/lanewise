@@ -307,7 +307,7 @@ for k, v in d.items():
 json.dump(d, open(p, "w", encoding="utf-8"))
 EOF
 out=$(cx_status); contains "$out" "stale:" "codex: a stale measurement is marked"
-out=$($ORCH status); contains "$out" "(measured [^,]*, 2[5-9]m ago; stale: the next Codex run refreshes it)" "codex: the budget line says how old a stale measurement is and what refreshes it"
+out=$($ORCH status); contains "$out" "(measured [^,]*, [2-5][0-9]m ago; stale: the next Codex run refreshes it)" "codex: the budget line says how old a stale measurement is and what refreshes it"
 
 # Codex profile off → no line even with data
 rm -rf "$T/cxoff"; mkdir -p "$T/cxoff/sessions/2026/11/02"

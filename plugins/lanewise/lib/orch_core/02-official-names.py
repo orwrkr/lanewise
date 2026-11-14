@@ -51,10 +51,26 @@ def scope_name(scope):
     return base + ("@" + name if name else "")
 
 
+UNKNOWN_AGE = "unknown"      # a window shown whose measurement time is missing: stale, with no age to give
+
+
+def oldest_measured(stamps):
+    """The oldest measurement time of the windows shown (stamps, one per window): UNKNOWN_AGE when any of them is
+    missing, None when no window is shown. A missing time never hides behind a known newer one."""
+    if not stamps:
+        return None
+    if any(s is None for s in stamps):
+        return UNKNOWN_AGE
+    return min(stamps)
+
+
 def stale_part(measured):
-    """'stale: <age>' when the measurement is older than the freshness constant, else None."""
+    """'stale: <age>' when the measurement is older than the freshness constant, 'stale: age unknown' for
+    UNKNOWN_AGE, else None."""
     if measured is None:
         return None
+    if isinstance(measured, str):
+        return "stale: age unknown"
     age = max((now() - measured).total_seconds(), 0)
     if age > USAGE_FRESH_SECONDS:
         return "stale: %s" % human_delta(measured)

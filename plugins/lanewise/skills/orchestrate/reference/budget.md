@@ -185,16 +185,18 @@ model.
 ## The status line format
 
 Every provider's part of the status line is built the same way, as
-`name · 5h N% (≈projected%) → HH:MM · week N% (≈projected%) · [N session(s)] · mode · stale: age`, with any part
-that has no data left out. The `(≈N%)` after a window is the share it reaches at its reset at the current pace —
-the budget's own projection, never below the used share — and is left out when it cannot be computed (too early in
-the window, no rate, a stale measurement):
+`name · 5h N% → ≈P% by HH:MM · week N% → ≈P% by <day> · [N session(s)] · mode · stale: age`, with any part
+that has no data left out. `N%` is the share used now; `→ ≈P% by …` is the share the window reaches by its reset at
+the current pace — the budget's own projection, never below the used share — and the reset itself: the time for the
+five-hour window; for the week the time when it resets today, the weekday within the next six days (`by Wed`), else
+the date (`by Nov 22`). The projection is left out when it cannot be computed (too early in the window, no rate, a
+stale measurement): the five-hour part then reads `5h N% until HH:MM` and the weekly one just `week N%`:
 
-- the Claude part is `Claude <model> · 5h 40% (≈70%) → 18:00 · week 60% (≈80%) · 3 sessions · surplus: Claude
-  first` (a session led by another model shows the model's display name with no `Claude ` prefix);
+- the Claude part is `Claude <model> · 5h 40% → ≈70% by 18:00 · week 60% → ≈80% by Wed · 3 sessions · surplus:
+  Claude first` (a session led by another model shows the model's display name with no `Claude ` prefix);
 - the Codex part is the model of the last `turn_context` event in the same rollout file that gave the limits, except
-  the internal `codex-auto-review` step, which is skipped (`Codex GPT-6.1 Terra · 5h 81% (≈90%) → 18:28 · week 95%
-  · tight: week over reserve`; just `Codex` when no model is logged, an unknown model id as-is). It has no session
+  the internal `codex-auto-review` step, which is skipped (`Codex GPT-6.1 Terra · 5h 81% → ≈90% by 18:28 · week
+  95% · tight: week over reserve`; just `Codex` when no model is logged, an unknown model id as-is). It has no session
   count.
 - the mode text is the same on both (`tight: 5h`, `tight: week`, or `tight: week N% projected` when the week's
   projection is not shown beside the window, `tight: week over reserve`; Claude also

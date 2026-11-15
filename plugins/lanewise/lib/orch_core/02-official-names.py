@@ -77,25 +77,38 @@ def stale_part(measured):
     return None
 
 
-def projection_part(projection, used):
-    """' (≈N%)' for a window's share at its reset, never below the used share; '' when it cannot be computed."""
+def reset_day(reset):
+    """When a weekly window resets, as short as it stays clear: HH:MM today, the weekday within the next six days,
+    'Mon DD' a week or more ahead (the same weekday as today would read as today)."""
+    t = reset.astimezone()
+    days = (t.date() - now().astimezone().date()).days
+    if days <= 0:
+        return t.strftime("%H:%M")
+    return t.strftime("%a") if days < 7 else t.strftime("%b %d")
+
+
+def projection_part(projection, used, when=None):
+    """' → ≈N% by <when>': the share a window reaches by its reset at the current pace, never below the used share;
+    '' when it cannot be computed."""
     if projection is None:
         return ""
-    return " (≈%d%%)" % pct(max(float(projection), float(used)))
+    return " → ≈%d%%%s" % (pct(max(float(projection), float(used))), " by " + when if when else "")
 
 
 def provider_line(name, five, week, mode_text=None, measured=None, sessions=None,
                   five_projection=None, week_projection=None):
     """One provider's status line part, built the same way for Claude and Codex:
-    name · 5h used% (≈projected%) → reset · week used% (≈projected%) · [N session(s)] · mode text · stale: age.
+    name · 5h used% → ≈projected% by HH:MM · week used% → ≈projected% by <day> · [N session(s)] · mode text ·
+    stale: age. Without a projection the five-hour part reads '5h used% until HH:MM' and the weekly one 'week used%'.
     five/week are (used %, reset time) or None; any part without data is left out. The projections are the budget
     code's own numbers at the reset, left out when they cannot be computed."""
     parts = [name] if name else []
     if five and five[0] is not None and five[1]:
-        parts.append("5h %d%%%s → %s" % (pct(five[0]), projection_part(five_projection, five[0]),
-                                         five[1].astimezone().strftime("%H:%M")))
+        at = five[1].astimezone().strftime("%H:%M")
+        parts.append("5h %d%%%s" % (pct(five[0]), projection_part(five_projection, five[0], at) or " until " + at))
     if week and week[0] is not None:
-        parts.append("week %d%%%s" % (pct(week[0]), projection_part(week_projection, week[0])))
+        parts.append("week %d%%%s" % (pct(week[0]), projection_part(
+            week_projection, week[0], reset_day(week[1]) if week[1] else None)))
     if sessions:
         parts.append("%d session%s" % (sessions, "" if sessions == 1 else "s"))
     if mode_text:

@@ -380,11 +380,27 @@ def weekly_pace():
 
 def projection_display():
     # The projection sits beside its window and never below the used share; the mode text no longer repeats it.
+    # It reads as where the window is heading by when: '5h 40% → ≈40% by HH:MM', '5h 40% until HH:MM' without one.
     reset = fixed + dt.timedelta(hours=2)
+    at = reset.astimezone().strftime("%H:%M")
     text = m.provider_line("Claude", (40.0, reset), None, five_projection=10.0)
-    assert "5h 40% (≈40%)" in text and "(≈10%)" not in text, text
+    assert "5h 40%% → ≈40%% by %s" % at in text and "≈10%" not in text, text
     plain = m.provider_line("Claude", (40.0, reset), None)
-    assert "5h 40% → " in plain and "≈" not in plain, plain
+    assert "5h 40%% until %s" % at in plain and "≈" not in plain and "→" not in plain, plain
+    # The week's reset: HH:MM today, the weekday within six days, 'Mon DD' a week or more ahead; no projection, no day.
+    noon = fixed.astimezone().replace(hour=12, minute=0, second=0)
+    with mock.patch.object(m, "now", return_value=noon):
+        for ahead, form in ((dt.timedelta(hours=3), "%H:%M"), (dt.timedelta(hours=20), "%a"),
+                            (dt.timedelta(days=3), "%a"), (dt.timedelta(days=6), "%a"),
+                            (dt.timedelta(days=7), "%b %d")):
+            when = (noon + ahead).astimezone()
+            assert m.reset_day(noon + ahead) == when.strftime(form), (ahead, m.reset_day(noon + ahead))
+        line = m.provider_line("Claude", None, (56.0, noon + dt.timedelta(days=3)), week_projection=83.0)
+        assert line == "Claude · week 56%% → ≈83%% by %s" %(noon + dt.timedelta(days=3)).astimezone().strftime("%a"), line
+        bare = m.provider_line("Claude", None, (56.0, noon + dt.timedelta(days=3)))
+        assert bare == "Claude · week 56%", bare
+        no_reset = m.provider_line("Claude", None, (56.0, None), week_projection=83.0)
+        assert no_reset == "Claude · week 56% → ≈83%", no_reset
     projected_week = " TIGHT: weekly limit is tight (108% projected from the week's average, 82% used, reserve 10%) — x"
     assert m.short_mode("tight", projected_week, week_shown=True) == "tight: week", projected_week
     assert m.short_mode("tight", projected_week) == "tight: week 108% projected", projected_week

@@ -376,7 +376,7 @@ def codex_short_mode(cfg, entry, week_shown=False):
 
 
 def codex_status_part(where=None):
-    """Compact Codex limits part of the second status line ('GPT-6.1 Terra · 5h 81% (≈90%) → 18:28 · week 95%'),
+    """Compact Codex limits part of the second status line ('GPT-6.1 Terra · 5h 81% → ≈90% by 18:28 · week 95%'),
     built by the same provider_line helper as Claude; or None with no data."""
     cfg, _, entry = codex_state(where)
     if cfg is None or not entry:

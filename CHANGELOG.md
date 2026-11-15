@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.39.3
+
+- **The status line says what its projections mean.** `5h 41% (≈66%) → 05:10 · week 56% (≈83%)` left the figure in
+  parentheses unexplained, and its arrow pointed at a clock time. It now reads `5h 41% → ≈66% by 05:10 · week 56% →
+  ≈83% by Wed`: the share used now, then the share each window reaches by its reset at the current pace, and when that
+  is. The week's reset is the time when it falls today, the weekday within the next six days and the date further
+  ahead. Without a projection (the window's first hour, a stale measurement) the five-hour part reads
+  `5h 41% until 05:10` and the weekly one `week 56%`, as before. The Claude and the Codex part change alike.
+
 ## 0.39.2
 
 - **Old limit numbers say how old they are.** Nothing fetches fresh numbers on its own, since any request spends

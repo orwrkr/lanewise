@@ -171,9 +171,10 @@ You can also report limits without commands, in plain words: "Sol is out until 9
 
 A Claude subscription's 5-hour window expires at its reset, and whatever was not used is gone, while DeepSeek and
 other API-key executors cost money per token. Lanewise projects the window to its reset at the current pace. The
-status line and the `Claude subscription:` line show it beside the used share: `5h 40% (≈70%) → 18:00 · week 60%
-(≈80%)`, the same number the mode is decided on, left out only while it cannot be computed (too early in the window,
-a stale measurement) and never below the used share. The
+status line shows it after the used share, with the reset it is heading for: `5h 40% → ≈70% by 18:00 · week 60% →
+≈80% by Wed`; the `Claude subscription:` line says `40% used (≈70% by the reset)`. It is the same number the mode is
+decided on, left out only while it cannot be computed (too early in the window, a stale measurement) and never below
+the used share. The
 usage numbers are account-wide, so every session on the account is included. The pace is the higher of the window
 average and the last 30–60 minutes, which tracks every instance that is consuming right now (neither is projected
 during the first hour of the window; a used share already at the reserve counts at once). A reserve (10% of the

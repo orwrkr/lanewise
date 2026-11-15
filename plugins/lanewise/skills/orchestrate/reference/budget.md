@@ -22,7 +22,8 @@ about 1.85 with 31 hours left, and 1 (the floor) in the last hour. The mode is i
 line `Claude subscription: 5-hour window 40% used (≈70% by the reset), resets 18:00 (in 2h 10m), week 60% (≈80% by
 the reset); …`) and arrives as a `💡` event when it changes. The parenthesized figure is the share each window
 reaches at its reset at that pace — the same number the mode is decided on — left out while no projection can be
-computed (too early in the window, a stale measurement) and never below the used share.
+computed (too early in the window, no rate) and never below the used share. A stale measurement keeps its projection,
+since the mode still rests on it, and the line ends with the measurement's age.
 
 By default, among the slots that suit a task, subscriptions go before API-billed executors (DeepSeek, any profile with
 a key): what stays unused at a reset is lost, and a balance is money. The modes adjust that order:
@@ -189,8 +190,9 @@ Every provider's part of the status line is built the same way, as
 that has no data left out. `N%` is the share used now; `→ ≈P% by …` is the share the window reaches by its reset at
 the current pace — the budget's own projection, never below the used share — and the reset itself: the time for the
 five-hour window; for the week the time when it resets today, the weekday within the next six days (`by Wed`), else
-the date (`by Nov 22`). The projection is left out when it cannot be computed (too early in the window, no rate, a
-stale measurement): the five-hour part then reads `5h N% until HH:MM` and the weekly one just `week N%`:
+the date (`by Nov 22`). The projection is left out when it cannot be computed (too early in the window, no rate):
+the five-hour part then reads `5h N% until HH:MM` and the weekly one just `week N%`. A stale measurement keeps it,
+and the `stale: <age>` at the end dates it with the used share:
 
 - the Claude part is `Claude <model> · 5h 40% → ≈70% by 18:00 · week 60% → ≈80% by Wed · 3 sessions · surplus:
   Claude first` (a session led by another model shows the model's display name with no `Claude ` prefix);

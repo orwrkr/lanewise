@@ -247,11 +247,13 @@ def stale_budget():
     with mock.patch.object(m, "now", return_value=fixed):
         snap = m.read_json(m.USAGE_SNAPSHOT, {})
         rate, _ = m.window_pace(snap, 40, m.parse_iso(snap["five_hour"]["resets_at"]), 5)
-        assert m.claude_budget()[0] == "tight"
+        mode, line = m.claude_budget()
+        assert mode == "tight" and "(≈200% by the reset)" in line, line
     with mock.patch.object(m, "now", return_value=fixed + dt.timedelta(hours=3)):
         assert m.window_pace(snap, 40, m.parse_iso(snap["five_hour"]["resets_at"]), 5)[0] == rate
         mode, line = m.claude_budget()
-        assert mode == "tight" and "3h ago" in line and "stale" in line and "≈" not in line, line
+        # the projection stays anchored to the measurement, shown with its age, as the mode decided on it
+        assert mode == "tight" and "3h ago" in line and "stale" in line and "(≈200% by the reset)" in line, line
     snapshot({"used":10, "resets_at":m.iso(fixed + dt.timedelta(hours=2))}, age=3600)
     assert m.claude_budget()[0] != "surplus"
     out = good(["statusline"], '{}')
@@ -349,6 +351,14 @@ def weekly_pace():
     week_snap(84, 31)
     mode, line = m.claude_budget()
     assert mode == "tight" and "103% projected from the week's average" in line and "weekly limit is tight" in line, line
+    # Fifteen hours on, the stale measurement keeps the projection the mode is decided on, so the status line shows
+    # it beside the window and the mode text does not repeat it.
+    with mock.patch.object(m, "now", return_value=fixed + dt.timedelta(hours=15)):
+        projection = m.window_projection(m.read_json(m.USAGE_SNAPSHOT, {}), "seven_day", 7)
+        assert m.pct(projection) == 103, projection
+        mode, line = m.claude_budget()
+        assert mode == "tight" and "103% projected" in line and "measured 15h" in line, line
+        assert m.short_mode(mode, line, week_shown=projection is not None) == "tight: week", line
     # A real burn stays TIGHT: 10 points in 8 h with 60 h left.
     week_snap(30, 60, [[m.iso(fixed - dt.timedelta(hours=8)), 20.0, m.iso(fixed + dt.timedelta(hours=60))]])
     mode, line = m.claude_budget()
@@ -451,6 +461,16 @@ def codex_weekly():
         entry = m.read_json(m.CODEX_USAGE_FILE, {})[str(cx)]
         assert len(entry.get("week_history") or []) == 2
         assert m.codex_budget()[0] == "tight"
+        # Fifteen hours on, a stale measurement keeps the projection the mode is decided on: the status line shows
+        # it beside the window, and the mode text does not repeat it ('tight: week 103% projected' before).
+        snap = m.read_json(m.CODEX_USAGE_FILE, {})
+        snap[str(cx)] = ce(84, 31)
+        m.write_json(m.CODEX_USAGE_FILE, snap)
+        with mock.patch.object(m, "now", return_value=fixed + dt.timedelta(hours=15)):
+            assert m.pct(m.codex_projections(snap[str(cx)])["seven_day"]) == 103
+            line = m.codex_status_part()
+            assert "week 84% → ≈103% by " in line and " · tight: week · stale: 15h" in line, line
+            assert "projected" not in line, line
 
 def hard_cap():
     good(["profile", "set", "antigravity", "zero", "--max-open", "0", "--default"])

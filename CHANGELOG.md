@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.39.4
+
+- **An old measurement keeps its projection, in one place.** With numbers older than 20 minutes the status line left
+  the projection out beside the window, yet the mode was still decided on it and the mode text brought the number
+  back: `week 59% · tight: week 173% projected · stale: 15h 2m ago`. Now the projection stays beside its window, the
+  mode text no longer repeats it, and the age at the end dates every number in the part:
+  `week 59% → ≈173% by Thu · tight: week · stale: 15h 2m ago`. The `Claude subscription:` line keeps its
+  `(≈N% by the reset)` the same way, followed by the measurement's age. Routing is unchanged: TIGHT already rested
+  on this projection. The Claude and the Codex part change alike.
+
 ## 0.39.3
 
 - **The status line says what its projections mean.** `5h 41% (≈66%) → 05:10 · week 56% (≈83%)` left the figure in

@@ -222,7 +222,7 @@ $ORCH budget clear >/dev/null
 # times (and its samples to an hour ago) so that an unwanted write would show
 
 # Where each window is heading: '→ ≈N% by <reset>' after its used share is the budget's own projection at the reset, left out
-# when it cannot be computed (too little data, a stale measurement) and never below the used share.
+# when it cannot be computed (too little data) and never below the used share. A stale measurement keeps it, with its age.
 now=$($PY -c "import time; print(int(time.time()))")   # this block's readings start now
 rm -f "$ORCH_HOME/sessions.json" "$ORCH_HOME/claude_usage.json"
 out=$(sl 16 $((now + 7800)) "$(week 41)")
@@ -236,7 +236,7 @@ out=$(sl 16 $((now + 17400)))
 lacks "$out" "5h 16% → ≈" "status line: no 5-hour projection in a window's first hour"
 contains "$out" "5h 16% until [0-9][0-9]:[0-9][0-9]" "status line: without a projection the 5-hour part says until when"
 $ORCH budget clear >/dev/null
-$PY - "$(native "$ORCH_HOME/claude_usage.json")" <<'EOF'   # a measurement 30 minutes old: no projection
+$PY - "$(native "$ORCH_HOME/claude_usage.json")" <<'EOF'   # a measurement 30 minutes old, 2 h into the window: 40% → 100%
 import datetime as dt, json, sys
 t = dt.datetime.now().astimezone() - dt.timedelta(minutes=30)
 json.dump({"updated": t.isoformat(timespec="seconds"), "source": "operator",
@@ -245,11 +245,10 @@ json.dump({"updated": t.isoformat(timespec="seconds"), "source": "operator",
           open(sys.argv[1], "w", encoding="utf-8"))
 EOF
 out=$(echo '{}' | $ORCH statusline)
-contains "$out" "5h 40% until " "status line: a stale measurement keeps the used share"
-lacks "$out" "≈" "status line: a stale measurement shows no projection"
+contains "$out" "5h 40% → ≈100% by [0-9][0-9]:[0-9][0-9] · .*tight: 5h · stale: 3[0-9]m" "status line: a stale measurement keeps the projection its mode is decided on, with its age"
 out=$($ORCH budget)
-contains "$out" "5-hour window 40% used, resets " "budget line: a stale measurement keeps the used share"
-lacks "$out" "by the reset)" "budget line: a stale measurement shows no projection"
+contains "$out" "5-hour window 40% used (≈100% by the reset), resets " "budget line: a stale measurement keeps its projection"
+contains "$out" "TIGHT: at the current pace" "budget line: the stale projection is the one the mode is decided on"
 contains "$out" "measured 3[0-9]m ago (stale: the next Claude reply or orch budget set refreshes it)" "budget line: an operator's old report says how old and both ways it is refreshed"
 $ORCH budget clear >/dev/null
 
@@ -273,12 +272,12 @@ EOF
 }
 claude_snap 14 10
 out=$(echo '{}' | $ORCH statusline | head -n 1)
-contains "$out" "week 10% · .*stale: 14h" "status line: the week alone still shows the age of its measurement"
+contains "$out" "week 10% → ≈23% by [A-Z][a-z][a-z] · .*stale: 14h" "status line: the week alone still shows its projection and the age of its measurement"
 out=$($ORCH budget)
-contains "$out" "5-hour window: the last one reset at [^,]*, week 10%; measured 14h[ 0-9m]* ago (stale: the next Claude reply refreshes it)" "budget line: the week and its age, and when the recorded 5-hour window reset"
+contains "$out" "5-hour window: the last one reset at [^,]*, week 10% (≈23% by the reset); measured 14h[ 0-9m]* ago (stale: the next Claude reply refreshes it)" "budget line: the week, its projection and age, and when the recorded 5-hour window reset"
 lacks "$out" "No current Claude subscription numbers" "budget line: a current week counts as numbers"
 out=$(echo '{}' | $ORCH hook session-start)
-contains "$out" "Claude subscription: 5-hour window: the last one reset at [^,]*, week 10%; measured 14h" "session start: the week and its age"
+contains "$out" "Claude subscription: 5-hour window: the last one reset at [^,]*, week 10% (≈23% by the reset); measured 14h" "session start: the week, its projection and age"
 out=$($ORCH watch)
 contains "$out" "Claude weekly limit: 10% used (measured 14h[ 0-9m]* ago)" "orch watch: an old weekly measurement says how old"
 claude_snap 14 95

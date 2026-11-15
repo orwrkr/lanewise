@@ -270,15 +270,16 @@ def codex_projected(used, reset, measured, window_minutes):
 
 def codex_projections(entry):
     """{window: share at its reset} from the Codex budget's own estimates (codex_projected for the 5-hour window,
-    week_rate for the week), never below the used share. A window without one is absent: too little data, no rate,
-    or a stale measurement."""
-    out, t = {}, now()
+    week_rate for the week), never below the used share. A window without one is absent: too little data, no rate
+    or no measurement time. A stale measurement still gives its projection, the one the mode is decided on; the
+    line carries its age."""
+    out = {}
     for name, hours in (("five_hour", 5), ("seven_day", 7)):
         w = codex_window(entry, name)
         if not w:
             continue
         used, reset, m = w
-        if m is None or (t - m).total_seconds() > USAGE_FRESH_SECONDS:
+        if m is None:
             continue
         if hours == 5:
             proj = codex_projected(used, reset, m, 300)

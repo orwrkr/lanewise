@@ -307,6 +307,7 @@ for k, v in d.items():
 json.dump(d, open(p, "w", encoding="utf-8"))
 EOF
 out=$(cx_status); contains "$out" "stale:" "codex: a stale measurement is marked"
+contains "$out" "5h 30% → ≈5[0-9]% by [0-9][0-9]:[0-9][0-9] · .*stale: 2[0-9]m" "codex: a stale measurement keeps its projection beside the window, with its age"
 out=$($ORCH status); contains "$out" "(measured [^,]*, [2-5][0-9]m ago; stale: the next Codex run refreshes it)" "codex: the budget line says how old a stale measurement is and what refreshes it"
 
 # Codex profile off → no line even with data

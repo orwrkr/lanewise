@@ -195,13 +195,14 @@ def projected_at_reset(used, reset, rate, measured):
 def window_projection(snap, name, hours):
     """The share a window reaches at its reset at the current pace — the budget's own estimate (window_pace for the
     5-hour window, week_rate for the week) through projected_at_reset, never below the used share. None when there
-    is no current window, no measurement or rate, or the measurement is stale."""
+    is no current window, no measurement or no rate. A stale measurement still gives its projection, the one the
+    mode is decided on, and the line it appears in carries the measurement's age."""
     w = usage_window(snap, name)
     if w is None:
         return None
     used, reset = w
     measured = measured_at(snap, name)
-    if reset is None or measured is None or (now() - measured).total_seconds() > USAGE_FRESH_SECONDS:
+    if reset is None or measured is None:
         return None
     if hours == 5:
         rate, _ = window_pace(snap, used, reset, hours)

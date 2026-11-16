@@ -134,7 +134,7 @@ rec = {"args": args, "allowed": args[args.index("--allowedTools") + 1:] if "--al
        "disallowed": args[args.index("--disallowedTools") + 1:args.index("--allowedTools")]
        if "--disallowedTools" in args and "--allowedTools" in args else [],
        "role": "Lanewise executor" in system, "claude_md": "PROJECT-RULES-MARKER" in system,
-       "no_vision": "[Unsupported Image]" in system,
+       "no_vision": "[Unsupported Image]" in system, "pdf_pages": "`pages` parameter" in system,
        "agents_n": system.count("AGENTS-MARKER"), "claude_n": system.count("CLAUDE-MARKER"),
        "env": {k: os.environ.get(k) for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "ORCH_WORKER", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDECODE",

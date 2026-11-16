@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.40.1
+
+- **The DeepSeek executor is told how to read a PDF.** On DeepSeek's endpoint Read without `pages` answers
+  `[Unsupported document type: application/pdf]`, and a worker on `deepseek-flash` gave up there; asked to pass
+  `pages`, it got the page as an image (with `pdftoppm` on `PATH`) and read it exactly. Its system prompt now says
+  to read a PDF page by page with `pages`, and to say so when `pdftoppm` is missing instead of guessing. A model
+  without vision keeps its no-vision note instead, and the interactive lead is unchanged. The README names the
+  Poppler packages for Windows, Debian and Ubuntu, and macOS.
+
 ## 0.40.0
 
 - **The DeepSeek executor sees images, and the model without vision is told so.** `deepseek-flash` reads a PNG,

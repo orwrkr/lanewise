@@ -187,20 +187,28 @@ providers:
       Flash is the default: it is newer, ahead on coding and agentic work, and several times cheaper. Pro is taken
       only when it is known to be needed — Flash failed at the task, or the reasoning is heavy on scientific or
       factual knowledge.
+      deepseek-flash sees images the worker opens with Read (screenshots, UI mockups, diagrams, photographed
+      documents; the files must be inside --cd); deepseek-v4-pro has no vision and must never get a task that needs
+      to see an image. PDFs come only as page images, when pdftoppm (poppler) is on PATH. --allow WebSearch adds
+      DeepSeek's server-side web search, billed by DeepSeek per call and not counted in orch's spend estimate.
+      To check a page in a browser, allow a screenshot command pinned to the Playwright version whose browsers are
+      installed, e.g. --allow 'Bash(npx playwright@1.61.1 screenshot:*)': the worker takes the shot and reads it. A
+      bare `npx playwright` fetches the newest version, whose browser may be missing.
     slots:
       - id: deepseek/flash-medium
         model: deepseek-flash      # DeepSeek V4.1 Flash, 1M context (variant deepseek-flash[1m])
         effort: medium
         cost: 1
         max_difficulty: 3
-        good_for: [routine implementation following existing patterns, bulk repetitive edits, tests, docstrings]
+        good_for: [routine implementation following existing patterns, bulk repetitive edits, tests, docstrings,
+                   image analysis (screenshots / UI mockups / diagrams)]
       - id: deepseek/flash-high
         model: deepseek-flash
         effort: high
         cost: 1
         max_difficulty: 4
         good_for: [implementation, debugging, cross-review of Claude and Codex code (the third family), tests,
-                   review of diffs, log analysis]
+                   review of diffs, log analysis, image analysis (screenshots / UI mockups / diagrams)]
       - id: deepseek/flash-max
         model: deepseek-flash
         effort: max
@@ -299,7 +307,7 @@ routing:
   review_of_manual:   [codex/terra-high, claude/sonnet-high]
   security:           [claude/opus-high, codex/sol-xhigh]       # both, independently
   architecture:       [main-thread, codex/sol-xhigh, deepseek/flash-max]   # critics
-  ui_verify:          [antigravity/argon-high, claude/sonnet-high]
+  ui_verify:          [antigravity/argon-high, claude/sonnet-high, deepseek/flash-high]
   isolated_big_task:  [antigravity/argon-high, codex/sol-high, deepseek/flash-high]  # off the critical path
   fallback_when_claude_exhausted:   [codex/*, deepseek/*, antigravity/claude-opus]
   fallback_when_codex_exhausted:    [claude/*, deepseek/*, antigravity/argon-medium]

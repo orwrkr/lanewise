@@ -157,7 +157,9 @@ confirms what it found. Nothing happens by itself.
    and the model keys of our table that belong to it.
 2. The orchestrator gives it to a cheap executor with web access: in a Claude-led session a native subagent such as
    `lanewise:orch-haiku-low`; otherwise `orch run claude|deepseek --mode analysis --allow
-   'WebFetch(domain:<site>)' --prompt-file <TASK.md>` (an allowed `WebFetch(...)` rule gives the worker that tool);
+   'WebFetch(domain:<site>)' --prompt-file <TASK.md>` (an allowed `WebFetch(...)` rule gives the worker that tool;
+   an allowed `WebSearch` rule gives it the provider's server-side web search, whose per-call fee — DeepSeek's,
+   USD 0.75 per 1,000 searches — is outside orch's estimate, which prices tokens only);
    or the manual pool, since reading price pages is read-only research.
 3. `orch prices diff <output>` validates its report (a JSON file, or any text with the proposal in a fenced
    json block) and prints `field: current → proposed (±N%)`, large changes marked, models left out, new keys.

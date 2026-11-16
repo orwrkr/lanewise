@@ -46,6 +46,11 @@ check 'e["ANTHROPIC_BASE_URL"] == "https://api.deepseek.com/anthropic" and e["AN
 check 'e["ANTHROPIC_MODEL"] == e["CLAUDE_CODE_SUBAGENT_MODEL"] == "deepseek-flash" and a == ["--model", "deepseek-flash", "--resume"]' "lead model for the main thread and the subagents"
 check 'e["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "deepseek-flash" and e["CLAUDE_CONFIG_DIR"] == os.environ["CLAUDE_CONFIG_DIR"]' "background calls on DeepSeek; your config and plugins"
 check 'e["ORCH_LEAD"] == "deepseek" and "ANTHROPIC_AUTH_TOKEN" in e["ORCH_LEAD_ENV"] and e["ORCH_WORKER"] is None' "lead marked, not a worker"
+# Flash's args above are exactly ["--model", "deepseek-flash", "--resume"]: no no-vision note. Pro gets one.
+out=$(env -u CLAUDECODE FAKE_CLAUDE=ok ANTHROPIC_API_KEY=sk-ant-parent $ORCH launch deepseek --model deepseek-v4-pro -- --resume \
+      </dev/null 2>&1); rc=$?
+expect_rc 0 $rc "launch with Pro as the lead model"
+check 'a[:2] == ["--model", "deepseek-v4-pro"] and a[2] == "--append-system-prompt" and "[Unsupported Image]" in a[3] and a[-1] == "--resume"' "lead on Pro is told it cannot see images, and the operator's args still pass through"
 $ORCH profile use deepseek off >/dev/null
 out=$($ORCH launch deepseek --dry-run 2>&1); expect_rc 1 $? "no launch while the lead's profile is off"
 $ORCH profile use deepseek inherit >/dev/null

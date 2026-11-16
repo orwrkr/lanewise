@@ -107,6 +107,8 @@ Requires Codex CLI signed in with ChatGPT: `npm i -g @openai/codex && codex logi
 
 Multiple keys (personal, work) and per-project key selection are handled by [profiles](#executor-profiles-keys-accounts-rules-projects). A second Codex account is a profile too.
 
+`deepseek-flash` sees images: a screenshot, a UI mockup, a diagram or a photographed document the worker opens with Read, as long as the file is inside `--cd` (DeepSeek bills an image at most 1024 input tokens). `deepseek-v4-pro` has no vision — the image arrives as `[Unsupported Image]` — so its system prompt says it cannot see and must not guess. PDFs are read only as page images, which needs `pdftoppm` (Poppler) on `PATH`. A task run with `--allow WebSearch` gets DeepSeek's server-side web search: DeepSeek bills it per call (USD 0.75 per 1,000 searches) on top of tokens, and `orch spend` counts tokens only. To have the worker look at a web page itself, allow a screenshot command pinned to the Playwright version whose browsers are installed, for example `--allow 'Bash(npx playwright@1.61.1 screenshot:*)'`: it takes the screenshot and reads it. A bare `npx playwright` fetches the newest version, whose browser may not be installed.
+
 `orch balance` reads the balance of the DeepSeek account behind a key from DeepSeek itself (`GET /user/balance`) and keeps it in `~/.lanewise/balances.json`. The status line then shows, for every API-billed scope of the directory, our own estimate and limit next to it, in parentheses after the session counter of the same name: `DeepSeek@client 1.5M/988k (est. $1.47/$10, account $15.09)`. The account figure is the provider's, shared by all keys of that account (which can also be spent from outside `orch`), so it is never a key's balance and a drop in it says nothing about one key's spend; limits stay hand-set budgets for `orch`'s own runs, and the provider's refusal (402) is what stops an empty account. Other providers give an ordinary key no balance to read, so they show only the estimate. See `orch guide spend`.
 
 `orch spend` prices tokens from a table (`registry/prices.json`, overridden by `~/.lanewise/prices.json`) and warns when a provider's prices are older than 30 days. `orch prices show` prints the table in effect with each provider's source and date. To refresh it, `orch prices check` writes a task for a cheap agent with web access (`orch` itself makes no web request); `orch prices diff <its report>` shows what the report would change, and `orch prices apply <its report> --yes`, after your confirmation, writes dated entries to your personal file. A newer plugin version's built-in prices replace an older check. See `orch guide spend`.
@@ -281,8 +283,9 @@ under `orch launch`, and the session's own thread counts under the lead's label 
 line. Anthropic's own API and other proxies are not a lead. A detected lead has already started, so SessionStart
 only warns when its spend scope is at the limit.
 
-Limits of the mode: Claude Code features that rely on Anthropic-only API capabilities (web search, image input) may
-not work on the DeepSeek endpoint, and Claude Code's cost estimate in `orch usage` assumes Claude prices.
+Limits of the mode: images need a model with vision — `deepseek-flash` sees them, and `deepseek-v4-pro` is told it
+cannot and must not guess (a PDF only as page images, with `pdftoppm` on `PATH`); web search is DeepSeek's
+server-side one, billed per call; and Claude Code's cost estimate in `orch usage` assumes Claude prices.
 The launch environment drops `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN`; the lead still uses the operator's config
 directory and tools, so this is credential hygiene, not a sandbox. The Claude executor (`orch run claude`) reloads
 the user settings of its config dir: if their `env` points `ANTHROPIC_BASE_URL` at another provider's lead endpoint

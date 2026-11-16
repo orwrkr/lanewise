@@ -40,7 +40,8 @@ import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
 print("JSON-FIRST-SLOT-OK" if data["providers"]["claude"]["slots"][0]["id"] == "claude/haiku-low" else "JSON-FIRST-SLOT-BAD")
 good = {s["id"]: s["good_for"] for s in data["providers"]["deepseek"]["slots"]}["deepseek/flash-high"]   # spans lines in the file
-print("JSON-GOOD-FOR-OK" if isinstance(good, list) and len(good) == 6 and good[-1] == "log analysis" else "JSON-GOOD-FOR-BAD %r" % good)
+print("JSON-GOOD-FOR-OK" if isinstance(good, list) and len(good) == 7
+      and good[-1] == "image analysis (screenshots / UI mockups / diagrams)" else "JSON-GOOD-FOR-BAD %r" % good)
 routes_plain = all(isinstance(v, list) for v in data["routing"].values())
 print("JSON-ROUTES-OK" if routes_plain and data["routing_comments"].get("review_of_claude") == "cross-review" else "JSON-ROUTES-BAD")
 print("JSON-POLICY-OK" if data["policy"]["never_auto"][0] == "codex/sol-ultra" and data["operator"]["max_offers"] == 5 else "JSON-POLICY-BAD")

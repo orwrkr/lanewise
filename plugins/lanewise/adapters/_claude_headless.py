@@ -85,14 +85,17 @@ def base_env(keep=(), drop_anthropic=False):
                     or (k.startswith("CLAUDE_") and k not in KEEP_CLAUDE_VARS and k not in keep))}
 
 
-def system_prompt(run_dir):
+def system_prompt(run_dir, extra=""):
     """Executor role + project rules. --setting-sources user skips the project's CLAUDE.md, and Claude Code never
-    reads AGENTS.md: orch hands both over in ORCH_CONTEXT_FILE (@imports already inlined)."""
+    reads AGENTS.md: orch hands both over in ORCH_CONTEXT_FILE (@imports already inlined). `extra` — adapter-specific
+    text after the rules, such as a model's limitations."""
     parts = []
     for var in ("ORCH_ROLE_FILE", "ORCH_CONTEXT_FILE"):
         p = os.environ.get(var)
         if p and Path(p).is_file():
             parts.append(Path(p).read_text(encoding="utf-8"))
+    if extra:
+        parts.append(extra)
     out = run_dir / "system.md"
     out.write_text("\n\n---\n\n".join(parts), encoding="utf-8")
     return out
@@ -100,10 +103,11 @@ def system_prompt(run_dir):
 
 def tool_policy():
     """analysis → Read/Grep/Glob + read-only git; write → plus Edit/Write inside ORCH_CWD; other commands only via
-    `orch run --allow RULE`. An allowed `WebFetch(...)` rule also adds the WebFetch tool (in either mode): without
-    the tool the rule would allow nothing, and with no such rule the worker never reads a web page."""
+    `orch run --allow RULE`. An allowed `WebFetch(...)` rule also adds the WebFetch tool, and a rule exactly
+    `WebSearch` adds the WebSearch tool (in either mode): without the tool the rule would allow nothing, and with no
+    such rule the worker never reads a web page or searches the web."""
     allowed = GIT_READ + [r.strip() for r in os.environ.get("ORCH_ALLOW", "").splitlines() if r.strip()]
-    web = ",WebFetch" if any(r.split("(", 1)[0] == "WebFetch" for r in allowed) else ""
+    web = "".join("," + t for t in ("WebFetch", "WebSearch") if any(r.split("(", 1)[0] == t for r in allowed))
     if os.environ.get("ORCH_MODE") == "write":
         # `/**` in a CLI rule anchors at the primary working directory; `./**` follows the worker's `cd`, which would
         # silently shrink its write scope to wherever it last went.
@@ -144,13 +148,14 @@ def disallowed_tools(say):
     return ENV_FILE_DENY + settings_deny(say)
 
 
-def command(claude, model, run_dir, isolation, extra_args, say):
+def command(claude, model, run_dir, isolation, extra_args, say, system_extra=""):
     """`claude -p` in stream-json with the executor's tools, role and project rules."""
     tools, allowed = tool_policy()
     cmd = [sys.executable, claude] if claude.endswith(".py") else [claude]
     cmd += ["-p", "--model", model, "--output-format", "stream-json", "--verbose", "--no-session-persistence",
             "--strict-mcp-config"] + list(isolation) + ["--permission-mode", "dontAsk", "--tools", tools,
-                                                        "--append-system-prompt-file", str(system_prompt(run_dir))]
+                                                        "--append-system-prompt-file",
+                                                        str(system_prompt(run_dir, system_extra))]
     effort = (os.environ.get("ORCH_EFFORT") or "").lower()
     if effort in EFFORTS:
         cmd += ["--effort", effort]

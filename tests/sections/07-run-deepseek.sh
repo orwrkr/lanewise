@@ -25,23 +25,31 @@ check 'e["ORCH_WORKER"].startswith("dee-") and e["CLAUDE_CODE_DISABLE_AUTO_MEMOR
 check '"-p" in a and "--strict-mcp-config" in a and a[a.index("--setting-sources") + 1] == "user"' "headless, no MCP, no project settings/hooks"
 check 'a[a.index("--permission-mode") + 1] == "dontAsk"' "dontAsk: only allowed actions run"
 check '"Edit" in a[a.index("--tools") + 1] and {"Edit(/**)", "Write(/**)", "Bash(npm test:*)", "Bash(git diff:*)"} <= set(r["allowed"]) and not any("./" in x for x in r["allowed"])' "write: edits anchored at the working directory, not at a later cd + --allow rules"
-check '"WebFetch" not in a[a.index("--tools") + 1] and not any(x.startswith("WebFetch") for x in r["allowed"])' "tool_policy: without a WebFetch rule the worker has no web tool"
+check '"WebFetch" not in a[a.index("--tools") + 1] and "WebSearch" not in a[a.index("--tools") + 1] and not any(x.startswith(("WebFetch", "WebSearch")) for x in r["allowed"])' "tool_policy: without a web rule the worker has no web tool"
 check 'a[a.index("--effort") + 1] == "high"' "effort passed"
 check 'r["role"] and r["claude_md"]' "role + project CLAUDE.md in system prompt"
 check '{"Read(**/.env)", "Read(**/.env.*)"} <= set(r["disallowed"])' "worker is denied .env reads"
 check '{"Bash(grep *)", "Bash(rg *)", "Bash(git grep *--no-index*)", "Bash(git grep *--untracked*)"} <= set(r["disallowed"])' "worker is denied Bash searches that read ignored files"
 check 'not any(".env" in x for x in r["allowed"])' "no allow rule pretends to reopen a .env file (a deny outranks it)"
+check 'r["no_vision"]' "Pro: the system prompt says the model cannot see images"
 FAKE_CLAUDE=ok DEEPSEEK_API_KEY=sk-env $ORCH run deepseek --model deepseek-flash --effort none "review" >/dev/null; rc=$?
 expect_rc 0 $rc "deepseek analysis run"
 check 'e["ANTHROPIC_API_KEY"] == "sk-env"' "real environment wins over secrets.env"
 check '"Edit" not in a[a.index("--tools") + 1] and not any(x.startswith(("Edit", "Write")) for x in r["allowed"])' "analysis: no edit tools"
 check '"--effort" not in a' "unsupported effort dropped"
+check 'not r["no_vision"]' "Flash: no no-vision note in the system prompt"
 FAKE_CLAUDE=ok DEEPSEEK_API_KEY=sk-env $ORCH run deepseek --model deepseek-flash --effort none   --allow 'WebFetch(domain:api-docs.deepseek.com)' "read a price page" >/dev/null; rc=$?
 expect_rc 0 $rc "deepseek analysis run with a WebFetch rule"
 check '"WebFetch" in a[a.index("--tools") + 1].split(",") and "WebFetch(domain:api-docs.deepseek.com)" in r["allowed"] and "Edit" not in a[a.index("--tools") + 1]' "tool_policy: an allowed WebFetch rule adds the WebFetch tool (analysis)"
 FAKE_CLAUDE=ok DEEPSEEK_API_KEY=sk-env $ORCH run deepseek --model deepseek-flash --effort none --mode write   --allow 'WebFetch(domain:api-docs.deepseek.com)' "read a price page and write" >/dev/null; rc=$?
 expect_rc 0 $rc "deepseek write run with a WebFetch rule"
 check '"WebFetch" in a[a.index("--tools") + 1].split(",") and "Edit" in a[a.index("--tools") + 1].split(",")' "tool_policy: an allowed WebFetch rule adds the WebFetch tool (write)"
+FAKE_CLAUDE=ok DEEPSEEK_API_KEY=sk-env $ORCH run deepseek --model deepseek-flash --effort none   --allow 'WebSearch' "search the docs" >/dev/null; rc=$?
+expect_rc 0 $rc "deepseek analysis run with a WebSearch rule"
+check '"WebSearch" in a[a.index("--tools") + 1].split(",") and "WebSearch" in r["allowed"] and "Edit" not in a[a.index("--tools") + 1]' "tool_policy: an allowed WebSearch rule adds the WebSearch tool (analysis)"
+FAKE_CLAUDE=ok DEEPSEEK_API_KEY=sk-env $ORCH run deepseek --model deepseek-flash --effort none --mode write   --allow 'WebSearch' "search and write" >/dev/null; rc=$?
+expect_rc 0 $rc "deepseek write run with a WebSearch rule"
+check '"WebSearch" in a[a.index("--tools") + 1].split(",") and "Edit" in a[a.index("--tools") + 1].split(",")' "tool_policy: an allowed WebSearch rule adds the WebSearch tool (write)"
 FAKE_CLAUDE=ok $ORCH run deepseek "default model" >/dev/null; rc=$?
 expect_rc 0 $rc "deepseek run without --model"
 check 'e["ANTHROPIC_MODEL"] == "deepseek-flash" and a[a.index("--model") + 1] == "deepseek-flash"' "default model deepseek-flash passed to Claude Code"

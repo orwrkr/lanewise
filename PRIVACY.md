@@ -22,8 +22,9 @@ and `orch migrate` moves it to the new name.
 
 - **Executors you choose.** When the orchestrator gives a task to Codex, DeepSeek or Claude, that executor sends the
   task, your project's rules (CLAUDE.md, AGENTS.md) and the files it reads to its own provider: OpenAI, DeepSeek or
-  Anthropic. It uses your account or API key, under that provider's terms and privacy policy. Claude subagents run
-  inside your Claude Code session, like any subagent.
+  Anthropic. It uses your account or API key, under that provider's terms and privacy policy. Images the worker opens
+  are sent like any file it reads, and a worker granted `--allow WebSearch` sends its search queries to the provider's
+  server-side search (DeepSeek's). Claude subagents run inside your Claude Code session, like any subagent.
 - **One request of the plugin's own.** `orch` reads your DeepSeek account balance from DeepSeek
   (`GET https://api.deepseek.com/user/balance`), with your DeepSeek key. `ORCH_BALANCE=off` turns it off.
 - **Manual agents** (Antigravity and similar) receive nothing from the plugin. It writes task files into your

@@ -17,7 +17,8 @@
 #
 # `--launch-env` (orch launch deepseek): print, as JSON, the environment of an interactive Claude Code session whose
 # every model request goes to DeepSeek — main thread and subagents on ORCH_MODEL, background calls on the fast model;
-# the operator's ANTHROPIC_* variables are dropped, so no Anthropic credential reaches DeepSeek.
+# the operator's ANTHROPIC_* variables are dropped, so no Anthropic credential reaches DeepSeek. A model without
+# vision gets a system-prompt note (executor and lead alike) that it cannot see images and must not guess.
 #
 # orch-secrets: DEEPSEEK_API_KEY
 # orch-limit-detect: exit-code
@@ -40,10 +41,22 @@ BASE_URL = os.environ.get("ORCH_DEEPSEEK_BASE_URL") or "https://api.deepseek.com
 DEFAULT_MODEL = "deepseek-flash"
 FAST_MODEL = os.environ.get("ORCH_DEEPSEEK_FAST_MODEL") or "deepseek-flash"
 NO_KEY = "DEEPSEEK_API_KEY is not set — add a line DEEPSEEK_API_KEY=sk-… to %s (or the environment)"
+# Models that cannot see images: DeepSeek replaces an image in the request with the text "[Unsupported Image]", and a
+# worker that is not told may make up what it shows. Matched on the id without a "[1m]"-style suffix.
+NO_VISION = ("deepseek-v4-pro",)
+NO_VISION_NOTE = (
+    "This model cannot see images: an image or a PDF page you open arrives as the text `[Unsupported Image]`. "
+    "Never describe or guess what an image shows; say that you could not see it, and stop that part of the task "
+    "(STATUS: BLOCKED if the task depends on it).")
 
 
 def say(msg):
     print("[deepseek] " + msg, flush=True)
+
+
+def vision_note(model):
+    """Text for a model without vision; "" for one that sees images."""
+    return NO_VISION_NOTE if model.split("[", 1)[0] in NO_VISION else ""
 
 
 def model_env(model):
@@ -71,9 +84,12 @@ def launch_env(key):
     model = os.environ.get("ORCH_MODEL") or DEFAULT_MODEL
     env = model_env(model)
     env["ANTHROPIC_AUTH_TOKEN"] = key           # a bearer token: no "use this API key?" prompt, no OAuth sent
+    args = ["--model", model]
+    if vision_note(model):
+        args += ["--append-system-prompt", vision_note(model)]
     print(json.dumps({"set": env, "unset": sorted(k for k in os.environ if k.startswith("ANTHROPIC_")
                                                 or k == "CLAUDE_CODE_OAUTH_TOKEN"),
-                      "args": ["--model", model], "model": model, "fast_model": FAST_MODEL, "endpoint": BASE_URL}))
+                      "args": args, "model": model, "fast_model": FAST_MODEL, "endpoint": BASE_URL}))
     return 0
 
 
@@ -95,7 +111,7 @@ def main():
     config_dir = home / "workers" / ("deepseek-" + sys.platform)
     config_dir.mkdir(parents=True, exist_ok=True)
     cmd = H.command(claude, model, run_dir, ["--setting-sources", "user"],
-                    os.environ.get("ORCH_DEEPSEEK_EXTRA_ARGS"), say)
+                    os.environ.get("ORCH_DEEPSEEK_EXTRA_ARGS"), say, system_extra=vision_note(model))
     result, rc = H.run(cmd, child_env(key, model, config_dir))
 
     if result is None:

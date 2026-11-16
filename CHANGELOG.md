@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.40.0
+
+- **The DeepSeek executor sees images, and the model without vision is told so.** `deepseek-flash` reads a PNG,
+  JPEG, GIF or WebP the worker opens with Read and describes it (verified with a real run; DeepSeek bills an image
+  at most 1024 input tokens). `deepseek-v4-pro` has no vision — an image arrives as `[Unsupported Image]` — so its
+  system prompt now says it cannot see and must not guess, and `orch launch deepseek --model deepseek-v4-pro` passes
+  the same note to the lead session. PDFs come only as page images, which needs `pdftoppm` (Poppler) on `PATH`.
+  `orch run … --allow WebSearch` adds DeepSeek's server-side web search: DeepSeek bills it per call (USD 0.75 per
+  1,000 searches) and `orch spend` counts tokens only. A worker allowed a screenshot command pinned to the installed
+  Playwright, `--allow 'Bash(npx playwright@1.61.1 screenshot:*)'`, takes a screenshot of a page and reads it
+  (verified), so `deepseek/flash-high` joins the `ui_verify` route after Claude. The registry notes and `good_for`
+  of the Flash slots, the README and PRIVACY.md say so.
+
 ## 0.39.4
 
 - **An old measurement keeps its projection, in one place.** With numbers older than 20 minutes the status line left

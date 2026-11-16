@@ -25,3 +25,16 @@ quietly crowd out the product, and this rule keeps it in view.
   here (AGENTS.md). Gemini CLI is left to Code Assist Enterprise and paid Gemini API or Vertex keys, and scripted use
   through a consumer login risks the account. Revisit if a paid Gemini API key or Vertex project is wanted. A quota hit
   shows up only as exit 1 with text on stderr, so the adapter would have to read that text.
+
+- **DeepSeek Harness as an executor.** *product* DeepSeek's own open-source agent (`dsh`, npm `@deepseek-ai/dsh`,
+  MIT) fits the contract technically:
+  - headless mode (`dsh --profile headless "task"`) with `--json` events, `--approval-policy never` and
+    `--permission-mode`;
+  - a Python SDK and a JSON-RPC stdio server;
+  - it reads AGENTS.md/CLAUDE.md, and has `read_image`, web search and web fetch.
+
+  Not adopted yet because, as of 2026-11-16: only pre-releases (`dsh-v0.2.2-rc.3`, 2026-11-13) with announced
+  breaking changes; the `--json` event schema is undocumented; no token usage per run, which orch's spend limits
+  need; no documented read-only preset, and its workspace-write preset leaves reads and network unconfined, so a
+  worker could read files such as `~/.lanewise/secrets.env` that the current executor is denied; no flags for model
+  or working directory. Revisit at a stable release that reports usage and confines reads.

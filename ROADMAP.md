@@ -13,6 +13,16 @@ quietly crowd out the product, and this rule keeps it in view.
 
 ## Next
 
+- **The early-exhaustion warning and the status line agree on the projection.** *product* The warning that a limit
+  runs out before its reset (the pause question, `orch watch`) can show other figures than the status line's
+  `→ ≈N%` for the same window. Likely sources:
+  - for the week, the early rule weighs both paces (the recent one and the week's average) and quotes the lower one,
+    while the status line and the budget take the recent pace first;
+  - the five-hour window also carries a conservative projection from the lower pace.
+
+  Compare the two on a real case, then either show one figure in both places or have the warning say which pace its
+  figure comes from.
+
 ## Parked
 
 - **A Gemini executor.** *product* Gemini CLI fits the adapter contract technically:

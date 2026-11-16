@@ -101,3 +101,8 @@ PRIVACY.md, the README's storage table or network section, or the CHANGELOG says
   maintainer's go, its expected benefit and a cost limit.
 - Commit finished work as new commits on top; amend or rewrite existing ones only for a concrete reason (a secret, a
   wrong author). An agent asks the maintainer before a push, a merge or deleting a branch.
+- Leave nothing running. A background shell, watcher, detached test run, executor or server an agent starts is
+  stopped once it is no longer needed, at the latest before the agent reports its work done; its worktrees and
+  temporary folders go too. Before reporting, check that none of its own processes (bash, cmd, PowerShell, wsl,
+  python, node) is still running. Stop only processes you started, by their PID, never by name or pattern: other
+  sessions share the machine and its memory.
